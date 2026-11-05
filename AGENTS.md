@@ -304,3 +304,43 @@ over and silence the git-lfs hooks this repository depends on. `--no-verify` ski
 - Anything that boots Isaac Sim takes ~90 s and needs a GPU and a display — do not put it in a
   hot loop or a test.
 - Verify before claiming. If you could not run it, say so.
+
+## Cursor Cloud specific instructions
+
+Cloud Agent machines for this checkout have no NVIDIA GPU and no CUDA toolkit.
+Do not run `scripts/installation/install_everything.sh` or boot Isaac Sim here.
+Those installers need a GPU, CUDA 12.8 at `/usr/local/cuda-12.8`, and about 250 GB;
+see [docs/AGENT_INSTALL.md](docs/AGENT_INSTALL.md). Phase-1 SceneAgent and the
+browser editor are what this environment can run.
+
+Miniforge is at `/opt/miniforge`. `mamba` and `conda` are on `PATH` through
+`/usr/local/bin` (a login shell does not source `~/.bashrc`). Two envs:
+
+| Env | Contents |
+|---|---|
+| `simfoundry-cpu` | Python 3.11, numpy, pytest, trimesh, pillow, hydra-core. The CPU CI job plus `omegaconf`, which `tests/test_pipeline_orchestrator.py` imports. |
+| `simfoundry-editor` | Browser editor from `scripts/installation/install_light_editor.sh`. Kept separate because it uses standalone `usd-core`. |
+
+From the repo root:
+
+```bash
+mamba run -n simfoundry-cpu python -m pytest tests/sceneagent -q
+mamba run -n simfoundry-cpu python -m pytest \
+  tests/test_subpipeline_layout.py tests/test_resource_scheduler.py \
+  tests/test_pipeline_reporting.py tests/test_pipeline_orchestrator.py -q
+mamba run -n simfoundry-cpu python -m sceneagent \
+  examples/phase1_place_scene.json --out runs/phase1_place
+```
+
+The orchestrator file skips its articulation test when stage 9's conda envs are
+absent. That skip is the documented fallback.
+
+The editor is not started on boot: this checkout has no scene file. Download
+example scenes as the light-editor README describes, then:
+
+```bash
+mamba run -n simfoundry-editor python scripts/interactive/light_editor/server.py \
+  --scene /absolute/path/to/<scene>_scene_state_latest.json
+```
+
+Open http://localhost:8770.
