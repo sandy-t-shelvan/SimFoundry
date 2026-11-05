@@ -1,5 +1,7 @@
 """Suitability checks for MLP downloads. Files are local and tiny; no network."""
 
+import struct
+import zlib
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,26 @@ def _png(path: Path, mode="RGB"):
     else:
         color = 20
     Image.new(mode, (4, 4), color).save(path)
+
+
+def _png_la16(path: Path):
+    """Write a 16-bit grayscale+alpha PNG. Pillow has no mode to save this."""
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    width = height = 4
+    # One filter byte, then big-endian uint16 gray and uint16 alpha per pixel.
+    row = b"\x00" + struct.pack(">HH", 1000, 65535) * width
+    ihdr = struct.pack(">IIBBBBB", width, height, 16, 4, 0, 0, 0)
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", ihdr)
+        + _chunk(b"IDAT", zlib.compress(row * height))
+        + _chunk(b"IEND", b"")
+    )
+    path.write_bytes(png)
 
 
 def _triangle(path: Path):
@@ -191,6 +213,16 @@ def test_la_image_fails(tmp_path):
     result = check_sample(_row(mesh, image), {"id": "obj1", "source": "ycb"})
     assert result.status == "fail"
     assert any("mode LA" in reason for reason in result.reasons)
+
+
+def test_16bit_grayscale_alpha_png_fails(tmp_path):
+    mesh = tmp_path / "model.obj"
+    image = tmp_path / "texture.png"
+    _triangle(mesh)
+    _png_la16(image)
+    result = check_sample(_row(mesh, image), {"id": "obj1", "source": "ycb"})
+    assert result.status == "fail"
+    assert "image mode LA is not RGB" in result.reasons
 
 
 def test_palette_color_image_passes(tmp_path):
