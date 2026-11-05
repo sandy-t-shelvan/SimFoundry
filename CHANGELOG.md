@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The MLP download check already accepts an RGB or RGBA photo and a color palette, and it rejects grayscale and LA. `test_rgba_image_passes` was failing because the sample source stayed `ycb` while the manifest said `gso`. The sample source now matches that manifest. An RGBA photo does not waive a source mismatch.
 - Added a `sceneagent` package on the SimFoundry fork. It does not change pipelines A, B, or C.
 - Phase 1 writes the paper's file contract: plan, manifest, ledger, material vote, association cuts, model-free sisters, a USD physics contract (JSON only), and a scripted place grid with Wilson intervals.
 - `docs/GAP_MATRIX.md` maps each SceneAgent block to what SimFoundry already does, the gap, and the tool the paper or the site names. The PDF prints no git URLs. Upstream links were added for LangSplat, SAM 3D Objects, PartSAM, Roblox Cube (CubePart), Articulate Anything, OpenUSD, Three.js, and the public pi0 code. Those tools stay missing until they actually run.

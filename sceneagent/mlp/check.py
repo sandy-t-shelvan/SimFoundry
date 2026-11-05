@@ -4,7 +4,8 @@ A download is usable only when every condition holds:
 
 - the mesh file is an OBJ, a glTF (``.gltf`` or ``.glb``), or an SDF that
   references one of those meshes, and it is not an HTML page, a zip, or empty
-- at least one RGB image exists (texture photo or rendered view)
+- at least one RGB or RGBA image exists (texture photo or rendered view).
+  A palette with any non-gray color counts as RGB. Grayscale and LA do not.
 - the mesh bounding box has a non-zero finite extent, and the volume or the
   surface area is finite and positive, so later geometric features can be
   computed
@@ -113,7 +114,11 @@ def check_sample(sample: Mapping, manifest: Mapping) -> CheckResult:
 
 
 def rgb_image_problem(path: Path) -> str | None:
-    """Return a reason the file is not a usable RGB image, or ``None``."""
+    """Return a reason the file is not a usable RGB or RGBA image, or ``None``.
+
+    A palette image counts when any palette entry is not gray. Grayscale and
+    LA do not count: a roughness or alpha map must not be kept as the photo.
+    """
 
     problem = _container_problem(path, kind="image")
     if problem:

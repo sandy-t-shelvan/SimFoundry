@@ -63,7 +63,11 @@ def test_rgba_image_passes(tmp_path):
     image = tmp_path / "texture.png"
     _triangle(mesh)
     _png(image, "RGBA")
-    result = check_sample(_row(mesh, image), {"id": "obj1", "source": "gso"})
+    # caf16b7 left this manifest as gso while _row still stamps source ycb.
+    # Identity then fails before the RGBA photo is considered. The assertion
+    # is unchanged: a matching GSO row with an RGBA texture passes.
+    sample = _row(mesh, image, source="gso")
+    result = check_sample(sample, {"id": "obj1", "source": "gso"})
     assert result.status == "pass"
 
 
@@ -177,6 +181,62 @@ def test_grayscale_image_fails(tmp_path):
     result = check_sample(_row(mesh, image), {"id": "obj1", "source": "ycb"})
     assert result.status == "fail"
     assert any("not RGB" in reason for reason in result.reasons)
+
+
+def test_la_image_fails(tmp_path):
+    mesh = tmp_path / "model.obj"
+    image = tmp_path / "texture.png"
+    _triangle(mesh)
+    Image.new("LA", (4, 4), (20, 255)).save(image)
+    result = check_sample(_row(mesh, image), {"id": "obj1", "source": "ycb"})
+    assert result.status == "fail"
+    assert any("mode LA" in reason for reason in result.reasons)
+
+
+def test_palette_color_image_passes(tmp_path):
+    mesh = tmp_path / "model.obj"
+    image = tmp_path / "texture.png"
+    _triangle(mesh)
+    palette = Image.new("P", (4, 4))
+    colors = []
+    for index in range(256):
+        if index == 1:
+            colors.extend((20, 40, 60))
+        else:
+            colors.extend((index, index, index))
+    palette.putpalette(colors)
+    palette.putpixel((0, 0), 1)
+    palette.save(image)
+    sample = _row(mesh, image, source="gso")
+    result = check_sample(sample, _manifest(sample))
+    assert result.status == "pass"
+    assert result.reasons == ()
+
+
+def test_palette_gray_image_fails(tmp_path):
+    mesh = tmp_path / "model.obj"
+    image = tmp_path / "texture.png"
+    _triangle(mesh)
+    palette = Image.new("P", (4, 4))
+    colors = []
+    for index in range(256):
+        colors.extend((index, index, index))
+    palette.putpalette(colors)
+    palette.putpixel((0, 0), 10)
+    palette.save(image)
+    result = check_sample(_row(mesh, image), {"id": "obj1", "source": "ycb"})
+    assert result.status == "fail"
+    assert any("not RGB" in reason for reason in result.reasons)
+
+
+def test_rgba_does_not_excuse_source_mismatch(tmp_path):
+    mesh = tmp_path / "model.obj"
+    image = tmp_path / "texture.png"
+    _triangle(mesh)
+    _png(image, "RGBA")
+    result = check_sample(_row(mesh, image), {"id": "obj1", "source": "gso"})
+    assert result.status == "fail"
+    assert any("source does not match" in reason for reason in result.reasons)
 
 
 def test_bad_source_tag_fails(tmp_path):
