@@ -69,14 +69,22 @@ def f1_at_threshold(points_x, points_y, tau=TAU_1CM_M):
     return 2.0 * precision * recall / (precision + recall)
 
 
-def _hungarian(cost):
-    """Minimum-cost assignment. Exact enumeration; scenes here are small."""
-    cost = np.asarray(cost, dtype=float)
+# 8! column orders is what the phase-1 matcher enumerated. One more object makes
+# that impractical, and the GraspClutter6D bin has 20, so anything larger uses
+# the Hungarian algorithm below. Matrices this size still take the enumerator
+# when every row can be matched: it is the lexicographically first minimum, and
+# a later solver would be free to pick a different optimal assignment on a tie.
+_ENUMERATION_MAX = 8
+
+
+def _enumerate_assignment(cost):
+    """Lexicographically first minimum-cost assignment of every row.
+
+    ``itertools.permutations`` yields column tuples in lexicographic order and
+    the first minimum is kept. That is the phase-1 result for at most 8 objects
+    on a side when there is a column for every row.
+    """
     n_rows, n_cols = cost.shape
-    if n_rows == 0 or n_cols == 0:
-        return []
-    if n_rows > 8 or n_cols > 8:
-        raise ValueError("phase-1 matcher supports at most 8 objects on a side")
     best = None
     best_cost = None
     columns = range(n_cols)
@@ -86,6 +94,103 @@ def _hungarian(cost):
             best_cost = total
             best = [(i, choice[i]) for i in range(n_rows)]
     return best
+
+
+def _assign_every_row(cost):
+    """Column chosen for each row. ``cost`` has shape (n, m) with n <= m.
+
+    Kuhn-Munkres, in the successive-shortest-path form. SciPy is not imported:
+    the phase-1 CI job does not install it, and a reconstruction score still
+    has to run there. The result is a minimum-cost assignment.
+    """
+    n_rows, n_cols = cost.shape
+    if n_rows > n_cols:
+        raise ValueError("assignment expects at least as many columns as rows")
+    if not np.isfinite(cost).all():
+        # A NaN reduced cost never updates the Dijkstra labels, and the
+        # augmenting-path loop would not terminate.
+        raise ValueError("assignment costs must be finite")
+    # Column 0 is a dummy. u[1..n] and v[1..m] are the potentials, and p[j] is
+    # the row matched to column j. Costs stay 0-based; this layout is the usual
+    # 1-based presentation of the algorithm.
+    u = [0.0] * (n_rows + 1)
+    v = [0.0] * (n_cols + 1)
+    p = [0] * (n_cols + 1)
+    way = [0] * (n_cols + 1)
+    inf = math.inf
+    for i in range(1, n_rows + 1):
+        p[0] = i
+        j0 = 0
+        minv = [inf] * (n_cols + 1)
+        used = [False] * (n_cols + 1)
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = inf
+            j1 = 0
+            for j in range(1, n_cols + 1):
+                if used[j]:
+                    continue
+                cur = float(cost[i0 - 1, j - 1]) - u[i0] - v[j]
+                if cur < minv[j]:
+                    minv[j] = cur
+                    way[j] = j0
+                if minv[j] < delta:
+                    delta = minv[j]
+                    j1 = j
+            for j in range(n_cols + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    assigned = [-1] * n_rows
+    for j in range(1, n_cols + 1):
+        if p[j] != 0:
+            assigned[p[j] - 1] = j - 1
+    return assigned
+
+
+def _hungarian(cost):
+    """Minimum-cost assignment of rows to distinct columns.
+
+    The shorter side is fully matched: every row when there are at least as
+    many columns as rows, otherwise every column. Pairs are sorted by row.
+    An unmatched row is omitted, which is how ``score_reconstruction`` leaves
+    that reference's F1 at 0.
+
+    At most 8 rows and 8 columns, with a column for every row, still returns
+    the phase-1 enumeration, including its tie break. Every other shape uses
+    ``_assign_every_row``, which is optimal for the same sum of costs.
+    """
+    cost = np.asarray(cost, dtype=float)
+    n_rows, n_cols = cost.shape
+    if n_rows == 0 or n_cols == 0:
+        return []
+    if (
+        n_rows <= n_cols
+        and n_rows <= _ENUMERATION_MAX
+        and n_cols <= _ENUMERATION_MAX
+    ):
+        return _enumerate_assignment(cost)
+    if n_rows <= n_cols:
+        columns = _assign_every_row(cost)
+        return [(i, columns[i]) for i in range(n_rows)]
+    # More rows than columns. Match every column; the enumerator cannot, because
+    # a permutation cannot be longer than the column list, and it used to return
+    # None even under the 8-object cap. In a reconstruction score those extra
+    # rows are the unmatched reference objects.
+    rows = _assign_every_row(np.ascontiguousarray(cost.T))
+    return sorted((rows[j], j) for j in range(n_cols))
 
 
 def score_reconstruction(delivered, reference, tau=TAU_1CM_M):
