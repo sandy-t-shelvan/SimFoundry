@@ -13,8 +13,16 @@ from PIL import Image
 
 from sceneagent.colmap_stage import run_poses, sample_frame_command
 from sceneagent.ingest_assets import (
+    COLOR_TARGET_NAME,
+    JPEG_QUALITY,
+    JPEG_SUBSAMPLING,
     OURS_COLOR_HEURISTIC,
+    OURS_GAIN_MAX,
+    OURS_GAIN_MIN,
+    _mean_packed_rgb,
+    _scale_rgb_bytes,
     apply_per_image_color_calibration,
+    jpeg_round_trip_mean_error,
     mean_rgb_file,
     per_image_color_gains,
 )
@@ -370,3 +378,133 @@ def test_run_poses_can_leave_sampled_frames_uncalibrated(tmp_path, monkeypatch):
     assert not (work / "color_calibration.json").exists()
     for frame_name, raw in originals.items():
         assert (work / "images" / frame_name).read_bytes() == raw
+
+
+def test_nonfinite_means_are_rejected_and_extreme_gains_are_clamped():
+    # A zero mean stays at gain 1; test_gains_are_per_image_and_a_zero_channel_stays_at_one
+    # already locks that. Non-finite means are rejected, and finite gains outside
+    # [OURS_GAIN_MIN, OURS_GAIN_MAX] clamp to that documented interval.
+    with pytest.raises(ValueError, match="finite"):
+        per_image_color_gains([("a", (float("nan"), 1.0, 1.0)), ("b", (1.0, 1.0, 1.0))])
+    with pytest.raises(ValueError, match="finite"):
+        per_image_color_gains([("a", (float("inf"), 1.0, 1.0)), ("b", (1.0, 1.0, 1.0))])
+    with pytest.raises(ValueError, match="finite"):
+        per_image_color_gains([("a", (1.0, float("-inf"), 1.0)), ("b", (1.0, 1.0, 1.0))])
+    high = per_image_color_gains(
+        [("dim", (1.0, 10.0, 10.0)), ("mid", (80.0, 10.0, 10.0)), ("hot", (80.0, 10.0, 10.0))]
+    )
+    assert high["gains_by_image"]["dim"][0] == OURS_GAIN_MAX
+    low = per_image_color_gains(
+        [("a", (1.0, 10.0, 10.0)), ("b", (1.0, 10.0, 10.0)), ("c", (200.0, 10.0, 10.0))]
+    )
+    assert low["gains_by_image"]["c"][0] == OURS_GAIN_MIN
+    assert OURS_GAIN_MIN == 0.05
+    assert OURS_GAIN_MAX == 16.0
+
+
+def test_synthetic_color_cast_is_recovered_with_distinct_gains(tmp_path):
+    folder = tmp_path / "cast"
+    folder.mkdir()
+    _ppm(folder / "neutral.ppm", (80, 80, 80))
+    _ppm(folder / "red_cast.ppm", (160, 40, 40))
+    _ppm(folder / "blue_cast.ppm", (40, 40, 160))
+    result = apply_per_image_color_calibration(folder, tmp_path / "out")
+    assert result["target_name"] == COLOR_TARGET_NAME == "per_channel_median_of_set"
+    assert result["gap"] == "partial"
+    assert result["paper_method"] is False
+    assert result["target_rgb"] == pytest.approx([80, 40, 80])
+    gains = result["gains_by_image"]
+    assert gains["red_cast.ppm"] == pytest.approx([0.5, 1.0, 2.0])
+    assert gains["blue_cast.ppm"] == pytest.approx([2.0, 1.0, 0.5])
+    assert gains["red_cast.ppm"] != gains["blue_cast.ppm"]
+    recovered = bytes((80, 40, 80)) * 4
+    assert _ppm_pixels(tmp_path / "out" / "red_cast.ppm") == recovered
+    assert _ppm_pixels(tmp_path / "out" / "blue_cast.ppm") == recovered
+    assert _ppm_pixels(tmp_path / "out" / "neutral.ppm") == recovered
+
+
+def test_in_memory_corrected_mean_is_within_half_a_level(tmp_path):
+    folder = tmp_path / "cast"
+    folder.mkdir()
+    _ppm(folder / "neutral.ppm", (80, 80, 80))
+    _ppm(folder / "red_cast.ppm", (160, 40, 40))
+    _ppm(folder / "blue_cast.ppm", (40, 40, 160))
+    result = apply_per_image_color_calibration(folder, tmp_path / "out")
+    for frame in result["frames"]:
+        for got, want in zip(frame["in_memory_mean_rgb"], result["target_rgb"], strict=True):
+            assert abs(got - want) <= 0.5
+    # Rounding of the corrected array, measured before any encode.
+    pixels = bytes((7, 11, 13)) * 16
+    scaled = _scale_rgb_bytes(pixels, (1.2, 0.8, 1.1))
+    got = _mean_packed_rgb(scaled, "mem")
+    raw = (7 * 1.2, 11 * 0.8, 13 * 1.1)
+    for actual, unrounded in zip(got, raw, strict=True):
+        assert abs(actual - unrounded) <= 0.5
+
+
+def test_color_calibration_json_records_target_and_gains(tmp_path, monkeypatch):
+    monkeypatch.setattr("sceneagent.colmap_stage.shutil.which", _which_binaries)
+    monkeypatch.setattr("sceneagent.colmap_stage.subprocess.run", _banner)
+
+    def fake_run(command, timeout_s=600):
+        if Path(str(command[0])).name == "ffmpeg":
+            folder = Path(command[-1]).parent
+            from PIL import Image
+
+            Image.new("RGB", (2, 2), (160, 40, 40)).save(
+                folder / "0001.jpg", quality=JPEG_QUALITY, subsampling=JPEG_SUBSAMPLING
+            )
+            Image.new("RGB", (2, 2), (40, 40, 160)).save(
+                folder / "0002.jpg", quality=JPEG_QUALITY, subsampling=JPEG_SUBSAMPLING
+            )
+        return {
+            "command": command,
+            "returncode": 0,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr("sceneagent.colmap_stage._run", fake_run)
+    work = tmp_path / "colmap"
+    run_poses(tmp_path / "clip.mp4", work, max_frames=2)
+    manifest = json.loads((work / "color_calibration.json").read_text(encoding="utf-8"))
+    assert manifest["target_name"] == "per_channel_median_of_set"
+    assert manifest["gap"] == "partial"
+    assert manifest["paper_method"] is False
+    assert len(manifest["target_rgb"]) == 3
+    gains = manifest["gains_by_image"]
+    assert set(gains) == {"0001.jpg", "0002.jpg"}
+    assert gains["0001.jpg"] != gains["0002.jpg"]
+    for triple in gains.values():
+        assert len(triple) == 3
+        for channel in triple:
+            assert OURS_GAIN_MIN <= channel <= OURS_GAIN_MAX
+
+
+# Measured on the 32x32 fixture below with Pillow JPEG quality 95, subsampling 0.
+# This is the error of that fixture, not a widened allowance. It is under 1.5
+# levels, so sampled frames stay JPEG rather than moving to PNG.
+JPEG_FIXTURE_ROUND_TRIP_MEAN_ERROR = 0.0185546875
+
+
+def _jpeg_fixture_pixels():
+    width, height = 32, 32
+    raw = bytearray()
+    for y in range(height):
+        for x in range(width):
+            raw.append((40 + 3 * x + y) % 256)
+            raw.append((20 + x + 4 * y) % 256)
+            raw.append((90 + 2 * x + 2 * y) % 256)
+    return width, height, bytes(raw)
+
+
+def test_jpeg_round_trip_mean_error_is_the_recorded_fixture_bound():
+    assert JPEG_QUALITY == 95
+    assert JPEG_SUBSAMPLING == 0
+    width, height, pixels = _jpeg_fixture_pixels()
+    error = jpeg_round_trip_mean_error(width, height, pixels)
+    assert error == JPEG_FIXTURE_ROUND_TRIP_MEAN_ERROR
+    assert JPEG_FIXTURE_ROUND_TRIP_MEAN_ERROR < 1.5
+    command = sample_frame_command("ffmpeg", "clip.mp4", "images/%04d.jpg")
+    assert command[-1].endswith(".jpg")

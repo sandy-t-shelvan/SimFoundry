@@ -8,7 +8,9 @@ a reconstruction, and this stage does not train a splat.
 The frame sample defaults to 1 fps and 16 frames. That cap is this runner's.
 ``max_frames`` None or 0 omits it, and ``fps`` None or 0 omits the fps
 filter. Both together keep every decoded frame. Sampled frames are
-color-calibrated per image before matching.
+color-calibrated per image before matching. That scale is our diagonal
+gain toward ``per_channel_median_of_set``, not the paper's exact method,
+so the section 3.2 color gap stays partial.
 """
 
 from __future__ import annotations
@@ -198,8 +200,11 @@ def run_poses(video_path, work_dir, fps=1, max_frames=16, color_calibrate=True):
 
     ``color_calibrate`` scales each extracted image by its own gain before
     ``feature_extractor``. Section 3.2 names per-image color calibration and
-    does not publish the correction, so the scale is ours. Pass false to
-    leave the sampled pixels unchanged.
+    does not publish the correction, so the diagonal scale is our choice and
+    the color gap stays partial. ``color_calibration.json`` names the target
+    ``per_channel_median_of_set``, records its three values, and maps each
+    image name to ``[gR, gG, gB]``. Pass false to leave the sampled pixels
+    unchanged.
     """
     full_rate = _request_is_full_rate(fps, max_frames)
     calibrated: dict[str, object] = {}
@@ -239,6 +244,8 @@ def run_poses(video_path, work_dir, fps=1, max_frames=16, color_calibrate=True):
     calibration_path = work / "color_calibration.json"
     if calibration_path.exists():
         calibration_path.unlink()
+    # JPEG stays. The q95 4:4:4 round trip on the recorded fixture moves
+    # channel means by 0.0185546875 levels, under the 1.5-level PNG switch.
     extract = _run(
         sample_frame_command(
             ffmpeg,

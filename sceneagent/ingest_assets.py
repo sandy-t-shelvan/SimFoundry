@@ -12,7 +12,9 @@ Tencent HY-World are not downloaded.
 
 from __future__ import annotations
 
+import io
 import json
+import math
 import statistics
 from pathlib import Path
 
@@ -35,15 +37,27 @@ ASSET_SUFFIXES = {
 }
 
 # Ours. Section 3.2 names per-image color calibration and does not publish
-# the correction. A frame is flagged when the L1 distance of its mean RGB
+# the correction, so the diagonal scale below is our choice, not the paper's
+# exact method. The section 3.2 color gap stays partial until a published
+# method replaces it. A frame is flagged when the L1 distance of its mean RGB
 # (0-255) from the per-channel median of the set is greater than 30.
 # ``apply_per_image_color_calibration`` then scales each image by its own
-# per-channel gain so that image's mean lands on the same median. One shared
+# per-channel gain so that image's mean lands on that named target. One shared
 # gain would be a global correction. A channel whose mean is 0 keeps gain 1,
-# because no scale maps 0 onto a positive target.
+# because no scale maps 0 onto a positive target. Finite gains outside
+# [OURS_GAIN_MIN, OURS_GAIN_MAX] are clamped.
 OURS_COLOR_HEURISTIC = "ours_mean_rgb_l1_above_30"
 OURS_COLOR_L1_LIMIT = 30.0
 OURS_COLOR_LABEL = "ours, not the paper's unpublished per-image color correction"
+# Named target written into color_calibration.json with the three channel values.
+COLOR_TARGET_NAME = "per_channel_median_of_set"
+# Closed gain interval. 16 keeps the locked fixture gain 10.5 (105/10) exact;
+# a cap of 4 would change that test. Non-finite gains are rejected instead.
+OURS_GAIN_MIN = 0.05
+OURS_GAIN_MAX = 16.0
+# Sampled frames stay JPEG. q95 and 4:4:4 are the encode the round-trip test measures.
+JPEG_QUALITY = 95
+JPEG_SUBSAMPLING = 0
 INGEST_SKILL = "SCENEAGENT-INGEST-DATA"
 _REMOTE_MARKERS = ("marble", "lyra", "hy-world", "hyworld")
 
@@ -274,20 +288,46 @@ def color_calibration_directory(directory):
     return report
 
 
+def _bounded_channel_gain(mean, center):
+    """One channel's diagonal gain onto the named target, inside the bound.
+
+    This is our scale, not the paper's unpublished correction. A non-positive
+    mean stays at gain 1, because no scale maps 0 onto a positive target.
+    Non-finite inputs are rejected. A finite gain outside
+    ``[OURS_GAIN_MIN, OURS_GAIN_MAX]`` is clamped to that closed interval.
+    """
+    if not math.isfinite(mean) or not math.isfinite(center):
+        raise ValueError("color calibration means must be finite")
+    if mean <= 0.0:
+        return 1.0
+    raw = center / mean
+    if not math.isfinite(raw):
+        raise ValueError("color calibration gain is not finite")
+    if raw < OURS_GAIN_MIN:
+        return OURS_GAIN_MIN
+    if raw > OURS_GAIN_MAX:
+        return OURS_GAIN_MAX
+    return raw
+
+
 def per_image_color_gains(means):
-    """Per-image RGB scales toward the set's per-channel median.
+    """Per-image RGB scales toward ``per_channel_median_of_set``.
 
     ``means`` is a sequence of ``(path, (r, g, b))``, the same pairs
     ``color_calibration_report`` takes. Each image gets its own triple.
     Reusing one triple for every image would be a global correction, which
-    this function does not do. A channel mean at or below 0 keeps gain 1,
-    because no scale maps 0 onto a positive median.
+    this function does not do. The target name and the three median values
+    are part of the result so a manifest can record them. The section 3.2
+    color gap stays partial: the paper names per-image calibration and does
+    not publish this diagonal scale.
     """
     rows = []
     for path, rgb in means:
         channels = tuple(float(channel) for channel in rgb)
         if len(channels) != 3:
             raise ValueError("color calibration needs RGB means")
+        if not all(math.isfinite(channel) for channel in channels):
+            raise ValueError("color calibration means must be finite")
         rows.append((path, channels))
     if not rows:
         raise ValueError("color calibration needs at least one image mean")
@@ -296,20 +336,28 @@ def per_image_color_gains(means):
         for channel in zip(*(rgb for _path, rgb in rows), strict=True)
     )
     gains = []
+    gains_by_image = {}
     for path, rgb in rows:
-        image_gain = []
-        for mean, center in zip(rgb, median, strict=True):
-            if mean <= 0.0:
-                image_gain.append(1.0)
-            else:
-                image_gain.append(center / mean)
+        image_gain = [
+            _bounded_channel_gain(mean, center)
+            for mean, center in zip(rgb, median, strict=True)
+        ]
+        name = Path(str(path)).name
+        if name in gains_by_image:
+            raise ValueError(f"color calibration image name {name} is not unique")
+        gains_by_image[name] = image_gain
         gains.append({"path": str(path), "gain_rgb": image_gain})
+    target_rgb = [float(channel) for channel in median]
     return {
         "paper_method": False,
+        "gap": "partial",
         "global_correction": False,
         "label": OURS_COLOR_LABEL,
-        "median_rgb": [float(channel) for channel in median],
+        "target_name": COLOR_TARGET_NAME,
+        "target_rgb": target_rgb,
+        "median_rgb": target_rgb,
         "gains": gains,
+        "gains_by_image": gains_by_image,
     }
 
 
@@ -370,8 +418,14 @@ def _write_rgb(destination, kind, width, height, header, pixels):
         suffix = destination.suffix.lower()
         if suffix in {".jpg", ".jpeg"}:
             # Second JPEG encode of an already-compressed frame. 4:4:4 keeps
-            # each channel's scale out of chroma subsampling.
-            image.save(temporary, format="JPEG", quality=95, subsampling=0)
+            # each channel's scale out of chroma subsampling. The round-trip
+            # test records how far this encode moves the channel means.
+            image.save(
+                temporary,
+                format="JPEG",
+                quality=JPEG_QUALITY,
+                subsampling=JPEG_SUBSAMPLING,
+            )
         elif suffix == ".png":
             image.save(temporary, format="PNG")
         elif suffix == ".bmp":
@@ -385,14 +439,42 @@ def _write_rgb(destination, kind, width, height, header, pixels):
     temporary.replace(destination)
 
 
+def jpeg_round_trip_mean_error(width, height, pixels):
+    """Max absolute channel-mean drift, in levels, of one q95 4:4:4 round trip.
+
+    ``pixels`` is the packed RGB array before encoding. The drift is the
+    largest absolute difference between that array's channel means and the
+    means of the decoded JPEG. Sampled frames stay JPEG while this stays
+    under about 1.5 levels.
+    """
+    from PIL import Image
+
+    image = Image.frombytes("RGB", (width, height), pixels)
+    buffer = io.BytesIO()
+    image.save(
+        buffer,
+        format="JPEG",
+        quality=JPEG_QUALITY,
+        subsampling=JPEG_SUBSAMPLING,
+    )
+    buffer.seek(0)
+    decoded = Image.open(buffer).convert("RGB").tobytes()
+    before = _mean_packed_rgb(pixels, "before")
+    after = _mean_packed_rgb(decoded, "after")
+    return max(abs(got - want) for got, want in zip(after, before, strict=True))
+
+
 def apply_per_image_color_calibration(directory, out_dir=None):
-    """Write each image scaled by its own gain toward the set median.
+    """Write each image scaled by its own gain toward the named target.
 
     ``out_dir`` None replaces pixels in place. A separate directory leaves
     the sources untouched. The paper names per-image color calibration and
-    does not publish the correction. This diagonal scale is ours. The gain
-    triple is computed per image; it is not one global correction reused
-    for the set.
+    does not publish the correction, so this diagonal scale is our choice
+    and the section 3.2 color gap stays partial. The gain triple is computed
+    per image; it is not one global correction reused for the set. The
+    returned manifest names the target, records its three values, and maps
+    each image name to ``[gR, gG, gB]``. ``in_memory_mean_rgb`` is the mean
+    of the corrected array before any JPEG encode.
     """
     sequence = read_still_image_sequence(directory)
     if not sequence["paths"]:
@@ -412,6 +494,7 @@ def apply_per_image_color_calibration(directory, out_dir=None):
         kind, width, height, pixels, header = _load_rgb(source)
         gain = by_path[str(path)]
         scaled = _scale_rgb_bytes(pixels, gain)
+        in_memory_mean = _mean_packed_rgb(scaled, source.name)
         if destination_root is None:
             destination = source
         else:
@@ -423,6 +506,7 @@ def apply_per_image_color_calibration(directory, out_dir=None):
                 "path": str(destination),
                 "mean_rgb": [float(channel) for channel in rgb],
                 "gain_rgb": [float(channel) for channel in gain],
+                "in_memory_mean_rgb": [float(channel) for channel in in_memory_mean],
                 "calibrated_mean_rgb": [
                     float(channel) for channel in mean_rgb_file(destination)
                 ],
@@ -432,9 +516,13 @@ def apply_per_image_color_calibration(directory, out_dir=None):
         "applied": True,
         "method": "per_image_diagonal_to_median",
         "paper_method": False,
+        "gap": "partial",
         "global_correction": False,
         "label": OURS_COLOR_LABEL,
+        "target_name": gain_report["target_name"],
+        "target_rgb": gain_report["target_rgb"],
         "median_rgb": gain_report["median_rgb"],
+        "gains_by_image": gain_report["gains_by_image"],
         "frames": frames,
         "colmap_ran": False,
         "input_report": color_calibration_report(means),
