@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from sceneagent.agent_loop import ALLOWED_STEPS, default_plan, harness_status
-from sceneagent.fruits_agent import plan_with_client
+from sceneagent.fruits_agent import plan_with_client, run_fruits
 from sceneagent.harness import (
     GEMINI_MODEL_ID,
     GeminiHarness,
@@ -216,6 +216,51 @@ def test_fallback_plan_is_recorded_and_rejected_as_dc2(tmp_path):
     assert chosen["plan_source"] == PLAN_SOURCE_HARNESS
     assert counts_toward_dc2(chosen)["counts"] is True
     assert counts_toward_dc2({})["counts"] is False
+
+
+def _fruits_paths(tmp_path):
+    frame = tmp_path / "frame.jpg"
+    frame.write_bytes(b"\xff\xd8")
+    return {
+        "frame": frame,
+        "vote": tmp_path / "material_vote.json",
+        "usda": tmp_path / "scene.usda",
+        "contract": tmp_path / "contract.json",
+        "mjcf": tmp_path / "scene.xml",
+        "mujoco_report": tmp_path / "mujoco.json",
+        "sam3d_dir": tmp_path / "sam3d",
+    }
+
+
+def _loader(path, steps=30):
+    return {"ok": True, "artifact": str(path), "reason": "", "detail": {"nbody": 1}}
+
+
+def _run_saved_fruits(tmp_path, reply):
+    """The real ``run_fruits`` path. The client never opens a socket."""
+
+    out = tmp_path / "run"
+    run_fruits(out, _Flash(reply), _fruits_paths(tmp_path), 1.0, loader=_loader)
+    return json.loads(_read(out / "plan.json"))
+
+
+def test_run_fruits_saves_a_model_plan_that_is_dc2_eligible(tmp_path):
+    plan = _run_saved_fruits(tmp_path, '{"steps": ["sam3d", "icp"]}')
+    assert [step["id"] for step in plan["steps"]] == ["sam3d", "icp"]
+    assert [step["id"] for step in plan["steps"]] != list(default_plan())
+    assert plan["plan_source"] == PLAN_SOURCE_HARNESS
+    verdict = counts_toward_dc2(plan)
+    assert verdict["counts"] is True
+    assert verdict["plan_source"] == PLAN_SOURCE_HARNESS
+
+
+def test_run_fruits_saves_a_fallback_plan_that_is_not_dc2_eligible(tmp_path):
+    plan = _run_saved_fruits(tmp_path, "")
+    assert [step["id"] for step in plan["steps"]] == list(default_plan())
+    assert plan["plan_source"] == PLAN_SOURCE_DEFAULT_FALLBACK
+    verdict = counts_toward_dc2(plan)
+    assert verdict["counts"] is False
+    assert verdict["plan_source"] == PLAN_SOURCE_DEFAULT_FALLBACK
 
 
 def test_procedures_are_readable_by_a_later_run(tmp_path):
