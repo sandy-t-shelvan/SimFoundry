@@ -1750,6 +1750,10 @@ def _listing_transport(mode):
     def request(method, url, api_key, body=None, timeout=60):
         calls.append((method, url))
         if method == "DELETE":
+            if mode == "http":
+                return 500, {"success": False}
+            if mode == "raise":
+                raise RuntimeError("transport down")
             return 200, {"success": True}
         if method == "POST" and url == PINNED_SSH_LIST:
             seen["key"] = body["ssh_key"]
@@ -1903,6 +1907,73 @@ def test_own_key_match_rstrip_boundary(tmp_path, monkeypatch):
     assert manifest["own_key"]["match_count"] == 1
     assert manifest["own_key"]["detached"] is True
     _assert_no_match(tmp_path, monkeypatch, "leading")
+
+
+def test_failed_own_key_delete_is_recorded_as_failed(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for mode in ("http", "raise"):
+        calls, request = _listing_transport(mode)
+        _install_remote_run(monkeypatch, fail=False)
+        artifacts = tmp_path / mode
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        assert code != 0
+        assert any(method == "DELETE" for method, _url in calls)
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["own_key"]["match_count"] == 1
+        assert manifest["own_key"]["detached"] is False
+        assert "fail" in manifest["own_key"]["reason"].lower()
+        assert manifest["ssh"]["detach"] == "failed"
+        assert manifest["ssh"]["detach"] != "detached"
+
+
+def test_exit_code_survives_failure_manifest_error(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise SmokeError("manifest publish failed")
+
+    monkeypatch.setattr("sceneagent.vast_smoke.publish_failure_manifest", boom)
+
+    def offline(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("offline")}
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "offline",
+        "test-key",
+        request=offline,
+        sleep=lambda _seconds: None,
+    )
+    assert code == 2
+
+    monkeypatch.setattr("sceneagent.vast_smoke.publish_artifacts", boom)
+
+    def running(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    for rc in (2, 139):
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / f"rc-{rc}",
+            "test-key",
+            request=running,
+            remote_factory=lambda _row, exit_code=rc: _Remote(write, rc=exit_code),
+            sleep=lambda _seconds: None,
+        )
+        assert code == rc
 
 
 def test_detach_guard_refuses_any_other_key_id(monkeypatch):

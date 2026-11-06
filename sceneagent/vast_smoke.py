@@ -1714,7 +1714,16 @@ class SshRemote:
             return
         arm_own_key_delete(self._own_key_id)
         try:
-            status, payload = self._call("detach_ssh", ssh_key_id=self._own_key_id)
+            try:
+                status, payload = self._call("detach_ssh", ssh_key_id=self._own_key_id)
+            except Exception:
+                self.own_key["detached"] = False
+                self.own_key["reason"] = (
+                    "detach of the matched key failed (transport). "
+                    "The key is not printed."
+                )
+                self._sync_ssh_detach()
+                raise SmokeError(self.own_key["reason"]) from None
         finally:
             arm_own_key_delete(None)
         if status not in {200, 204} or payload.get("success") is False:
@@ -2067,6 +2076,7 @@ def run_smoke(
     started = False
     remote: Any = None
     code = 1
+    remote_code = 0
     shown = False
     published = False
     scan_failed = False
@@ -2175,7 +2185,7 @@ def run_smoke(
         failure_reason = str(exc)
         scan_failed = _is_key_scan_failure(exc)
         _emit(failure_reason, key)
-        code = 1
+        code = remote_code if remote_code != 0 else 1
     finally:
         if remote is not None:
             try:
@@ -2212,7 +2222,8 @@ def run_smoke(
                 )
             except SmokeError as exc:
                 _emit(str(exc), key)
-                code = 1
+                if code == 0:
+                    code = 1
     return code
 
 
