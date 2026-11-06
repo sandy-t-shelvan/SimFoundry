@@ -20,7 +20,8 @@ ledger entry stays a failed smoke.
 
 Vast's sshd answers before an attached key is installed, and the attach
 response does not include a key id. After attach, SSH is probed with a fixed
-attempt cap and timeout. A missing id is logged and that key is not detached.
+attempt cap and timeout. A missing attach id is logged. The key is still
+detached when the listing has exactly one match.
 Keys already on the instance are read with one pinned GET,
 ``/api/v0/instances/58301075/ssh/``, before attach. The manifest keeps the
 key count and a locally computed ``SHA256:`` fingerprint for each key. It
@@ -779,7 +780,11 @@ def ssh_ready_or_raise(
     timeout_s: float = SSH_READY_TIMEOUT_S,
     backoff_s: float = SSH_READY_BACKOFF_S,
 ) -> dict[str, Any]:
-    """Probe SSH. A missing attach id is named on the error and is not detached."""
+    """Probe SSH. A missing attach id is named on the error.
+
+    Close still detaches the key when the listing has exactly one match.
+    This error does not describe that later result.
+    """
     try:
         ready = wait_until_ssh_accepts(
             probe,
@@ -794,7 +799,7 @@ def ssh_ready_or_raise(
         if not key_id_returned:
             raise SmokeError(
                 f"{exc} attach_ssh returned no key id. "
-                "The ephemeral key was not detached."
+                "Close detaches it only when the listing has exactly one match."
             ) from None
         raise
     ready["key_id_returned"] = key_id_returned
@@ -1705,6 +1710,7 @@ class SshRemote:
         self._detach_done = True
         if self.own_key.get("match_count") != 1 or self._own_key_id is None:
             self.own_key["detached"] = False
+            self._sync_ssh_detach()
             return
         arm_own_key_delete(self._own_key_id)
         try:
@@ -1717,9 +1723,45 @@ class SshRemote:
                 f"detach of the matched key failed (HTTP {status}). "
                 "The key is not printed."
             )
+            self._sync_ssh_detach()
             raise SmokeError(self.own_key["reason"])
         self.own_key["detached"] = True
         self.key_id = None
+        self._sync_ssh_detach()
+
+    def _sync_ssh_detach(self) -> None:
+        """Make ``ssh_report.detach`` match the own-key DELETE result.
+
+        Attach often returns no id, so the report starts as ``skipped``.
+        After this method it is ``detached`` only when the DELETE succeeded,
+        ``failed`` when the one matched DELETE did not, and ``skipped`` when
+        there was not exactly one match.
+        """
+        detached = self.own_key.get("detached") is True
+        count = self.own_key.get("match_count")
+        reason = self.own_key.get("reason")
+        failed = (
+            count == 1
+            and not detached
+            and isinstance(reason, str)
+            and reason.startswith("detach of the matched key failed")
+        )
+        if detached:
+            outcome = "detached"
+        elif failed:
+            outcome = "failed"
+        else:
+            outcome = "skipped"
+        self.ssh_report["detach"] = outcome
+        _log(
+            {
+                "action": "own_key_detach",
+                "match_count": count,
+                "detached": detached,
+                "detach": outcome,
+            },
+            self.api_key,
+        )
 
     def _detach(self) -> None:
         self.detach_own_key()
@@ -2119,7 +2161,12 @@ def run_smoke(
             },
             key,
         )
-        code = 0 if remote_code == 0 and manifest["passed"] else 1
+        if remote_code == 0 and manifest["passed"]:
+            code = 0
+        elif remote_code != 0:
+            code = remote_code
+        else:
+            code = 1
     except InstanceNotApproved as exc:
         failure_reason = str(exc)
         _emit(failure_reason, key)

@@ -1163,7 +1163,8 @@ def test_attach_without_key_id_exhaustion_names_the_missing_id():
         )
     assert detached == []
     message = str(raised.value)
-    assert "not detached" in message
+    assert "exactly one match" in message
+    assert "not detached" not in message
     assert "sf4-planted-key" not in message
     assert "ssh-ed25519" not in message
 
@@ -1935,3 +1936,64 @@ def test_detach_guard_refuses_any_other_key_id(monkeypatch):
         assert calls == [("DELETE", own)]
     finally:
         arm_own_key_delete(None)
+
+
+def _assert_detach_agreement(manifest):
+    own = manifest["own_key"]
+    detach = manifest["ssh"]["detach"]
+    if own["detached"]:
+        assert own["match_count"] == 1
+        assert detach == "detached"
+    elif own["match_count"] == 1:
+        assert detach == "failed"
+    else:
+        assert own["detached"] is False
+        assert detach == "skipped"
+    assert "not detached" not in json.dumps(manifest["ssh"])
+    assert "not detached" not in json.dumps(manifest["own_key"])
+
+
+def test_manifest_ssh_detach_agrees_with_own_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    cases = (
+        ("one", False),
+        ("one", True),
+        ("zero", False),
+        ("several", False),
+    )
+    for mode, fail in cases:
+        calls, request = _listing_transport(mode)
+        _install_remote_run(monkeypatch, fail)
+        artifacts = tmp_path / f"{mode}-{'fail' if fail else 'ok'}"
+        run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        _assert_detach_agreement(manifest)
+
+
+def test_remote_exit_code_propagates(tmp_path):
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    for rc in (2, 139):
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / f"rc-{rc}",
+            "test-key",
+            request=request,
+            remote_factory=lambda _row, exit_code=rc: _Remote(write, rc=exit_code),
+            sleep=lambda _seconds: None,
+        )
+        assert code == rc
