@@ -35,7 +35,9 @@ from a checkout of the pull request **base** SHA (`orchestrator/`). The pull
 request head is checked out only into `payload/` with `persist-credentials:
 false`. That directory is the tree copied to the GPU. The runner does not
 import it, pip-install it, or run it in any step that has `VAST_API_KEY` or a
-`GITHUB_TOKEN` with write scope. The cleanup job, which has
+`GITHUB_TOKEN` with write scope. The orchestrator also refuses to start when
+`payload` is on `PYTHONPATH`, `PYTHONSTARTUP`, `sys.path`, a `.pth` entry, or
+`sitecustomize`. The cleanup job, which has
 `pull-requests: write`, does not check the head out. It removes
 `run-gpu-smoke` and comments the run URL and the conclusion, including when
 the smoke fails.
@@ -55,12 +57,15 @@ not need `workflow_dispatch`, and it does not need Sandeep to click anything.
 It does not wait for `main` to be updated.
 
 The file is only a run trigger. It is not a way to land code without the QA
-and PM merge rule. If the push range (`github.event.before`..`github.event.after`)
-changes any other path, the guard logs why and the GPU job does not run. The
-guard checks out the commit **before** the push and runs the checker from
-that tree, so the commit being pushed cannot replace the checker and approve
-itself. Replacing the workflow file is still a commit on `Main_duplicate`,
-which is the merge rule.
+and PM merge rule. The changed-path set must be exactly
+`ci/gpu-run-request.json`, with no stripping or case folding. A near-miss
+such as `.ci/gpu-run-request.json` or `./ci/gpu-run-request.json` is a
+different path. A rename or a delete of the request file is not that set
+either. If the push range changes any other path, the guard logs why and the
+GPU job does not run. The guard checks out the commit **before** the push and
+runs the checker from that tree, so the commit being pushed cannot replace
+the checker and approve itself. Replacing the workflow file is still a commit
+on `Main_duplicate`, which is the merge rule.
 
 Do not commit `ci/gpu-run-request.json` on `Main_duplicate` except when a run
 is intended. The schema is `ci/gpu-run-request.schema.json`. An example that

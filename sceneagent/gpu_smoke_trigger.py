@@ -70,19 +70,16 @@ def label_trigger_allowed(
 
 
 def classify_push_diff(paths: list[str]) -> tuple[bool, str]:
-    """A request-file push may change that one path and nothing else.
+    """Accept only the raw path set ``{ci/gpu-run-request.json}``.
 
-    Any other path, including an empty range, is refused. The GPU job then
-    does not run.
+    Nothing is stripped, case-folded, or slash-folded. ``.ci/gpu-run-request.json``
+    and ``./ci/gpu-run-request.json`` are different paths, and a push that
+    includes either one does not start the GPU job.
     """
-    seen: list[str] = []
-    for path in paths:
-        name = path.strip().replace("\\", "/").lstrip("./")
-        if name and name not in seen:
-            seen.append(name)
-    if seen == [REQUEST_FILE]:
+    changed = set(paths)
+    if changed == {REQUEST_FILE}:
         return True, f"gpu-smoke request-file accepted: only {REQUEST_FILE} changed"
-    shown = ", ".join(seen) if seen else "(no files)"
+    shown = ", ".join(paths) if paths else "(no files)"
     return (
         False,
         (
@@ -90,6 +87,27 @@ def classify_push_diff(paths: list[str]) -> tuple[bool, str]:
             f"{REQUEST_FILE}: {shown}"
         ),
     )
+
+
+def paths_from_name_status(lines: list[str]) -> list[str]:
+    """Turn ``git diff --name-status`` lines into the paths the guard compares.
+
+    ``A`` and ``M`` contribute the path after the tab, with no stripping.
+    A rename, copy, delete, or any other status contributes the raw line.
+    That line is not the request path, so the push is refused. A line with
+    no tab is already a raw path and is kept unchanged.
+    """
+    paths: list[str] = []
+    for line in lines:
+        if "\t" not in line:
+            paths.append(line)
+            continue
+        status, _sep, rest = line.partition("\t")
+        if status in {"A", "M"} and "\t" not in rest:
+            paths.append(rest)
+            continue
+        paths.append(line)
+    return paths
 
 
 def validate_request_document(document: object) -> list[str]:
@@ -168,7 +186,7 @@ def check_push_diff() -> int:
         set_github_output("proceed", "false")
         return 0
     diff = subprocess.run(
-        ["git", "diff", "--name-only", before, after],
+        ["git", "diff", "--name-status", "--find-renames", before, after],
         check=False,
         capture_output=True,
         text=True,
@@ -177,7 +195,7 @@ def check_push_diff() -> int:
         print("gpu-smoke request-file refused: could not diff the push range")
         set_github_output("proceed", "false")
         return 0
-    ok, message = classify_push_diff(diff.stdout.splitlines())
+    ok, message = classify_push_diff(paths_from_name_status(diff.stdout.splitlines()))
     print(message)
     if not ok:
         set_github_output("proceed", "false")
@@ -321,6 +339,39 @@ def _checkout_steps(steps: list[str]) -> list[str]:
     return [step for step in steps if "actions/checkout" in step]
 
 
+def _line_puts_payload_on_import_path(stripped: str, name: str) -> bool:
+    """True when this workflow line assigns ``name`` and the value names payload."""
+    markers = (f"{name}:", f"{name}=", f"export {name}")
+    if not any(marker in stripped for marker in markers):
+        return False
+    return "payload" in stripped
+
+
+def _keyed_import_findings(step: str) -> list[str]:
+    """Refuse env and commands that can import the payload tree.
+
+    ``--checkout`` may name ``payload`` as the directory shipped to the GPU.
+    That is data. ``PYTHONPATH``, ``PYTHONSTARTUP``, ``sys.path``, a ``.pth``
+    file, ``sitecustomize``, and ``pip install`` from payload are not.
+    """
+    findings: list[str] = []
+    for line in step.splitlines():
+        stripped = line.strip()
+        for name in ("PYTHONPATH", "PYTHONSTARTUP"):
+            if _line_puts_payload_on_import_path(stripped, name):
+                findings.append(f"keyed step puts payload on {name}")
+        if "sitecustomize" in stripped:
+            findings.append("keyed step references sitecustomize")
+        if ".pth" in stripped:
+            findings.append("keyed step references a .pth import path")
+        if "sys.path" in stripped or "addsitedir" in stripped:
+            findings.append("keyed step edits sys.path")
+    run = _step_run(step)
+    if "pip install" in run and "payload" in run:
+        findings.append("keyed step pip-installs from payload")
+    return findings
+
+
 def workflow_safety_findings(text: str) -> list[str]:
     """Static contract for the GPU smoke workflow. Empty means it holds.
 
@@ -427,6 +478,7 @@ def workflow_safety_findings(text: str) -> list[str]:
             findings.append(
                 "keyed step executes payload code (working-directory payload)"
             )
+        findings.extend(_keyed_import_findings(step))
         if "${{" in run:
             findings.append("keyed run script must not interpolate expressions")
     for step in _checkout_steps(smoke_steps):

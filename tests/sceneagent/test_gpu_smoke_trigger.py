@@ -15,6 +15,7 @@ from sceneagent.gpu_smoke_trigger import (
     check_push_diff,
     classify_push_diff,
     label_trigger_allowed,
+    paths_from_name_status,
     validate_request_document,
     validate_request_text,
     workflow_label_actors,
@@ -92,6 +93,92 @@ def test_qa_pm_gate_defaults_off_and_can_be_required():
         require_qa_pm_pass=True,
     )
     assert allowed is True
+
+
+def test_near_miss_request_paths_are_refused():
+    near_misses = (
+        ".ci/gpu-run-request.json",
+        "./ci/gpu-run-request.json",
+        "ci//gpu-run-request.json",
+        "CI/gpu-run-request.json",
+        "ci/GPU-Run-Request.json",
+        "ci/gpu-run-request.json ",
+        "ci/gpu-run-request.json.bak",
+    )
+    for path in near_misses:
+        ok, message = classify_push_diff([path])
+        assert ok is False, path
+        assert "refused" in message
+        ok, message = classify_push_diff([REQUEST_FILE, path])
+        assert ok is False, path
+        assert path in message
+    ok, _message = classify_push_diff([REQUEST_FILE])
+    assert ok is True
+    ok, _message = classify_push_diff([REQUEST_FILE, REQUEST_FILE])
+    assert ok is True
+
+
+def test_name_status_rename_and_delete_are_not_the_request_path():
+    deleted = "D\tci/gpu-run-request.json"
+    renamed = "R100\tci/gpu-run-request.json\tci/moved.json"
+    copied = "C100\tother.json\tci/gpu-run-request.json"
+    assert paths_from_name_status(["M\tci/gpu-run-request.json"]) == [REQUEST_FILE]
+    assert paths_from_name_status(["A\tci/gpu-run-request.json "]) == [
+        "ci/gpu-run-request.json "
+    ]
+    for raw in (deleted, renamed, copied):
+        paths = paths_from_name_status([raw])
+        ok, message = classify_push_diff(paths)
+        assert ok is False
+        assert "refused" in message
+        assert raw in message
+
+
+def test_rename_and_delete_of_the_request_file_are_refused(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    request_dir = repo / "ci"
+    request_dir.mkdir()
+    request = request_dir / "gpu-run-request.json"
+    request.write_text(
+        '{"ticket_id":"SF-14","reason":"standing approval"}\n',
+        encoding="utf-8",
+    )
+    _git(repo, "add", "ci/gpu-run-request.json")
+    _git(repo, "commit", "-q", "-m", "add request")
+    added = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "rm", "ci/gpu-run-request.json")
+    _git(repo, "commit", "-q", "-m", "delete request")
+    deleted = _git(repo, "rev-parse", "HEAD")
+    _assert_push_refused(repo, added, deleted, monkeypatch)
+
+    _git(repo, "reset", "--hard", added)
+    _git(repo, "mv", "ci/gpu-run-request.json", "ci/moved.json")
+    _git(repo, "commit", "-q", "-m", "rename request")
+    renamed = _git(repo, "rev-parse", "HEAD")
+    _assert_push_refused(repo, added, renamed, monkeypatch)
+
+    _git(repo, "reset", "--hard", added)
+    (repo / "other.txt").write_text("other\n", encoding="utf-8")
+    _git(repo, "add", "other.txt")
+    _git(repo, "commit", "-q", "-m", "other")
+    other = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "mv", "-f", "other.txt", "ci/gpu-run-request.json")
+    _git(repo, "commit", "-q", "-m", "rename onto request")
+    onto = _git(repo, "rev-parse", "HEAD")
+    _assert_push_refused(repo, other, onto, monkeypatch)
+
+
+def _assert_push_refused(repo, before, after, monkeypatch):
+    output = repo.parent / f"output-{after[:8]}.txt"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BEFORE", before)
+    monkeypatch.setenv("AFTER", after)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert check_push_diff() == 0
+    text = output.read_text(encoding="utf-8")
+    assert "proceed=false" in text
 
 
 def test_mixed_push_is_refused():
@@ -196,6 +283,42 @@ def test_workflow_safety_contract():
         tuple(workflow_label_actors(WORKFLOW.read_text(encoding="utf-8")))
         == LABEL_ACTORS
     )
+
+
+def test_keyed_step_refuses_pythonpath_payload():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    broken = text.replace(
+        "          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}\n",
+        "          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}\n"
+        "          PYTHONPATH: payload\n",
+        1,
+    )
+    findings = workflow_safety_findings(broken)
+    assert any("PYTHONPATH" in item and "payload" in item for item in findings)
+    startup = text.replace(
+        "          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}\n",
+        "          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}\n"
+        "          PYTHONSTARTUP: payload/sitecustomize.py\n",
+        1,
+    )
+    startup_findings = workflow_safety_findings(startup)
+    assert any("PYTHONSTARTUP" in item for item in startup_findings)
+    assert any("sitecustomize" in item for item in startup_findings)
+    pth = text.replace(
+        "python -m sceneagent.vast_smoke",
+        'python -c \'open("payload.pth", "w").write("payload\\n")\' && '
+        "python -m sceneagent.vast_smoke",
+        1,
+    )
+    pth_findings = workflow_safety_findings(pth)
+    assert any(".pth" in item for item in pth_findings)
+    piped = text.replace(
+        "python -m sceneagent.vast_smoke",
+        "pip install payload && python -m sceneagent.vast_smoke",
+        1,
+    )
+    pip_findings = workflow_safety_findings(piped)
+    assert any("pip-installs from payload" in item for item in pip_findings)
 
 
 def test_keyed_step_uses_base_orchestrator_and_does_not_execute_payload():

@@ -812,6 +812,65 @@ def assess_secret_forwarding(
     return record, problems
 
 
+def _path_names_payload(value: str) -> bool:
+    """True when a path component is exactly ``payload``.
+
+    ``Path`` keeps ``payload`` as a component of ``./payload`` and
+    ``payload/``. It does not treat ``.ci`` as ``ci``.
+    """
+    if value in {"payload", "./payload", "payload/", "./payload/"}:
+        return True
+    return "payload" in Path(value).parts
+
+
+def payload_import_blockers() -> list[str]:
+    """Ways this process could import the PR-head ``payload/`` tree.
+
+    The keyed step must run the base orchestrator. A ``PYTHONPATH``,
+    ``PYTHONSTARTUP``, ``sys.path`` entry, ``.pth`` line, or ``sitecustomize``
+    that names ``payload`` is refused before any instance call.
+    """
+    blockers: list[str] = []
+    if Path.cwd().name == "payload":
+        blockers.append("cwd is payload")
+    for key in ("PYTHONPATH", "PYTHONSTARTUP"):
+        raw = os.environ.get(key, "")
+        pieces = raw.split(os.pathsep) if key == "PYTHONPATH" else [raw]
+        for piece in pieces:
+            if piece and _path_names_payload(piece):
+                blockers.append(f"{key} names payload")
+    for entry in sys.path:
+        if entry and _path_names_payload(entry):
+            blockers.append("sys.path names payload")
+    seen: set[str] = set()
+    for entry in sys.path:
+        directory = Path(entry) if entry else Path.cwd()
+        try:
+            resolved = str(directory.resolve())
+        except OSError:
+            continue
+        if resolved in seen or not directory.is_dir():
+            continue
+        seen.add(resolved)
+        if (directory / "sitecustomize.py").is_file() and _path_names_payload(
+            str(directory)
+        ):
+            blockers.append("sitecustomize.py is under payload")
+        for pth in directory.glob("*.pth"):
+            try:
+                text = pth.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                body = line.strip()
+                if not body or body.startswith(("#", "import ")):
+                    continue
+                if _path_names_payload(body):
+                    blockers.append("a .pth file adds payload")
+                    break
+    return blockers
+
+
 def normalize_run_context(
     trigger: str, actor: str, commit_sha: str
 ) -> dict[str, str] | None:
@@ -2292,6 +2351,15 @@ def run_smoke(
         context = normalize_run_context(trigger, actor, commit_sha)
     except InstanceNotApproved as exc:
         _emit(str(exc), key)
+        return 2
+    import_blockers = payload_import_blockers()
+    if import_blockers:
+        for blocker in import_blockers:
+            _emit(blocker, key)
+        _emit(
+            "refusing to import the payload checkout. No instance call was made.",
+            key,
+        )
         return 2
     forwarding, problems = assess_secret_forwarding(Path(checkout), key)
     if problems:

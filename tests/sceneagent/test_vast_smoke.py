@@ -50,6 +50,7 @@ from sceneagent.vast_smoke import (
     rsync_invocations,
     assess_secret_forwarding,
     iter_shipped_files,
+    payload_import_blockers,
     normalize_run_context,
     run_smoke,
     ssh_base_argv,
@@ -2050,6 +2051,44 @@ def test_mentioning_the_key_name_is_not_treated_as_forwarding_the_value(tmp_path
     assert problems == []
     assert record["secrets_forwarded"] is False
     assert record["payload_secret_hits"] == 0
+
+
+def test_orchestrator_refuses_when_payload_is_importable(tmp_path, monkeypatch, capsys):
+    secret = "sf4-not-a-real-key"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("PYTHONPATH", "payload")
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    (payload / "sitecustomize.py").write_text("print('imported')\n", encoding="utf-8")
+    monkeypatch.setenv("PYTHONSTARTUP", str(payload / "sitecustomize.py"))
+    monkeypatch.syspath_prepend(str(payload))
+    pth_dir = tmp_path / "site"
+    pth_dir.mkdir()
+    (pth_dir / "extra.pth").write_text("payload\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(pth_dir))
+
+    def request(*_args, **_kwargs):
+        raise AssertionError("GPU call")
+
+    blockers = payload_import_blockers()
+    assert "PYTHONPATH names payload" in blockers
+    assert "PYTHONSTARTUP names payload" in blockers
+    assert "sys.path names payload" in blockers
+    assert "sitecustomize.py is under payload" in blockers
+    assert "a .pth file adds payload" in blockers
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        secret,
+        request=request,
+        sleep=lambda _seconds: None,
+    )
+    assert code == 2
+    assert not (tmp_path / "artifacts").exists()
+    captured = capsys.readouterr()
+    assert "No instance call was made." in captured.err
+    assert secret not in captured.out + captured.err
 
 
 def test_secret_in_payload_is_refused_before_any_gpu_call(
