@@ -4,24 +4,46 @@ The paper completes exposed background with detected planes and names LaMa
 as optional texture inpainting. ``plane_infill`` still refuses to write an
 image when the caller has neither a plane render nor association output.
 
-``complete_background`` treats a missing render as a plane-completion problem.
-It can write a plane-fill placeholder from association output. LaMa runs only
-when an image to inpaint exists, and only when LaMa itself is installed. A
-missing checkpoint does not produce a forged inpaint.
+``complete_background`` fits a plane to background points and fills the hole
+from nearby plane-surface colors. That render is produced here. It is not a
+copy of an input image. LaMa is optional and off by default: the import runs
+only when ``use_lama`` is true, and a missing checkpoint does not produce a
+forged inpaint. Counts without background points still take the placeholder
+path, which is not a completed background. Gaussian ``centers`` are not
+treated as that plane. This fit does not read a camera pose.
 """
 
 from __future__ import annotations
 
+import itertools
+import json
 import struct
 import zlib
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
+# Inlier band as a fraction of the cloud's median radius. Not a SceneAgent
+# threshold. Outliers farther than this, relative to the inlier cloud, drop
+# out of the refit. A published residual was not given.
+PLANE_INLIER_SCALE = 0.05
+_RANK_EPS = 1e-8
+
 
 def write_rgb_png(path, rows):
-    """Write an 8-bit RGB PNG. ``rows`` is a sequence of RGB byte triples."""
+    """Write an 8-bit RGB PNG.
+
+    Each row is a flat sequence of channel bytes, three per pixel. The IHDR
+    width is that pixel count. Treating the channel count as the width yields
+    a color-type-2 file Pillow cannot decode.
+    """
     height = len(rows)
-    width = len(rows[0]) if height else 0
+    channels = len(rows[0]) if height else 0
+    if channels % 3 != 0:
+        raise ValueError("each PNG row needs 3 channel bytes per pixel")
+    width = channels // 3
     raw = b"".join(b"\x00" + bytes(row) for row in rows)
 
     def chunk(tag, data):
@@ -250,10 +272,520 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
     }
 
 
+class PlaneFitError(ValueError):
+    """Raised when background points do not determine a plane, or the hole cannot be filled."""
+
+
+def _as_points(points: Any) -> np.ndarray:
+    """Return Nx3 float64 points, or raise ``PlaneFitError``."""
+    try:
+        array = np.asarray(points, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise PlaneFitError("points must be an Nx3 array") from exc
+    if array.ndim == 1 and array.size == 0:
+        raise PlaneFitError("too few points to fit a plane")
+    if array.ndim != 2 or array.shape[1] != 3:
+        raise PlaneFitError("points must be an Nx3 array")
+    if len(array) < 3:
+        raise PlaneFitError("too few points to fit a plane")
+    if not np.isfinite(array).all():
+        raise PlaneFitError("points must be finite")
+    return array
+
+
+def _canonical_normal(normal: np.ndarray) -> np.ndarray:
+    """Unit normal whose largest component is positive.
+
+    The singular vector is unsigned. Flipping it here makes a z-up plane
+    report +Z, so two fits of the same cloud agree.
+    """
+    unit = np.asarray(normal, dtype=np.float64)
+    unit = unit / np.linalg.norm(unit)
+    axis = int(np.argmax(np.abs(unit)))
+    if unit[axis] < 0.0:
+        unit = -unit
+    return unit
+
+
+def plane_axes(normal: Sequence[float] | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Right-handed axes spanning the plane.
+
+    The first world axis that is not parallel to ``normal`` is projected into
+    the plane and used as U. V is ``normal × U``. For a +Z normal this is
+    world X and world Y, so a test can predict pixels without a camera.
+    """
+    unit = _canonical_normal(np.asarray(normal, dtype=np.float64))
+    tangent = None
+    for axis in (
+        np.array([1.0, 0.0, 0.0]),
+        np.array([0.0, 1.0, 0.0]),
+        np.array([0.0, 0.0, 1.0]),
+    ):
+        candidate = axis - unit * float(np.dot(axis, unit))
+        if float(np.linalg.norm(candidate)) > 1e-6:
+            tangent = candidate
+            break
+    if tangent is None:
+        raise PlaneFitError("plane normal is not finite")
+    u_axis = tangent / np.linalg.norm(tangent)
+    v_axis = np.cross(unit, u_axis)
+    return u_axis, v_axis
+
+
+def _cloud_scale(points: np.ndarray) -> float:
+    centered = points - points.mean(axis=0)
+    singular = np.linalg.svd(centered, compute_uv=False)
+    if len(singular) == 0:
+        return 0.0
+    return float(singular[0])
+
+
+def _is_collinear(points: np.ndarray) -> bool:
+    """True when the second singular value is numerical dust.
+
+    A line, or a pile of coincident points, has no second direction. A thin
+    triangle whose second singular value clears ``_RANK_EPS`` is still a plane.
+    """
+    centered = points - points.mean(axis=0)
+    singular = np.linalg.svd(centered, compute_uv=False)
+    if len(singular) < 2:
+        return True
+    scale = max(float(singular[0]), 1e-12)
+    return float(singular[1]) <= _RANK_EPS * scale
+
+
+def _default_threshold(points: np.ndarray) -> float:
+    center = np.median(points, axis=0)
+    radii = np.linalg.norm(points - center, axis=1)
+    scale = float(np.median(radii))
+    if scale <= 1e-12:
+        scale = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
+    return max(1e-6, PLANE_INLIER_SCALE * scale)
+
+
+def _sample_triplets(count: int, trials: int, seed: int) -> list[tuple[int, int, int]]:
+    if count <= 24:
+        return list(itertools.combinations(range(count), 3))
+    rng = np.random.default_rng(seed)
+    chosen: set[tuple[int, int, int]] = set()
+    limit = min(trials, count * (count - 1) * (count - 2) // 6)
+    attempts = 0
+    while len(chosen) < limit and attempts < limit * 20:
+        first, second, third = (
+            int(item) for item in rng.choice(count, size=3, replace=False)
+        )
+        ordered = tuple(sorted((first, second, third)))
+        chosen.add((ordered[0], ordered[1], ordered[2]))
+        attempts += 1
+    return list(chosen)
+
+
+def _svd_plane(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    origin = points.mean(axis=0)
+    _, _, vh = np.linalg.svd(points - origin, full_matrices=False)
+    normal = _canonical_normal(vh[-1])
+    return origin, normal
+
+
+def fit_plane(
+    points: Any,
+    *,
+    residual: float | None = None,
+    seed: int = 0,
+    trials: int = 128,
+) -> dict[str, Any]:
+    """Robust plane through background points.
+
+    A RANSAC sample of three points proposes a plane. The sample with the
+    most inliers is refit by SVD on those inliers. The inlier band is
+    ``residual`` when the caller passes one, otherwise
+    ``PLANE_INLIER_SCALE`` times the median radius. That band is how outliers
+    stay out of the normal. It is not a published SceneAgent number.
+
+    Raises ``PlaneFitError`` when fewer than three points are given, or when
+    the points are collinear (including a coincident pile).
+    """
+    cloud = _as_points(points)
+    if _is_collinear(cloud):
+        raise PlaneFitError("points are collinear")
+    threshold = float(residual) if residual is not None else _default_threshold(cloud)
+    if threshold <= 0.0:
+        raise PlaneFitError("residual threshold must be positive")
+    scale = max(_cloud_scale(cloud), 1e-12)
+    best_inliers: np.ndarray | None = None
+    best_count = 0
+    best_cost = float("inf")
+    for i0, i1, i2 in _sample_triplets(len(cloud), trials, seed):
+        p0 = cloud[i0]
+        edge_a = cloud[i1] - p0
+        edge_b = cloud[i2] - p0
+        cross = np.cross(edge_a, edge_b)
+        area = float(np.linalg.norm(cross))
+        if area <= _RANK_EPS * scale:
+            continue
+        normal = cross / area
+        distances = np.abs((cloud - p0) @ normal)
+        inliers = np.flatnonzero(distances <= threshold)
+        count = int(inliers.size)
+        if count < 3:
+            continue
+        cost = float(np.dot(distances[inliers], distances[inliers]))
+        if count > best_count or (count == best_count and cost < best_cost):
+            best_inliers = inliers
+            best_count = count
+            best_cost = cost
+    if best_inliers is None or best_count < 3:
+        raise PlaneFitError("points are collinear")
+    origin, normal = _svd_plane(cloud[best_inliers])
+    distances = np.abs((cloud - origin) @ normal)
+    inliers = np.flatnonzero(distances <= threshold)
+    if inliers.size < 3 or _is_collinear(cloud[inliers]):
+        raise PlaneFitError("points are collinear")
+    origin, normal = _svd_plane(cloud[inliers])
+    distances = np.abs((cloud - origin) @ normal)
+    kept = distances[inliers]
+    return {
+        "origin": origin,
+        "normal": normal,
+        "inliers": inliers.astype(int),
+        "n_inliers": int(inliers.size),
+        "residual_rms": float(np.sqrt(np.mean(kept * kept))),
+        "threshold": threshold,
+        "fit": "ransac_svd",
+    }
+
+
+def _as_colors(colors: Any, count: int) -> np.ndarray:
+    try:
+        array = np.asarray(colors)
+    except (TypeError, ValueError) as exc:
+        raise PlaneFitError("colors must be Nx3, one RGB triple per point") from exc
+    if array.shape != (count, 3):
+        raise PlaneFitError("colors must be Nx3, one RGB triple per point")
+    values = array.astype(np.float64)
+    if not np.isfinite(values).all():
+        raise PlaneFitError("colors must be finite")
+    # A 0..1 float cloud is a fraction of full scale. An 8-bit cloud is already
+    # in 0..255. Mixing the two would paint the hole with the wrong values.
+    if np.issubdtype(array.dtype, np.floating) and float(np.max(values)) <= 1.0:
+        values = values * 255.0
+    return np.clip(np.rint(values), 0, 255).astype(np.uint8)
+
+
+def fill_hole(image: Any, known: Any, hole: Any) -> np.ndarray:
+    """Fill hole pixels from the nearest known plane-surface color.
+
+    ``image`` is HxWx3 uint8. ``known`` marks pixels that carry a splatted
+    sample. ``hole`` marks pixels to replace. A source is a known pixel that
+    is not itself a hole: a sample that landed in the removed region is the
+    object, not the background. Distance is squared Euclidean on pixel
+    coordinates. Ties take the smaller row, then the smaller column.
+
+    Non-hole pixels are copied unchanged, including zeros where no sample
+    landed. The hole is the only region this function paints.
+    """
+    canvas = np.array(np.asarray(image), dtype=np.uint8, copy=True)
+    if canvas.ndim != 3 or canvas.shape[2] != 3:
+        raise PlaneFitError("image must have shape HxWx3")
+    known_mask = np.asarray(known, dtype=bool)
+    hole_mask = np.asarray(hole, dtype=bool)
+    height, width = canvas.shape[:2]
+    if known_mask.shape != (height, width) or hole_mask.shape != (height, width):
+        raise PlaneFitError("known and hole masks must match the image")
+    if not hole_mask.any():
+        return canvas
+    source = known_mask & ~hole_mask
+    if not source.any():
+        raise PlaneFitError("no plane-surface color to fill the hole")
+    # argwhere is row-major, so the first minimum is the smaller row, then column.
+    source_yx = np.argwhere(source)
+    hole_yx = np.argwhere(hole_mask)
+    diff = hole_yx[:, None, :].astype(np.int32) - source_yx[None, :, :].astype(np.int32)
+    nearest = np.argmin(np.sum(diff * diff, axis=2), axis=1)
+    canvas[hole_yx[:, 0], hole_yx[:, 1]] = canvas[
+        source_yx[nearest, 0], source_yx[nearest, 1]
+    ]
+    return canvas
+
+
+def _to_pixels(coords: np.ndarray, size: int) -> np.ndarray:
+    if size <= 1:
+        return np.zeros(len(coords), dtype=int)
+    low = float(coords.min())
+    high = float(coords.max())
+    span = high - low
+    if span <= 1e-12:
+        return np.zeros(len(coords), dtype=int)
+    scaled = (coords - low) / span * float(size - 1)
+    return np.clip(np.rint(scaled), 0, size - 1).astype(int)
+
+
+def _rows_from_image(image: np.ndarray) -> list[list[int]]:
+    rows: list[list[int]] = []
+    for y in range(image.shape[0]):
+        row: list[int] = []
+        for x in range(image.shape[1]):
+            pixel = image[y, x]
+            row.extend((int(pixel[0]), int(pixel[1]), int(pixel[2])))
+        rows.append(row)
+    return rows
+
+
+def render_plane_background(
+    points: Any,
+    colors: Any,
+    hole: Any,
+    out_path: Any = None,
+) -> dict[str, Any]:
+    """Orthographic render of the fitted plane, with the hole filled.
+
+    Points are projected on the plane axes from ``plane_axes``. Their bounding
+    box maps onto the hole mask's pixel grid. Samples that project into the
+    hole are not color sources. Hole pixels take the nearest source color.
+    The PNG, when ``out_path`` is set, is that array and nothing else.
+    """
+    cloud = _as_points(points)
+    rgb = _as_colors(colors, len(cloud))
+    mask = np.asarray(hole, dtype=bool)
+    if mask.ndim != 2:
+        raise PlaneFitError("hole mask must be 2-dimensional")
+    height, width = int(mask.shape[0]), int(mask.shape[1])
+    if height < 1 or width < 1:
+        raise PlaneFitError("hole mask must be 2-dimensional")
+    plane = fit_plane(cloud)
+    u_axis, v_axis = plane_axes(plane["normal"])
+    relative = cloud - plane["origin"]
+    xs = _to_pixels(relative @ u_axis, width)
+    ys = _to_pixels(relative @ v_axis, height)
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    known = np.zeros((height, width), dtype=bool)
+    for index in range(len(cloud)):
+        y = int(ys[index])
+        x = int(xs[index])
+        if mask[y, x] or known[y, x]:
+            continue
+        image[y, x] = rgb[index]
+        known[y, x] = True
+    filled = fill_hole(image, known, mask)
+    artifact = None
+    if out_path is not None:
+        artifact = str(write_rgb_png(out_path, _rows_from_image(filled)))
+    return {"image": filled, "plane": plane, "artifact": artifact, "known": known}
+
+
+def background_ledger_record(
+    method: str,
+    inputs: dict[str, Any],
+    outputs: dict[str, Any],
+    decision: str = "accept",
+) -> dict[str, Any]:
+    """One background run: method ``plane`` or ``lama``, plus inputs and outputs."""
+    if method not in ("plane", "lama"):
+        raise ValueError("background ledger method must be plane or lama")
+    return {
+        "item": "background",
+        "section": "3.3",
+        "method": method,
+        "inputs": inputs,
+        "outputs": outputs,
+        "decision": decision,
+    }
+
+
+def append_background_ledger(
+    ledger_path: Any, record: dict[str, Any]
+) -> dict[str, Any]:
+    """Append ``record`` to ``ledger.json`` without rewriting earlier entries."""
+    path = Path(ledger_path)
+    if path.is_file():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("ledger.json must be an object")
+    else:
+        payload = {"section": "3.3", "entries": []}
+    entries = payload.setdefault("entries", [])
+    if not isinstance(entries, list):
+        raise ValueError("ledger entries must be a list")
+    entries.append(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return record
+
+
+def _lookup_points(points: Any, association: Any) -> tuple[Any, str | None]:
+    """Background points only. ``centers`` stay on the placeholder path.
+
+    Association centers are Gaussian samples. They are not the exposed
+    background, and fitting them would couple this step to whatever produced
+    the centers.
+    """
+    if points is not None:
+        return points, "points"
+    if isinstance(association, dict):
+        if "background_points" in association:
+            return association["background_points"], "association.background_points"
+        if "points" in association:
+            return association["points"], "association.points"
+    return None, None
+
+
+def _lookup_colors(colors: Any, association: Any) -> Any:
+    if colors is not None:
+        return colors
+    if isinstance(association, dict) and "colors" in association:
+        return association["colors"]
+    return None
+
+
+def _lookup_hole(hole: Any, association: Any) -> Any:
+    if hole is not None:
+        return hole
+    if isinstance(association, dict) and "hole" in association:
+        return association["hole"]
+    return None
+
+
+def _json_vec(vector: Any) -> list[float]:
+    return [float(item) for item in vector]
+
+
+def _ledger_destination(out_path: Any, ledger_path: Any) -> Path | None:
+    if ledger_path is not None:
+        return Path(ledger_path)
+    if out_path is not None:
+        return Path(out_path).parent / "ledger.json"
+    return None
+
+
+def _complete_from_fitted_plane(
+    points: Any,
+    point_source: str,
+    association: Any,
+    hole_image: Any,
+    out_path: Any,
+    use_lama: bool,
+    colors: Any,
+    hole: Any,
+    ledger_path: Any,
+) -> dict[str, Any]:
+    """Fit, render, optionally inpaint, and record the run."""
+    if out_path is None:
+        raise PlaneFitError("out_path is required to write the rendered background")
+    rgb = _lookup_colors(colors, association)
+    if rgb is None:
+        raise PlaneFitError("colors are required to fill the hole from plane surfaces")
+    mask = _lookup_hole(hole, association)
+    if mask is None:
+        raise PlaneFitError("a hole mask is required to complete the background")
+    destination = Path(out_path)
+    # LaMa, when requested, writes a second file. The plane render keeps its
+    # own name so a missing checkpoint cannot erase the only image.
+    plane_path = (
+        destination.with_name("plane_background.png") if use_lama else destination
+    )
+    rendered = render_plane_background(points, rgb, mask, plane_path)
+    image = rendered["image"]
+    plane = rendered["plane"]
+    height, width = int(image.shape[0]), int(image.shape[1])
+    hole_image_path = str(hole_image) if hole_image else None
+    inputs = {
+        "n_points": len(_as_points(points)),
+        "point_source": point_source,
+        "n_hole_pixels": int(np.asarray(mask, dtype=bool).sum()),
+        "image_size": [height, width],
+        "use_lama": bool(use_lama),
+        "hole_image": hole_image_path,
+    }
+    outputs: dict[str, Any] = {
+        "artifact": str(plane_path),
+        "width": width,
+        "height": height,
+        "plane_normal": _json_vec(plane["normal"]),
+        "plane_origin": _json_vec(plane["origin"]),
+        "n_inliers": int(plane["n_inliers"]),
+        "forged": False,
+    }
+    method = "plane"
+    lama_status = "not_requested"
+    artifact = str(plane_path)
+    emitted = True
+    reason = "Fitted a plane to the background points and filled the hole from nearby plane-surface colors."
+    if use_lama:
+        painted = lama_inpaint(plane_path, destination)
+        lama_status = str(painted.get("lama"))
+        if painted.get("emitted") and painted.get("artifact"):
+            method = "lama"
+            artifact = str(painted["artifact"])
+            outputs["plane_artifact"] = str(plane_path)
+            outputs["artifact"] = artifact
+            reason = "LaMa inpainted the fitted-plane render."
+        else:
+            outputs["lama"] = lama_status
+            reason = (
+                "Fitted a plane and filled the hole. LaMa did not write an inpaint."
+            )
+    record = background_ledger_record(method, inputs, outputs)
+    ledger_file = _ledger_destination(destination, ledger_path)
+    if ledger_file is not None:
+        append_background_ledger(ledger_file, record)
+    return {
+        "ok": True,
+        "emitted": emitted,
+        "artifact": artifact,
+        "forged": False,
+        "plane_completion": "fitted_plane",
+        "lama": lama_status,
+        "use_lama": bool(use_lama),
+        "method": method,
+        "plane": {
+            "normal": outputs["plane_normal"],
+            "origin": outputs["plane_origin"],
+            "n_inliers": outputs["n_inliers"],
+            "residual_rms": float(plane["residual_rms"]),
+            "fit": plane["fit"],
+        },
+        "shape": [height, width, 3],
+        "ledger": record,
+        "reason": reason,
+    }
+
+
 def complete_background(
+    association=None,
+    hole_image=None,
+    out_path=None,
+    use_lama=False,
+    points=None,
+    colors=None,
+    hole=None,
+    ledger_path=None,
+):
+    """Fit a plane to background points and fill the hole.
+
+    ``use_lama`` defaults to false. LaMa is imported only on that path, and
+    only after the plane render exists. Counts without background points keep
+    the placeholder path.
+    """
+    supplied, source_name = _lookup_points(points, association)
+    if supplied is not None:
+        return _complete_from_fitted_plane(
+            supplied,
+            source_name or "points",
+            association,
+            hole_image,
+            out_path,
+            bool(use_lama),
+            colors,
+            hole,
+            ledger_path,
+        )
+    return _complete_without_points(association, hole_image, out_path, use_lama)
+
+
+def _complete_without_points(
     association=None, hole_image=None, out_path=None, use_lama=False
 ):
-    """Plane completion first. LaMa only if that step produced an image."""
+    """Placeholder path. Not a fitted plane and not a completed background."""
     image = Path(hole_image) if hole_image else None
     placeholder = None
     if image is None or not image.is_file() or image.stat().st_size == 0:
