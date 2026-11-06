@@ -180,20 +180,20 @@ const BLOCKS: Block[] = [
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: each masked crop is a 512-d vector. It is a physics-prior input, not the Gaussian assignment.",
-        plan: "EXPANSION_PLAN forbids substituting another CLIP. The section 3.3 Features row is partial: the 512-d crop vectors are in features.json, and the per-Gaussian feature file is still missing.",
+        plan: "EXPANSION_PLAN forbids substituting another CLIP. OpenCLIP ViT-B-16 512-d crop vectors were produced. Evidence: /workspace/fruits-features/features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
         changelog: "512-d vectors for 0001.jpg and 0011.jpg. No new checkpoint download.",
         ran: "openai weights, stored in /workspace/fruits-features/features.json.",
-        miss: "Partial. Two crop vectors are in features.json. The per-Gaussian feature file is still missing.",
+        miss: "OpenCLIP ViT-B-16 512-d crop vectors were produced. Evidence: features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
       },
       {
         sub: "DINOv2 ViT-S/14",
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: DINOv2 ViT-S/14 is the other physics-prior feature. It does not assign Gaussians.",
-        plan: "Explicit rule: do not substitute DINOv3. The section 3.3 Features row is partial: the ViT-S/14 crop vectors are in features.json, and the per-Gaussian feature file is still missing.",
+        plan: "Explicit rule: do not substitute DINOv3. DINOv2 ViT-S/14 crop vectors were produced. Evidence: /workspace/fruits-features/features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
         changelog: "dinov2_vits14, 384-d, checkpoint already on disk. Not DINOv3.",
         ran: "384-d vectors for 0001.jpg and 0011.jpg in features.json.",
-        miss: "Partial. Do not substitute DINOv3. The vectors are still one crop each. The per-Gaussian feature file is still missing.",
+        miss: "DINOv2 ViT-S/14 crop vectors were produced. Do not substitute DINOv3. Evidence: features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
       },
       {
         sub: "LangSplat-style codebook",
@@ -1351,7 +1351,7 @@ export default function SceneAgentPaperGaps() {
           ["Agent plan / manifest / ledger", "/workspace/fruits-agent. Repair accepted MJCF, SAM 3D, PartSAM, inspector, ICP file, aligned USDA, and one failed hull rollout.", "3.1 loop done"],
           ["CUDA COLMAP 4.2.1", "15/15 images, 603 points, mean reprojection 0.867273 px. Runner still 1 fps and a 16-frame cap.", "3.2 partial"],
           ["splatfacto-big", "2000 steps, not 30000. step-000001999.ckpt. 13 train renders. Cameras from this COLMAP are not in the train.", "3.2 done"],
-          ["SAM, OpenCLIP, DINOv2", "vit_h every 10th frame: 0001 has 33 masks, 0011 has 19. OpenCLIP 512-d and DINOv2 ViT-S/14 384-d crop vectors are in features.json. Not DINOv3. The per-Gaussian feature file is still missing.", "masks done; features partial"],
+          ["SAM, OpenCLIP, DINOv2", "vit_h every 10th frame: 0001 has 33 masks, 0011 has 19. OpenCLIP ViT-B-16 512-d and DINOv2 ViT-S/14 crop vectors were produced. Evidence: /workspace/fruits-features/features.json. Not DINOv3. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).", "3.3 done"],
           ["Association", "Equation (1) kept 27548/84993 Gaussians.", "3.3 done"],
           ["SAM 3D + ICP", "0001.glb, overlay, gaussian ply. Trimmed ICP median 0.04999262711481225. Ours iteration-1 gate rejects: coverage 0.146 and silhouette None.", "mesh done, ICP partial"],
           ["Aligned USDA", "phase1_aligned_mesh.usda, 5,339,577 bytes, 8095 faces. Isaac opened=True, 4 prims.", "3.7 done"],
@@ -1362,7 +1362,7 @@ export default function SceneAgentPaperGaps() {
           ["Material vote", "gemini-2.5-flash HTTP 404. gemini-3.8-flash class wood. Unpublished MLP not started.", "vote done, VLM partial, MLP missing"],
           ["Sisters and place grid", "box.json and bowl.json only. +5% box does not fit. Wilson 0/1 is 0–0.7934506856227626.", "sisters done, grid partial"],
         ]}
-        rowTone={["success", "warning", "success", "warning", "success", "warning", "success", "warning", "success", "danger", "warning", "warning", "warning"]}
+        rowTone={["success", "warning", "success", "success", "success", "warning", "success", "warning", "success", "danger", "warning", "warning", "warning"]}
         striped
         stickyHeader
       />
