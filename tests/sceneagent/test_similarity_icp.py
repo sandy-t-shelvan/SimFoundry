@@ -805,6 +805,50 @@ def test_inverse_warp_forty_five_degrees_has_no_holes():
     assert silhouette_iou(warped, expected) >= 0.95
 
 
+def _orthographic_det(rotation):
+    """Determinant of the x,y rows ``_warp_mask`` inverts."""
+    rotation = np.asarray(rotation, dtype=np.float64)
+    return float(rotation[0, 0] * rotation[1, 1] - rotation[0, 1] * rotation[1, 0])
+
+
+def test_inverse_warp_ninety_degree_x_rotation_refuses_degenerate_projection():
+    # A quarter turn about x lays the source plane on edge. The orthographic
+    # 2x2 then has |det| under 1e-8, and the warp returns an empty mask
+    # instead of inverting it. Translation y is row 0's pixel center: without
+    # that refusal the singular inverse is finite and copies source row 0.
+    size = 32
+    source = np.zeros((size, size), dtype=bool)
+    source[0, 8:16] = True
+    source[10:18, 10:18] = True
+    rotation = rotation_matrix_from_vector([math.pi / 2.0, 0.0, 0.0])
+    translation = np.array([0.0, 0.5, 0.0])
+    assert abs(_orthographic_det(rotation)) < 1e-8
+    warped = _warp_mask(source, 1.0, rotation, translation)
+    assert int(source.sum()) > 0
+    assert int(warped.sum()) == 0
+    assert not np.array_equal(warped, source)
+
+
+def test_inverse_warp_forty_five_degrees_stays_on_canvas():
+    size = 180
+    x0, y0, side = 90.0, 90.0, 24.0
+    vertices, faces, source = _square_pair(size, x0, y0, side)
+    rotation = rotation_matrix_from_vector([0.0, 0.0, math.pi / 4.0])
+    center = np.array([x0 + side / 2.0, y0 + side / 2.0, 0.0])
+    translation = center - rotation @ center
+    warped = _warp_mask(source, 1.0, rotation, translation)
+    expected = _expected_raster(vertices, faces, size, 1.0, rotation, translation)
+    assert int(source.sum()) > 0
+    assert int(warped.sum()) == pytest.approx(int(source.sum()), rel=0.08)
+    assert _interior_hole_count(warped) == 0
+    assert silhouette_iou(warped, expected) >= 0.95
+    for mask in (warped, expected):
+        assert not mask[0].any()
+        assert not mask[-1].any()
+        assert not mask[:, 0].any()
+        assert not mask[:, -1].any()
+
+
 def test_inverse_warp_scale_half_thirty_degrees_and_translation():
     size = 180
     vertices, faces, source = _square_pair(size, 40.0, 50.0, 28.0)
