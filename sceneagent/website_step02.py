@@ -68,6 +68,7 @@ def groundingdino_status(weights_path=None, gpu_busy=False):
     weights = _weights_file(weights_path)
     try:
         import groundingdino.util.inference  # noqa: F401
+
         installed = True
     except ImportError:
         installed = False
@@ -77,7 +78,9 @@ def groundingdino_status(weights_path=None, gpu_busy=False):
             "GroundingDINO weights are not loaded. Website step 02 is not "
             "section 3.3, and this hook does not complete that section.",
         )
-    return _base("weights_present", "Weights are on disk. Inference was not started.", True)
+    return _base(
+        "weights_present", "Weights are on disk. Inference was not started.", True
+    )
 
 
 def run_groundingdino(

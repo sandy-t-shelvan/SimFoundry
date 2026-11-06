@@ -42,22 +42,24 @@ def write_physics_usda(contract, path):
         "{",
     ]
     for obj in contract["objects"]:
-        lines.extend([
-            f'    def Xform "{_token(obj["name"])}" (',
-            '        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]',
-            "    )",
-            "    {",
-            f'        bool physics:rigidBodyEnabled = {"true" if obj["rigid_body"] else "false"}',
-            _float_attr("physics:mass", obj["mass_kg"]),
-            _float_attr("physics:density", obj["density_kg_m3"]),
-            _float_attr("physics:staticFriction", obj["friction_static"]),
-            _float_attr("physics:dynamicFriction", obj["friction_dynamic"]),
-            _float_attr("physics:restitution", obj["restitution"]),
-            f'        string sceneagent:body_type = "{_literal(obj["body_type"])}"',
-            f'        string sceneagent:collision = "{_literal(obj["collision_approximation"])}"',
-            f'        string sceneagent:material_class = "{_literal(obj["material_class"])}"',
-            "    }",
-        ])
+        lines.extend(
+            [
+                f'    def Xform "{_token(obj["name"])}" (',
+                '        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]',
+                "    )",
+                "    {",
+                f"        bool physics:rigidBodyEnabled = {'true' if obj['rigid_body'] else 'false'}",
+                _float_attr("physics:mass", obj["mass_kg"]),
+                _float_attr("physics:density", obj["density_kg_m3"]),
+                _float_attr("physics:staticFriction", obj["friction_static"]),
+                _float_attr("physics:dynamicFriction", obj["friction_dynamic"]),
+                _float_attr("physics:restitution", obj["restitution"]),
+                f'        string sceneagent:body_type = "{_literal(obj["body_type"])}"',
+                f'        string sceneagent:collision = "{_literal(obj["collision_approximation"])}"',
+                f'        string sceneagent:material_class = "{_literal(obj["material_class"])}"',
+                "    }",
+            ]
+        )
     lines.extend(["}", ""])
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text("\n".join(lines), encoding="utf-8")
@@ -74,7 +76,7 @@ def _mesh_block(name, vertices, faces, physics):
         '        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]',
         "    )",
         "    {",
-        f'        bool physics:rigidBodyEnabled = {"true" if physics.get("rigid_body") else "false"}',
+        f"        bool physics:rigidBodyEnabled = {'true' if physics.get('rigid_body') else 'false'}",
         _float_attr("physics:mass", physics.get("mass_kg")),
         _float_attr("physics:density", physics.get("density_kg_m3")),
         _float_attr("physics:staticFriction", physics.get("friction_static")),
@@ -93,7 +95,9 @@ def _mesh_block(name, vertices, faces, physics):
     ]
 
 
-def write_aligned_mesh_usda(contract, vertices, faces, path, mesh_name="aligned_mesh", replace_name="box"):
+def write_aligned_mesh_usda(
+    contract, vertices, faces, path, mesh_name="aligned_mesh", replace_name="box"
+):
     """Keep every contract object except ``replace_name``, and write that one as a mesh.
 
     Section 3.7. The mesh vertices are already in the stage frame.
@@ -117,22 +121,24 @@ def write_aligned_mesh_usda(contract, vertices, faces, path, mesh_name="aligned_
             lines.extend(_mesh_block(mesh_name, vertices, faces, obj))
             replaced = True
         else:
-            lines.extend([
-                f'    def Xform "{_token(obj["name"])}" (',
-                '        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]',
-                "    )",
-                "    {",
-                f'        bool physics:rigidBodyEnabled = {"true" if obj["rigid_body"] else "false"}',
-                _float_attr("physics:mass", obj["mass_kg"]),
-                _float_attr("physics:density", obj["density_kg_m3"]),
-                _float_attr("physics:staticFriction", obj["friction_static"]),
-                _float_attr("physics:dynamicFriction", obj["friction_dynamic"]),
-                _float_attr("physics:restitution", obj["restitution"]),
-                f'        string sceneagent:body_type = "{_literal(obj["body_type"])}"',
-                f'        string sceneagent:collision = "{_literal(obj["collision_approximation"])}"',
-                f'        string sceneagent:material_class = "{_literal(obj["material_class"])}"',
-                "    }",
-            ])
+            lines.extend(
+                [
+                    f'    def Xform "{_token(obj["name"])}" (',
+                    '        prepend apiSchemas = ["PhysicsRigidBodyAPI", "PhysicsMassAPI", "PhysicsCollisionAPI"]',
+                    "    )",
+                    "    {",
+                    f"        bool physics:rigidBodyEnabled = {'true' if obj['rigid_body'] else 'false'}",
+                    _float_attr("physics:mass", obj["mass_kg"]),
+                    _float_attr("physics:density", obj["density_kg_m3"]),
+                    _float_attr("physics:staticFriction", obj["friction_static"]),
+                    _float_attr("physics:dynamicFriction", obj["friction_dynamic"]),
+                    _float_attr("physics:restitution", obj["restitution"]),
+                    f'        string sceneagent:body_type = "{_literal(obj["body_type"])}"',
+                    f'        string sceneagent:collision = "{_literal(obj["collision_approximation"])}"',
+                    f'        string sceneagent:material_class = "{_literal(obj["material_class"])}"',
+                    "    }",
+                ]
+            )
     if not replaced:
         raise KeyError(replace_name)
     lines.extend(["}", ""])

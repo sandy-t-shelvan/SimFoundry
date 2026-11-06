@@ -61,12 +61,15 @@ class GeminiClient:
         parts = [{"text": prompt}]
         if image_bytes is not None:
             import base64
-            parts.append({
-                "inline_data": {
-                    "mime_type": mime_type,
-                    "data": base64.b64encode(image_bytes).decode("ascii"),
+
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": base64.b64encode(image_bytes).decode("ascii"),
+                    }
                 }
-            })
+            )
         status, raw = _request(
             f"{API_ROOT}/models/{model_id}:generateContent",
             self.api_key,
@@ -149,7 +152,9 @@ def choose_flash_model(error_body, model_names, exclude=(PAPER_MODEL_ID,)):
         if start < 0:
             break
         end = start + len(token)
-        while end < len(error_body) and (error_body[end].isalnum() or error_body[end] in ".-"):
+        while end < len(error_body) and (
+            error_body[end].isalnum() or error_body[end] in ".-"
+        ):
             end += 1
         named.append(error_body[start:end])
         cursor = end

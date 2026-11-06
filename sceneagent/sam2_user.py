@@ -52,6 +52,7 @@ def sam2_status(weights_path=None, gpu_busy=False):
     weights = _checkpoint(weights_path)
     try:
         import sam2  # noqa: F401
+
         installed = True
     except ImportError:
         installed = False
@@ -60,7 +61,11 @@ def sam2_status(weights_path=None, gpu_busy=False):
             "not_run",
             "SAM 2 weights are not loaded. This path is not section 3.3 and not SAM vit_h.",
         )
-    return _base("weights_present", "SAM 2 checkpoint is on disk. Inference was not started.", True)
+    return _base(
+        "weights_present",
+        "SAM 2 checkpoint is on disk. Inference was not started.",
+        True,
+    )
 
 
 def run_sam2(image_path, box=None, config_name=None, weights_path=None, gpu_busy=False):
@@ -86,16 +91,22 @@ def run_sam2(image_path, box=None, config_name=None, weights_path=None, gpu_busy
     weights = _checkpoint(weights_path)
     if weights is None:
         body = sam2_status(weights_path)
-        body["reason"] = "SAM 2 imported but no checkpoint file was found. No mask was invented."
+        body["reason"] = (
+            "SAM 2 imported but no checkpoint file was found. No mask was invented."
+        )
         return body
     if box is None:
         body = sam2_status(weights_path)
         body["status"] = "not_run"
         body["weights_loaded"] = True
-        body["reason"] = "A checkpoint is present and no box was supplied, so SAM 2 did not emit a mask."
+        body["reason"] = (
+            "A checkpoint is present and no box was supplied, so SAM 2 did not emit a mask."
+        )
         return body
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    config = config_name or os.environ.get("SAM2_CONFIG") or "configs/sam2/sam2_hiera_l.yaml"
+    config = (
+        config_name or os.environ.get("SAM2_CONFIG") or "configs/sam2/sam2_hiera_l.yaml"
+    )
     model = build_sam2(config, str(weights), device=device)
     predictor = SAM2ImagePredictor(model)
     from PIL import Image

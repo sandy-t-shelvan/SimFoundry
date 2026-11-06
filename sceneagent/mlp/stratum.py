@@ -15,17 +15,71 @@ from typing import Any
 
 from sceneagent.taxonomy import MATERIAL_CLASSES
 
-_STOP = frozenset({
-    "a", "an", "the", "and", "or", "of", "for", "with", "to", "from", "in",
-    "on", "by", "set", "pack", "pair", "piece", "pieces", "inch", "inches",
-    "cm", "mm", "oz", "lb", "lbs", "count", "ct", "new", "size",
-})
+_STOP = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "for",
+        "with",
+        "to",
+        "from",
+        "in",
+        "on",
+        "by",
+        "set",
+        "pack",
+        "pair",
+        "piece",
+        "pieces",
+        "inch",
+        "inches",
+        "cm",
+        "mm",
+        "oz",
+        "lb",
+        "lbs",
+        "count",
+        "ct",
+        "new",
+        "size",
+    }
+)
 
-_COLOR_SIZE = frozenset({
-    "red", "blue", "green", "black", "white", "yellow", "pink", "grey", "gray",
-    "brown", "purple", "orange", "beige", "navy", "gold", "silver", "clear",
-    "small", "medium", "large", "mini", "xl", "xs", "sm", "lg", "big", "little",
-})
+_COLOR_SIZE = frozenset(
+    {
+        "red",
+        "blue",
+        "green",
+        "black",
+        "white",
+        "yellow",
+        "pink",
+        "grey",
+        "gray",
+        "brown",
+        "purple",
+        "orange",
+        "beige",
+        "navy",
+        "gold",
+        "silver",
+        "clear",
+        "small",
+        "medium",
+        "large",
+        "mini",
+        "xl",
+        "xs",
+        "sm",
+        "lg",
+        "big",
+        "little",
+    }
+)
 
 # Longer phrases are tried first. This list is a sampler, not a labeler.
 _RULES = (
@@ -300,12 +354,33 @@ def labels_should_stop(records):
 
 def _name_contradiction(source, rows):
     checks = (
-        ("metal", {"fabric", "food and organic matter", "liquid and granular matter", "paper and cardboard"}),
-        ("paper and cardboard", {"metal", "glass and ceramic", "liquid and granular matter"}),
-        ("fabric", {"metal", "glass and ceramic", "food and organic matter", "liquid and granular matter"}),
+        (
+            "metal",
+            {
+                "fabric",
+                "food and organic matter",
+                "liquid and granular matter",
+                "paper and cardboard",
+            },
+        ),
+        (
+            "paper and cardboard",
+            {"metal", "glass and ceramic", "liquid and granular matter"},
+        ),
+        (
+            "fabric",
+            {
+                "metal",
+                "glass and ceramic",
+                "food and organic matter",
+                "liquid and granular matter",
+            },
+        ),
     )
     for guessed, bad in checks:
-        subset = [row for row in rows if guess_material(row.get("name") or "") == guessed]
+        subset = [
+            row for row in rows if guess_material(row.get("name") or "") == guessed
+        ]
         if len(subset) < 6:
             continue
         wrong = sum(row["material"] in bad for row in subset)

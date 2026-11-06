@@ -45,7 +45,9 @@ def from_simfoundry_scene(data, scene_name=None):
     if not init:
         raise ValueError("SimFoundry scene has no objects_info.init_info")
     names = list(init)
-    objects = [{"name": name, "movable": True, "from_simfoundry": True} for name in names]
+    objects = [
+        {"name": name, "movable": True, "from_simfoundry": True} for name in names
+    ]
     target = names[-1]
     manipulated = names[0]
     return {

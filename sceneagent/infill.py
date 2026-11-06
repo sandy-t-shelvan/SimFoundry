@@ -33,7 +33,12 @@ def write_rgb_png(path, rows):
         )
 
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw))
+        + chunk(b"IEND", b"")
+    )
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(png)
@@ -52,7 +57,11 @@ def plane_infill(plane_render_path, out_path=None, use_lama=False, association=N
     destination = Path(out_path) if out_path else None
     if not exists and association:
         return complete_background(association, out_path=out_path, use_lama=use_lama)
-    if destination is not None and destination.exists() and (source is None or destination.resolve() != source.resolve()):
+    if (
+        destination is not None
+        and destination.exists()
+        and (source is None or destination.resolve() != source.resolve())
+    ):
         destination.unlink()
     if not exists:
         return {
@@ -181,7 +190,11 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
     source = Path(image_path) if image_path else None
     destination = Path(out_path) if out_path else None
     exists = bool(source and source.is_file() and source.stat().st_size > 0)
-    if destination is not None and destination.exists() and (source is None or destination.resolve() != source.resolve()):
+    if (
+        destination is not None
+        and destination.exists()
+        and (source is None or destination.resolve() != source.resolve())
+    ):
         destination.unlink()
     if not exists:
         return {
@@ -237,7 +250,9 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
     }
 
 
-def complete_background(association=None, hole_image=None, out_path=None, use_lama=False):
+def complete_background(
+    association=None, hole_image=None, out_path=None, use_lama=False
+):
     """Plane completion first. LaMa only if that step produced an image."""
     image = Path(hole_image) if hole_image else None
     placeholder = None
@@ -246,7 +261,11 @@ def complete_background(association=None, hole_image=None, out_path=None, use_la
         if association is not None:
             placeholder_path = out_path
             if use_lama or placeholder_path is None:
-                placeholder_path = Path(out_path).with_name("plane_fill_placeholder.png") if out_path else Path("plane_fill_placeholder.png")
+                placeholder_path = (
+                    Path(out_path).with_name("plane_fill_placeholder.png")
+                    if out_path
+                    else Path("plane_fill_placeholder.png")
+                )
             placeholder = plane_fill_from_association(association, placeholder_path)
             if placeholder.get("artifact"):
                 image = Path(placeholder["artifact"])

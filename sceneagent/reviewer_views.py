@@ -43,12 +43,14 @@ def write_view_manifest(out_dir, object_name="object"):
     for name, group in REQUIRED_VIEWS:
         path = view_dir / f"{object_name}-{name}.png"
         present = path.is_file() and path.stat().st_size > 0
-        views.append({
-            "name": name,
-            "group": group,
-            "path": str(path),
-            "present": present,
-        })
+        views.append(
+            {
+                "name": name,
+                "group": group,
+                "path": str(path),
+                "present": present,
+            }
+        )
         if not present:
             missing.append(name)
     body = {

@@ -48,7 +48,7 @@ def write_physics_mjcf(contract, path):
         name = _token(obj["name"])
         geom_type = _geom_type(obj.get("collision_approximation"))
         static = obj.get("body_type") == "static rigid" or not obj.get("rigid_body")
-        joint = "" if static else '<freejoint/>'
+        joint = "" if static else "<freejoint/>"
         mass = obj.get("mass_kg")
         density = obj.get("density_kg_m3")
         mass_attr = ""
@@ -68,29 +68,37 @@ def write_physics_mjcf(contract, path):
             friction = f' friction="{float(slide or 0)} {float(spin or 0)} 0.001"'
         x = 0.25 * index
         bodies.append(
-            "\n".join([
-                f'    <body name="{name}" pos="{x} 0 0.2">',
-                f"      {joint}" if joint else "      <!-- static rigid: no free joint -->",
-                (
-                    f'      <geom name="{name}_geom" type="{geom_type}" size="{_size_attr(geom_type)}"'
-                    f'{mass_attr}{density_attr}{friction}/>'
-                ),
-                (f"      <!-- material_class={escape(str(obj.get('material_class')))} "
-                f"mass_source={mass_note} restitution={obj.get('restitution')} "
-                f"body_type={escape(str(obj.get('body_type')))} -->"),
-                "    </body>",
-            ])
+            "\n".join(
+                [
+                    f'    <body name="{name}" pos="{x} 0 0.2">',
+                    f"      {joint}"
+                    if joint
+                    else "      <!-- static rigid: no free joint -->",
+                    (
+                        f'      <geom name="{name}_geom" type="{geom_type}" size="{_size_attr(geom_type)}"'
+                        f"{mass_attr}{density_attr}{friction}/>"
+                    ),
+                    (
+                        f"      <!-- material_class={escape(str(obj.get('material_class')))} "
+                        f"mass_source={mass_note} restitution={obj.get('restitution')} "
+                        f"body_type={escape(str(obj.get('body_type')))} -->"
+                    ),
+                    "    </body>",
+                ]
+            )
         )
-    xml = "\n".join([
-        "<mujoco model=\"sceneagent_contract\">",
-        "  <!-- Section 3.7 rigid attributes. Deformables are not in this file. -->",
-        "  <option gravity=\"0 0 -9.81\" timestep=\"0.002\"/>",
-        "  <worldbody>",
-        *bodies,
-        "  </worldbody>",
-        "</mujoco>",
-        "",
-    ])
+    xml = "\n".join(
+        [
+            '<mujoco model="sceneagent_contract">',
+            "  <!-- Section 3.7 rigid attributes. Deformables are not in this file. -->",
+            '  <option gravity="0 0 -9.81" timestep="0.002"/>',
+            "  <worldbody>",
+            *bodies,
+            "  </worldbody>",
+            "</mujoco>",
+            "",
+        ]
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(xml, encoding="utf-8")
     return destination

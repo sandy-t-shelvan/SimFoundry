@@ -40,7 +40,7 @@ def umeyama(source, target):
     if np.linalg.det(left) * np.linalg.det(right) < 0:
         sign[2, 2] = -1.0
     rotation = left @ sign @ right
-    variance = float((centered_source ** 2).sum() / count)
+    variance = float((centered_source**2).sum() / count)
     if variance <= 0:
         raise ValueError("source points are coincident")
     scale = float(np.trace(np.diag(singular) @ sign) / variance)
@@ -88,11 +88,13 @@ def _nearest(query, target, tree):
     nearest_index = np.empty(len(query), dtype=np.int64)
     chunk = 256
     for start in range(0, len(query), chunk):
-        block = query[start:start + chunk]
+        block = query[start : start + chunk]
         squared = ((block[:, None, :] - target[None, :, :]) ** 2).sum(axis=2)
         index = squared.argmin(axis=1)
-        nearest_index[start:start + len(block)] = index
-        nearest_distance[start:start + len(block)] = np.sqrt(squared[np.arange(len(block)), index])
+        nearest_index[start : start + len(block)] = index
+        nearest_distance[start : start + len(block)] = np.sqrt(
+            squared[np.arange(len(block)), index]
+        )
     return nearest_distance, nearest_index
 
 
@@ -105,8 +107,12 @@ def initial_similarity(source, target):
     """
     source = np.asarray(source, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
-    source_rms = float(np.sqrt(((source - source.mean(axis=0)) ** 2).sum(axis=1).mean()))
-    target_rms = float(np.sqrt(((target - target.mean(axis=0)) ** 2).sum(axis=1).mean()))
+    source_rms = float(
+        np.sqrt(((source - source.mean(axis=0)) ** 2).sum(axis=1).mean())
+    )
+    target_rms = float(
+        np.sqrt(((target - target.mean(axis=0)) ** 2).sum(axis=1).mean())
+    )
     if source_rms <= 0:
         raise ValueError("source points are coincident")
     scale = target_rms / source_rms
@@ -128,6 +134,7 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
     tree = None
     try:
         from scipy.spatial import cKDTree
+
         tree = cKDTree(target)
     except Exception:
         tree = None
@@ -142,7 +149,9 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
             transformed = apply_similarity(source, scale, rotation, translation)
             distance, index = _nearest(transformed, target, tree)
             chosen = np.argsort(distance)[:keep_count]
-            scale, rotation, translation = umeyama(source[chosen], target[index[chosen]])
+            scale, rotation, translation = umeyama(
+                source[chosen], target[index[chosen]]
+            )
         transformed = apply_similarity(source, scale, rotation, translation)
         distance, index = _nearest(transformed, target, tree)
         chosen = np.argsort(distance)[:keep_count]
@@ -191,12 +200,16 @@ def measure_residuals(result, target):
     target = np.asarray(target, dtype=np.float64)
     distance = np.asarray(result["distance"], dtype=np.float64)
     inlier_distance = np.asarray(result["inlier_distance"], dtype=np.float64)
-    target_rms = float(np.sqrt(((target - target.mean(axis=0)) ** 2).sum(axis=1).mean()))
+    target_rms = float(
+        np.sqrt(((target - target.mean(axis=0)) ** 2).sum(axis=1).mean())
+    )
     if target_rms <= 0:
         raise ValueError("target points are coincident")
     median = float(np.median(distance))
     p90 = float(np.percentile(distance, 90))
-    covered = len({int(index) for index in result["target_index"][result["inlier_index"]]})
+    covered = len(
+        {int(index) for index in result["target_index"][result["inlier_index"]]}
+    )
     return {
         "normalized_median": median / target_rms,
         "p90": p90,

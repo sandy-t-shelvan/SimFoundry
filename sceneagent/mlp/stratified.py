@@ -182,7 +182,9 @@ def acquire_candidate(payload):
         if fast_faces is not None and fast_faces > MAX_RENDER_FACES:
             _delete_unprotected(source, obj_id)
             return _failure(payload, f"{fast_faces} triangles is too many to render")
-        mesh, _image, _uv = load_textured_mesh(sample["mesh_path"], sample.get("image_path"))
+        mesh, _image, _uv = load_textured_mesh(
+            sample["mesh_path"], sample.get("image_path")
+        )
         faces = len(mesh.faces)
         del mesh, _image, _uv
         if faces > MAX_RENDER_FACES:
@@ -217,7 +219,9 @@ def acquire_candidate(payload):
             "sample": sample,
         }
     except Exception as exc:
-        if obj_id not in PROTECTED_IDS and not _is_protected(ROOT / source / _safe_id(obj_id)):
+        if obj_id not in PROTECTED_IDS and not _is_protected(
+            ROOT / source / _safe_id(obj_id)
+        ):
             _delete_unprotected(source, obj_id)
         return _failure(payload, f"{type(exc).__name__}: {exc}")
 
@@ -296,11 +300,15 @@ def _finish_rendered(result, encoders):
         _mark_views(directory / "views")
         if not _views_ready(directory):
             _delete_unprotected(source, obj_id)
-            return _failure({**sample, "material": material}, "labeling views were not written")
+            return _failure(
+                {**sample, "material": material}, "labeling views were not written"
+            )
         shape = report.get("prior_input_shape")
         if not shape or int(shape[1]) != 912 or int(shape[0]) < 1:
             _delete_unprotected(source, obj_id)
-            return _failure({**sample, "material": material}, f"prior_input shape is {shape}")
+            return _failure(
+                {**sample, "material": material}, f"prior_input shape is {shape}"
+            )
         row = _manifest_row(sample, report, material, faces)
         (directory / "object_record.json").write_text(
             json.dumps(row, indent=2) + "\n",
@@ -318,9 +326,13 @@ def _finish_rendered(result, encoders):
             # endregion
         return {"ok": True, "row": row, "reused": False}
     except Exception as exc:
-        if obj_id not in PROTECTED_IDS and not _is_protected(ROOT / source / _safe_id(obj_id)):
+        if obj_id not in PROTECTED_IDS and not _is_protected(
+            ROOT / source / _safe_id(obj_id)
+        ):
             _delete_unprotected(source, obj_id)
-        return _failure({**sample, "material": material}, f"{type(exc).__name__}: {exc}")
+        return _failure(
+            {**sample, "material": material}, f"{type(exc).__name__}: {exc}"
+        )
     finally:
         del rendered
         gc.collect()
@@ -339,7 +351,9 @@ def extend_unlabeled(jobs, skip_ids):
         for candidate in _ycb_candidates():
             if candidate.id in skip_ids:
                 continue
-            newcomers.append(_job(candidate, guess_material(candidate.name), None, None))
+            newcomers.append(
+                _job(candidate, guess_material(candidate.name), None, None)
+            )
             ycb_count += 1
         print(f"ycb unlabeled candidates {ycb_count}", flush=True)
     except Exception as exc:
@@ -361,7 +375,8 @@ def extend_unlabeled(jobs, skip_ids):
         seen.add(job["id"])
         added[job["source"]] += 1
     print(
-        "added unlabeled " + " ".join(f"{source}={added[source]}" for source in SOURCES),
+        "added unlabeled "
+        + " ".join(f"{source}={added[source]}" for source in SOURCES),
         flush=True,
     )
     _print_queue(jobs)
@@ -382,18 +397,25 @@ def run_acquire(jobs, workers):
     blocked = _blocked_ids()
     labels = _load_labels()
     _LABELED_OK = {
-        obj_id for obj_id, record in labels.items() if record.get("status") == "ok" and obj_id
+        obj_id
+        for obj_id, record in labels.items()
+        if record.get("status") == "ok" and obj_id
     }
     packed = {row["id"]: row for row in _scan_packed() if row["id"] not in blocked}
     rejected, memory_retries = _drop_retryable(_load_rejected(), _LABELED_OK)
     if memory_retries:
-        print(f"retry memory and thin-object failures {len(memory_retries)}", flush=True)
+        print(
+            f"retry memory and thin-object failures {len(memory_retries)}", flush=True
+        )
         # region agent log
         _agent_log(
             "H5",
             "stratified.py:run_acquire",
             "requeued failures",
-            {"count": len(memory_retries), "ids": [item.get("id") for item in memory_retries]},
+            {
+                "count": len(memory_retries),
+                "ids": [item.get("id") for item in memory_retries],
+            },
         )
         # endregion
     kept_ids = set()
@@ -532,7 +554,9 @@ def run_acquire(jobs, workers):
                 plan.note_kept(row)
                 print(
                     f"kept {row['source']} {row['id']} {record['material']} "
-                    + " ".join(f"{source}={plan.source_kept[source]}" for source in SOURCES),
+                    + " ".join(
+                        f"{source}={plan.source_kept[source]}" for source in SOURCES
+                    ),
                     flush=True,
                 )
             _write_state(packed, labels, rejected, kept_ids)
@@ -543,7 +567,9 @@ def run_acquire(jobs, workers):
             mp_context=multiprocessing.get_context("spawn"),
             initializer=_init_worker,
         ) as pool,
-        ThreadPoolExecutor(max_workers=label_threads, thread_name_prefix="gemini") as label_pool,
+        ThreadPoolExecutor(
+            max_workers=label_threads, thread_name_prefix="gemini"
+        ) as label_pool,
     ):
         while True:
             while len(pending) < _submission_slots(pool_workers, len(pending)):
@@ -558,7 +584,9 @@ def run_acquire(jobs, workers):
             done: set[Any] = set()
             if pending:
                 timeout = 5 if label_pending else 120
-                done, _pending_left = wait(pending, return_when=FIRST_COMPLETED, timeout=timeout)
+                done, _pending_left = wait(
+                    pending, return_when=FIRST_COMPLETED, timeout=timeout
+                )
             if not done and pending:
                 harvest_labels(False)
                 if not label_pending:
@@ -579,7 +607,10 @@ def run_acquire(jobs, workers):
                     result = _finish_rendered(result, encoders)
                 if not result.get("ok"):
                     rejected.append(result)
-                    print(f"replace {job['source']} {job['id']}: {result.get('reason')}", flush=True)
+                    print(
+                        f"replace {job['source']} {job['id']}: {result.get('reason')}",
+                        flush=True,
+                    )
                     _write_state(packed, labels, rejected, kept_ids)
                     continue
                 row = result["row"]
@@ -674,7 +705,9 @@ class _Plan:
             if remaining <= 0:
                 continue
             deficit = SOURCE_TARGET - self.source_kept[source] - self.inflight[source]
-            ranked.append((0 if deficit > 0 else 1, -max(deficit, 0), -remaining, source))
+            ranked.append(
+                (0 if deficit > 0 else 1, -max(deficit, 0), -remaining, source)
+            )
         ranked.sort()
         for _rank, _deficit, _remaining, source in ranked:
             job = self._pop(source)
@@ -716,7 +749,10 @@ class _Plan:
         for material, queue in self.buckets[source].items():
             if not queue:
                 continue
-            count = self.material_kept[source][material] + self.inflight_material[source][material]
+            count = (
+                self.material_kept[source][material]
+                + self.inflight_material[source][material]
+            )
             if count < PER_MATERIAL:
                 rank = 0
             elif count < MATERIAL_CAP:
@@ -758,18 +794,24 @@ def _gso_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL, max_page
             seen.add(name)
             added += 1
             description = (model.get("description") or "").strip().splitlines()
-            label = description[0].strip() if description and description[0].strip() else name.replace("_", " ")
+            label = (
+                description[0].strip()
+                if description and description[0].strip()
+                else name.replace("_", " ")
+            )
             material = guess_material(label)
-            grouped[material].append({
-                "id": name,
-                "name": label,
-                "material": material,
-                "extent": None,
-                "faces": None,
-                "source_url": f"https://app.gazebosim.org/GoogleResearch/fuel/models/{name}",
-                "download_url": f"https://fuel.gazebosim.org/1.0/GoogleResearch/models/{name}.zip",
-                "kind": "archive",
-            })
+            grouped[material].append(
+                {
+                    "id": name,
+                    "name": label,
+                    "material": material,
+                    "extent": None,
+                    "faces": None,
+                    "source_url": f"https://app.gazebosim.org/GoogleResearch/fuel/models/{name}",
+                    "download_url": f"https://fuel.gazebosim.org/1.0/GoogleResearch/models/{name}.zip",
+                    "kind": "archive",
+                }
+            )
         print(f"gso page {page} models {added}", flush=True)
         if added == 0 and per_material is not None:
             break
@@ -802,10 +844,18 @@ def _abo_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL):
             images = int(row["images"])
             textures = int(row["textures"])
             side = max(int(row["image_width_max"]), int(row["image_height_max"]))
-            extent = max(float(row[key]) for key in ("extent_x", "extent_y", "extent_z"))
+            extent = max(
+                float(row[key]) for key in ("extent_x", "extent_y", "extent_z")
+            )
         except (KeyError, TypeError, ValueError):
             continue
-        if faces < 100 or faces > MAX_RENDER_FACES or images < 1 or textures < 1 or side > 4096:
+        if (
+            faces < 100
+            or faces > MAX_RENDER_FACES
+            or images < 1
+            or textures < 1
+            or side > 4096
+        ):
             continue
         if not math_finite_positive(extent) or extent >= 5:
             continue
@@ -822,16 +872,18 @@ def _abo_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL):
         if name != model_id:
             named += 1
         material = guess_material(name)
-        grouped[material].append({
-            "id": model_id,
-            "name": name,
-            "material": material,
-            "extent": item["extent"],
-            "faces": item["faces"],
-            "source_url": item["download_url"],
-            "download_url": item["download_url"],
-            "kind": "mesh",
-        })
+        grouped[material].append(
+            {
+                "id": model_id,
+                "name": name,
+                "material": material,
+                "extent": item["extent"],
+                "faces": item["faces"],
+                "source_url": item["download_url"],
+                "download_url": item["download_url"],
+                "kind": "mesh",
+            }
+        )
     print(f"abo named {named} of {len(wanted)}", flush=True)
     jobs: list[Any] = []
     if per_material is None:
@@ -844,7 +896,9 @@ def _abo_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL):
             jobs.extend(_job_from_item("abo", item) for item in items)
         return jobs
     if wanted and named / len(wanted) < 0.5:
-        raise SystemExit("ABO product names were missing for more than half of the models")
+        raise SystemExit(
+            "ABO product names were missing for more than half of the models"
+        )
     for material, items in grouped.items():
         preferred = _prefer_faces(items, QUEUE_PER_MATERIAL + 20)
         ordered = _queue_material("abo", preferred, occupied_names)
@@ -870,10 +924,16 @@ def _queue_material(source, items, occupied_names):
 
 
 def _prefer_faces(items, need):
-    soft = [row for row in items if row.get("faces") is None or row["faces"] <= SOFT_FACES]
+    soft = [
+        row for row in items if row.get("faces") is None or row["faces"] <= SOFT_FACES
+    ]
     if len(soft) >= need:
         return soft
-    return [row for row in items if row.get("faces") is None or row["faces"] <= MAX_RENDER_FACES]
+    return [
+        row
+        for row in items
+        if row.get("faces") is None or row["faces"] <= MAX_RENDER_FACES
+    ]
 
 
 def _abo_names(wanted):
@@ -990,7 +1050,10 @@ def _label_with_retries(row):
             error = record.get("error") or ""
             if record.get("status") == "ok":
                 break
-            if not any(code in error for code in ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503")):
+            if not any(
+                code in error
+                for code in ("HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503")
+            ):
                 break
             time.sleep(20 * (attempt + 1))
     except Exception as exc:
@@ -1024,13 +1087,17 @@ def _manifest_row(sample, report, material, faces):
         "source_url": sample.get("source_url") or "",
         "extent_m": extent,
         "view_paths": {
-            name: str((directory / "views" / f"{name}.png").resolve()) for name in VIEW_NAMES
+            name: str((directory / "views" / f"{name}.png").resolve())
+            for name in VIEW_NAMES
         },
         "directory": str(directory.resolve()),
         "check_status": "pass",
         "ply_path": report.get("ply"),
         "prior_input": report.get("prior_input"),
-        "prior_input_shape": [int(report["prior_input_shape"][0]), int(report["prior_input_shape"][1])],
+        "prior_input_shape": [
+            int(report["prior_input_shape"][0]),
+            int(report["prior_input_shape"][1]),
+        ],
         "gaussians_kept": report.get("gaussians_kept"),
         "gaussians_dropped": report.get("gaussians_dropped"),
         "pack_status": "ok",
@@ -1048,7 +1115,11 @@ def _scan_packed():
         if not base.is_dir():
             continue
         for directory in sorted(base.iterdir(), key=lambda path: path.name):
-            if not directory.is_dir() or directory.name in blocked or _is_protected(directory):
+            if (
+                not directory.is_dir()
+                or directory.name in blocked
+                or _is_protected(directory)
+            ):
                 continue
             row = _packed_row(directory, source)
             if row is not None:
@@ -1149,16 +1220,20 @@ def _agent_log(hypothesis_id, location, message, data, run_id="post-fix"):
         import json as _json
         import time as _time
 
-        line = _json.dumps({
-            "sessionId": "18246b",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(_time.time() * 1000),
-        })
-        with open(r"C:\Users\sande\cursor\SimFoundary\debug-18246b.log", "a", encoding="utf-8") as handle:
+        line = _json.dumps(
+            {
+                "sessionId": "18246b",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(_time.time() * 1000),
+            }
+        )
+        with open(
+            r"C:\Users\sande\cursor\SimFoundary\debug-18246b.log", "a", encoding="utf-8"
+        ) as handle:
             handle.write(line + "\n")
     except Exception:
         return
@@ -1209,8 +1284,16 @@ def _summary(ok, reason):
 
 
 def _print_summary(summary):
-    print("stratified counts " + " ".join(f"{key}={value}" for key, value in summary["per_source"].items()), flush=True)
-    print("materials " + " ".join(f"{key}={value}" for key, value in summary["per_material"].items()), flush=True)
+    print(
+        "stratified counts "
+        + " ".join(f"{key}={value}" for key, value in summary["per_source"].items()),
+        flush=True,
+    )
+    print(
+        "materials "
+        + " ".join(f"{key}={value}" for key, value in summary["per_material"].items()),
+        flush=True,
+    )
     for row in summary["spot_check"]:
         print(
             f"spot {row['name']} | {row['material']} | {row['body_type']} | {row['mass_kg']}",
@@ -1219,17 +1302,27 @@ def _print_summary(summary):
 
 
 def _print_queue(jobs):
-    counts = {source: {material: 0 for material in MATERIAL_CLASSES} for source in SOURCES}
+    counts = {
+        source: {material: 0 for material in MATERIAL_CLASSES} for source in SOURCES
+    }
     totals = {source: 0 for source in SOURCES}
     for job in jobs:
         totals[job["source"]] = totals.get(job["source"], 0) + 1
         material = job.get("material") or "unknown"
         if job["source"] in counts and material in counts[job["source"]]:
             counts[job["source"]][material] += 1
-    print("queue " + " ".join(f"{source}={totals.get(source, 0)}" for source in SOURCES), flush=True)
+    print(
+        "queue " + " ".join(f"{source}={totals.get(source, 0)}" for source in SOURCES),
+        flush=True,
+    )
     for source in ("gso", "abo"):
         print(
-            source + " " + " ".join(f"{material}={counts[source][material]}" for material in MATERIAL_CLASSES),
+            source
+            + " "
+            + " ".join(
+                f"{material}={counts[source][material]}"
+                for material in MATERIAL_CLASSES
+            ),
             flush=True,
         )
 
@@ -1315,7 +1408,9 @@ def _mark_views(directory):
         ),
     }
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "meta.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    (directory / "meta.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _png_file(path):

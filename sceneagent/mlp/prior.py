@@ -55,14 +55,18 @@ def mean_in_mask(outputs, mask):
     outputs = np.asarray(outputs, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     if outputs.ndim != 2 or outputs.shape[1] != OUTPUT_DIM:
-        raise PriorContractError(f"in-mask mean expects outputs of shape (N, {OUTPUT_DIM})")
+        raise PriorContractError(
+            f"in-mask mean expects outputs of shape (N, {OUTPUT_DIM})"
+        )
     if mask.shape != (outputs.shape[0],):
         raise PriorContractError("mask length must match the Gaussian count")
     if not mask.any():
         raise PriorContractError("in-mask mean needs at least one Gaussian")
     selected = outputs[mask]
     if not np.isfinite(selected).all():
-        raise PriorContractError("in-mask outputs are not finite; missing values are not filled")
+        raise PriorContractError(
+            "in-mask outputs are not finite; missing values are not filled"
+        )
     return selected.mean(axis=0)
 
 
@@ -86,8 +90,10 @@ def masked_prior_loss(
 
     pred = np.asarray(pred, dtype=np.float64)
     if pred.shape != (OUTPUT_DIM,):
-        raise PriorContractError(f"loss expects the in-mask mean of shape ({OUTPUT_DIM},)")
-    named = pred[:SLOT_UNPUBLISHED.start]
+        raise PriorContractError(
+            f"loss expects the in-mask mean of shape ({OUTPUT_DIM},)"
+        )
+    named = pred[: SLOT_UNPUBLISHED.start]
     material_index = _class_index(material, MATERIAL_CLASSES, "material")
     body_index = _class_index(body, BODY_TYPES, "body")
     collision_index = _class_index(collision, COLLISION_PRIMITIVES, "collision")
@@ -169,13 +175,17 @@ class PhysicsPrior:
         total = np.zeros(OUTPUT_DIM, dtype=np.float64)
         count = 0
         for start in range(0, int(features.shape[0]), 4096):
-            chosen = mask[start:start + 4096]
+            chosen = mask[start : start + 4096]
             if not np.any(chosen):
                 continue
-            outputs = self.forward(np.asarray(features[start:start + 4096], dtype=np.float64))
+            outputs = self.forward(
+                np.asarray(features[start : start + 4096], dtype=np.float64)
+            )
             selected = outputs[chosen]
             if not np.isfinite(selected).all():
-                raise PriorContractError("in-mask outputs are not finite; missing values are not filled")
+                raise PriorContractError(
+                    "in-mask outputs are not finite; missing values are not filled"
+                )
             total += selected.sum(axis=0)
             count += int(np.count_nonzero(chosen))
         if count < 1:
@@ -198,7 +208,10 @@ class PhysicsPrior:
     def load(cls, path):
         with np.load(Path(path), allow_pickle=False) as data:
             _refuse_old_or_narrow(data)
-            weights = {name: np.asarray(data[name], dtype=np.float64) for name in _CHECKPOINT_WEIGHTS}
+            weights = {
+                name: np.asarray(data[name], dtype=np.float64)
+                for name in _CHECKPOINT_WEIGHTS
+            }
         return cls(**weights)
 
 
@@ -247,7 +260,16 @@ def save_checkpoint(
 
 
 def _refuse_old_or_narrow(data):
-    for name in ("n_materials", "n_body", "n_collision", "n_numeric", *_CHECKPOINT_WEIGHTS, "materials", "body_types", "collision_primitives"):
+    for name in (
+        "n_materials",
+        "n_body",
+        "n_collision",
+        "n_numeric",
+        *_CHECKPOINT_WEIGHTS,
+        "materials",
+        "body_types",
+        "collision_primitives",
+    ):
         if name not in data.files:
             raise PriorContractError(f"checkpoint is missing {name}")
     n_materials = _scalar_int(data["n_materials"], "n_materials")
@@ -258,7 +280,10 @@ def _refuse_old_or_narrow(data):
         raise PriorContractError(
             f"n_materials must be {N_MATERIALS} in taxonomy order, got {n_materials}"
         )
-    if _scalar_int(data["n_body"], "n_body") != N_BODY or _string_tuple(data["body_types"]) != BODY_TYPES:
+    if (
+        _scalar_int(data["n_body"], "n_body") != N_BODY
+        or _string_tuple(data["body_types"]) != BODY_TYPES
+    ):
         raise PriorContractError(f"n_body must be {N_BODY} in taxonomy order")
     if (
         _scalar_int(data["n_collision"], "n_collision") != N_COLLISION
@@ -288,7 +313,9 @@ def _check_weight_shapes(w1, b1, w2, b2, w_out, b_out):
     }
     for name, (actual, expected) in shapes.items():
         if actual != expected:
-            raise PriorContractError(f"wrong width: {name} is {actual}, expected {expected}")
+            raise PriorContractError(
+                f"wrong width: {name} is {actual}, expected {expected}"
+            )
 
 
 def _scalar_int(value, name):
@@ -309,7 +336,9 @@ def _class_index(value, classes, role):
         return classes.index(value)
     index = int(value)
     if index < 0 or index >= len(classes):
-        raise PriorContractError(f"{role} index {index} is outside 0..{len(classes) - 1}")
+        raise PriorContractError(
+            f"{role} index {index} is outside 0..{len(classes) - 1}"
+        )
     return index
 
 

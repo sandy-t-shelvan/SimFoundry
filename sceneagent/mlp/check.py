@@ -96,7 +96,10 @@ def check_sample(sample: Mapping, manifest: Mapping) -> CheckResult:
             reasons.append(image_reason)
 
     extent = None
-    if mesh_targets and not any(r.startswith("SDF") or "mesh uri" in r or "referenced mesh" in r for r in reasons):
+    if mesh_targets and not any(
+        r.startswith("SDF") or "mesh uri" in r or "referenced mesh" in r
+        for r in reasons
+    ):
         try:
             extent, area, volume = _measure(mesh_targets)
         except Exception as exc:
@@ -193,7 +196,9 @@ def _measure(paths: list[Path]):
                     raise ValueError("mesh coordinates are not finite")
                 triangles += len(mesh.faces)
                 lo, hi = mesh.bounds
-                bounds.append((tuple(float(v) for v in lo), tuple(float(v) for v in hi)))
+                bounds.append(
+                    (tuple(float(v) for v in lo), tuple(float(v) for v in hi))
+                )
                 area += float(mesh.area)
                 # Open scans often have no enclosed volume. Surface area still
                 # counts. Asking trimesh for volume on those meshes divides by zero.
@@ -220,7 +225,11 @@ def _as_meshes(loaded):
     if isinstance(loaded, trimesh.Trimesh):
         return [loaded]
     if isinstance(loaded, trimesh.Scene):
-        return [geom for geom in loaded.geometry.values() if isinstance(geom, trimesh.Trimesh)]
+        return [
+            geom
+            for geom in loaded.geometry.values()
+            if isinstance(geom, trimesh.Trimesh)
+        ]
     return []
 
 
@@ -313,9 +322,17 @@ def _container_problem(path: Path, *, kind: str) -> str | None:
         return f"{kind} file is empty"
     stripped = head.lstrip().lower()
     if stripped.startswith((b"<!doctype", b"<html", b"<head")):
-        return f"{kind} file is HTML, not a mesh" if kind != "image" else "image file is HTML, not a photo"
+        return (
+            f"{kind} file is HTML, not a mesh"
+            if kind != "image"
+            else "image file is HTML, not a photo"
+        )
     if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-        return f"{kind} file is a zip archive, not a mesh" if kind != "image" else "image file is a zip archive, not a photo"
+        return (
+            f"{kind} file is a zip archive, not a mesh"
+            if kind != "image"
+            else "image file is a zip archive, not a photo"
+        )
     return None
 
 

@@ -147,7 +147,11 @@ def _completed_on_disk():
                 continue
             report_path = directory / "representation.json"
             prior = directory / "prior_input.npy"
-            if not report_path.is_file() or not prior.is_file() or not _views_current(directory):
+            if (
+                not report_path.is_file()
+                or not prior.is_file()
+                or not _views_current(directory)
+            ):
                 continue
             shape = tuple(int(value) for value in np.load(prior, mmap_mode="r").shape)
             if len(shape) != 2 or int(shape[1]) != 912 or int(shape[0]) < 1:
@@ -156,20 +160,28 @@ def _completed_on_disk():
             mesh = report.get("mesh_path")
             if not mesh or not Path(mesh).is_file():
                 continue
-            rows.append({
-                "id": report.get("id") or directory.name,
-                "source": source,
-                "name": report.get("name") or directory.name,
-                "mesh_path": mesh,
-                "image_path": _find_image(directory),
-                "source_url": "",
-                "extent_m": None,
-            })
+            rows.append(
+                {
+                    "id": report.get("id") or directory.name,
+                    "source": source,
+                    "name": report.get("name") or directory.name,
+                    "mesh_path": mesh,
+                    "image_path": _find_image(directory),
+                    "source_url": "",
+                    "extent_m": None,
+                }
+            )
     return rows
 
 
 def _find_image(directory):
-    for pattern in ("**/texture_map.png", "**/textures/texture.png", "**/texture.jpg", "**/texture.jpeg", "**/texture.png"):
+    for pattern in (
+        "**/texture_map.png",
+        "**/textures/texture.png",
+        "**/texture.jpg",
+        "**/texture.jpeg",
+        "**/texture.png",
+    ):
         found = sorted(directory.glob(pattern))
         if found:
             return str(found[0])
@@ -193,7 +205,9 @@ def _recheck(row):
     sample["check_status"] = "pass"
     if not sample.get("extent_m") and result.extent_m is not None:
         scale = 0.001 if sample["source"] == "ycb" and max(result.extent_m) > 5 else 1.0
-        sample["extent_m"] = [round(float(value) * scale, 6) for value in result.extent_m]
+        sample["extent_m"] = [
+            round(float(value) * scale, 6) for value in result.extent_m
+        ]
     return sample
 
 
@@ -218,7 +232,9 @@ def _accept_new(sample, encoders, reports):
     """
 
     try:
-        preview, _image, _uv = load_textured_mesh(sample["mesh_path"], sample.get("image_path"))
+        preview, _image, _uv = load_textured_mesh(
+            sample["mesh_path"], sample.get("image_path")
+        )
     except Exception as exc:
         return f"mesh load failed: {type(exc).__name__}: {exc}"
     if len(preview.faces) > MAX_PILOT_FACES:
@@ -231,7 +247,9 @@ def _accept_new(sample, encoders, reports):
         front = directory / "views" / "front.png"
         if not _png_file(front):
             try:
-                mesh, image, uv = load_textured_mesh(sample["mesh_path"], sample.get("image_path"))
+                mesh, image, uv = load_textured_mesh(
+                    sample["mesh_path"], sample.get("image_path")
+                )
                 views = render_views(mesh, image, uv)
                 save_views(views, directory / "views")
             except Exception as view_exc:
@@ -255,39 +273,54 @@ def _manifest_rows(samples, reports):
         directory = _object_dir(sample)
         _require_views(directory)
         report = reports.get(sample["id"]) or _report_on_disk(sample)
-        view_paths = {name: str((directory / "views" / f"{name}.png").resolve()) for name in VIEW_NAMES}
-        pack_error = None if report.get("pack_status", "ok") == "ok" else report.get("pack_error")
+        view_paths = {
+            name: str((directory / "views" / f"{name}.png").resolve())
+            for name in VIEW_NAMES
+        }
+        pack_error = (
+            None
+            if report.get("pack_status", "ok") == "ok"
+            else report.get("pack_error")
+        )
         if report.get("prior_input_shape") is None and pack_error is None:
             prior = directory / "prior_input.npy"
             if prior.is_file():
-                shape = tuple(int(value) for value in np.load(prior, mmap_mode="r").shape)
+                shape = tuple(
+                    int(value) for value in np.load(prior, mmap_mode="r").shape
+                )
                 report["prior_input"] = str(prior.resolve())
                 report["prior_input_shape"] = list(shape)
-                report["pack_status"] = "ok" if len(shape) == 2 and shape[1] == 912 else "failed"
+                report["pack_status"] = (
+                    "ok" if len(shape) == 2 and shape[1] == 912 else "failed"
+                )
                 if report["pack_status"] != "ok":
                     pack_error = f"prior_input shape is {shape}"
             else:
                 report["pack_status"] = "failed"
                 pack_error = report.get("pack_error") or "prior_input.npy is missing"
-        rows.append({
-            "id": sample["id"],
-            "source": sample["source"],
-            "name": sample["name"],
-            "mesh_path": str(Path(sample["mesh_path"]).resolve()),
-            "image_path": sample.get("image_path") or "",
-            "source_url": sample.get("source_url") or "",
-            "extent_m": sample.get("extent_m"),
-            "view_paths": view_paths,
-            "check_status": "pass",
-            "ply_path": report.get("ply") or report.get("ply_path"),
-            "prior_input": report.get("prior_input"),
-            "prior_input_shape": report.get("prior_input_shape"),
-            "gaussians_kept": report.get("gaussians_kept"),
-            "gaussians_dropped": report.get("gaussians_dropped"),
-            "pack_status": report.get("pack_status") or ("failed" if pack_error else "ok"),
-            "pack_error": pack_error,
-            "prior_matches_views": sample["id"] not in PROTECTED_IDS and not pack_error,
-        })
+        rows.append(
+            {
+                "id": sample["id"],
+                "source": sample["source"],
+                "name": sample["name"],
+                "mesh_path": str(Path(sample["mesh_path"]).resolve()),
+                "image_path": sample.get("image_path") or "",
+                "source_url": sample.get("source_url") or "",
+                "extent_m": sample.get("extent_m"),
+                "view_paths": view_paths,
+                "check_status": "pass",
+                "ply_path": report.get("ply") or report.get("ply_path"),
+                "prior_input": report.get("prior_input"),
+                "prior_input_shape": report.get("prior_input_shape"),
+                "gaussians_kept": report.get("gaussians_kept"),
+                "gaussians_dropped": report.get("gaussians_dropped"),
+                "pack_status": report.get("pack_status")
+                or ("failed" if pack_error else "ok"),
+                "pack_error": pack_error,
+                "prior_matches_views": sample["id"] not in PROTECTED_IDS
+                and not pack_error,
+            }
+        )
     return rows
 
 
@@ -392,7 +425,9 @@ def _mark_views(directory):
             "side is a quarter turn; top is the remaining axis"
         ),
     }
-    (directory / "meta.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    (directory / "meta.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def _require_views(directory):
