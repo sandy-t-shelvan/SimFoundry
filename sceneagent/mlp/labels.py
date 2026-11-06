@@ -15,7 +15,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from sceneagent.mlp.prior import OUTPUT_DIM, SLOT_DEFORMABILITY, SLOT_LOG_DENSITY, SLOT_LOG_MASS, SLOT_RIGIDITY, SLOT_UNPUBLISHED
+from sceneagent.mlp.prior import (
+    OUTPUT_DIM,
+    SLOT_DEFORMABILITY,
+    SLOT_LOG_DENSITY,
+    SLOT_LOG_MASS,
+    SLOT_RIGIDITY,
+    SLOT_UNPUBLISHED,
+)
 from sceneagent.taxonomy import require_body, require_collision, require_material
 
 REQUIRED_LABEL_KEYS = (

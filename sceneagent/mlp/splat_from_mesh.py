@@ -25,7 +25,11 @@ import numpy as np
 import trimesh
 from PIL import Image
 
-from sceneagent.mlp.contract import PriorContractError, geometry_from_ply, write_gaussian_ply
+from sceneagent.mlp.contract import (
+    PriorContractError,
+    geometry_from_ply,
+    write_gaussian_ply,
+)
 
 
 def _agent_log(hypothesis_id, location, message, data, run_id="post-fix"):
@@ -33,19 +37,24 @@ def _agent_log(hypothesis_id, location, message, data, run_id="post-fix"):
         import json as _json
         import time as _time
 
-        line = _json.dumps({
-            "sessionId": "18246b",
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(_time.time() * 1000),
-        })
-        with open(r"C:\Users\sande\cursor\SimFoundary\debug-18246b.log", "a", encoding="utf-8") as handle:
+        line = _json.dumps(
+            {
+                "sessionId": "18246b",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(_time.time() * 1000),
+            }
+        )
+        with open(
+            r"C:\Users\sande\cursor\SimFoundary\debug-18246b.log", "a", encoding="utf-8"
+        ) as handle:
             handle.write(line + "\n")
     except Exception:
         return
+
 
 SH_C0 = 0.28209479177387814
 OPAQUE_OPACITY = 0.99
@@ -73,20 +82,20 @@ def _triangle_mesh_path(mesh_path):
         root = ET.parse(path).getroot()
     except ET.ParseError as exc:
         raise PriorContractError(f"SDF is not readable XML: {exc}") from exc
-    uris = []
+    uris: list[str] = []
     for mesh in root.iter("mesh"):
-        for uri in mesh.iter("uri"):
-            text = uri.text.strip() if uri.text else ""
+        for element in mesh.iter("uri"):
+            text = element.text.strip() if element.text else ""
             if text and text not in uris:
                 uris.append(text)
     if not uris:
         raise PriorContractError("SDF does not reference a mesh")
     base = path.parent.resolve()
-    for uri in uris:
-        lowered = uri.lower()
+    for mesh_uri in uris:
+        lowered = mesh_uri.lower()
         if lowered.startswith(("http://", "https://")):
             raise PriorContractError("mesh uri is remote")
-        text = uri.strip().replace("\\", "/")
+        text = mesh_uri.strip().replace("\\", "/")
         if lowered.startswith("model://"):
             rest = text.split("://", 1)[1]
             parts = rest.split("/", 1)
@@ -110,16 +119,24 @@ def load_textured_mesh(mesh_path, texture_path=None):
     if isinstance(loaded, trimesh.Trimesh):
         meshes = [loaded]
     else:
-        meshes = [geom for geom in loaded.geometry.values() if isinstance(geom, trimesh.Trimesh)]
+        meshes = [
+            geom
+            for geom in loaded.geometry.values()
+            if isinstance(geom, trimesh.Trimesh)
+        ]
     if len(meshes) != 1:
-        raise PriorContractError(f"expected one mesh in {mesh_path}, found {len(meshes)}")
+        raise PriorContractError(
+            f"expected one mesh in {mesh_path}, found {len(meshes)}"
+        )
     mesh = meshes[0]
     if len(mesh.faces) < 1 or len(mesh.vertices) < 3:
         raise PriorContractError("mesh has no triangles")
     image = _texture_image(mesh, texture_path)
     uv = getattr(mesh.visual, "uv", None)
     if uv is None or len(uv) != len(mesh.vertices):
-        raise PriorContractError("mesh has no per-vertex UV; texture color is not filled")
+        raise PriorContractError(
+            "mesh has no per-vertex UV; texture color is not filled"
+        )
     return mesh, np.asarray(image, dtype=np.uint8), np.asarray(uv, dtype=np.float64)
 
 
@@ -161,7 +178,11 @@ def gaussians_from_mesh(mesh, image, uv):
     means = triangles[keep].mean(axis=1)
     quaternions = _quaternion_from_matrices(rotation)
     f_dc = (rgb[keep] - 0.5) / SH_C0
-    opacity = np.full(int(keep.sum()), math.log(OPAQUE_OPACITY / (1.0 - OPAQUE_OPACITY)), dtype=np.float64)
+    opacity = np.full(
+        int(keep.sum()),
+        math.log(OPAQUE_OPACITY / (1.0 - OPAQUE_OPACITY)),
+        dtype=np.float64,
+    )
     if not (
         np.isfinite(means).all()
         and np.isfinite(log_scales).all()
@@ -169,14 +190,16 @@ def gaussians_from_mesh(mesh, image, uv):
         and np.isfinite(f_dc).all()
         and np.isfinite(opacity).all()
     ):
-        raise PriorContractError("Gaussian columns are not finite; missing values are not filled")
+        raise PriorContractError(
+            "Gaussian columns are not finite; missing values are not filled"
+        )
     return {
         "xyz": means,
         "log_scales": log_scales,
         "opacity": opacity,
         "rotation": quaternions,
         "f_dc": f_dc,
-        "triangles_in": int(len(faces)),
+        "triangles_in": len(faces),
         "dropped_geometry": dropped,
     }
 
@@ -195,7 +218,9 @@ def choose_front_view(vertices, faces, uv=None, image=None, exclude=()):
     if len(faces) < 1 or len(vertices) < 3:
         raise PriorContractError("mesh has no triangles")
     triangles = vertices[faces]
-    cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    cross = np.cross(
+        triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]
+    )
     length = np.linalg.norm(cross, axis=1)
     valid = length > 1e-12
     normals = np.zeros_like(cross)
@@ -232,10 +257,8 @@ def choose_front_view(vertices, faces, uv=None, image=None, exclude=()):
     for _score, aspect, projected, direction in ranked[1:]:
         if abs(float(np.dot(direction, front_dir))) > 0.85:
             continue
-        if aspect > alternative:
-            alternative = aspect
-        if projected > alternative_projected:
-            alternative_projected = projected
+        alternative = max(alternative, aspect)
+        alternative_projected = max(alternative_projected, projected)
     axes = _axes_from_front(front_dir)
     axes["front_aspect"] = float(best_aspect)
     axes["alternative_aspect"] = float(alternative)
@@ -245,7 +268,9 @@ def choose_front_view(vertices, faces, uv=None, image=None, exclude=()):
     return axes
 
 
-def render_textured_view(vertices, faces, image, uv, forward, up, vertex_normals, center, radius):
+def render_textured_view(
+    vertices, faces, image, uv, forward, up, vertex_normals, center, radius
+):
     """Rasterize one camera with the publisher texture and a light.
 
     The UV atlas is sampled onto the mesh. It is not the returned image.
@@ -300,7 +325,10 @@ def render_views(mesh, image, uv):
         camera=views["front"],
     )
     if reason is not None:
-        print(f"front rejected ({reason}); rendering again with the texture bound", flush=True)
+        print(
+            f"front rejected ({reason}); rendering again with the texture bound",
+            flush=True,
+        )
         exclude = (choice["front"][0],) if reason == "edge-on" else ()
         choice = choose_front_view(vertices, faces, uv, image, exclude=exclude)
         views = _render_choice(
@@ -364,7 +392,9 @@ def front_view_unusable(
     old_edge = alternative >= 0.55 and skinny
     largest_face = False
     if choice and "front_projected" in choice and "alternative_projected" in choice:
-        largest_face = float(choice["front_projected"]) + 1e-9 >= float(choice["alternative_projected"])
+        largest_face = float(choice["front_projected"]) + 1e-9 >= float(
+            choice["alternative_projected"]
+        )
     if old_edge and largest_face:
         # region agent log
         _agent_log(
@@ -425,7 +455,7 @@ def _candidate_directions(vertices):
 
 
 def _unique_directions(directions):
-    kept = []
+    kept: list[np.ndarray] = []
     for direction in directions:
         direction = np.asarray(direction, dtype=np.float64)
         norm = float(np.linalg.norm(direction))
@@ -513,7 +543,9 @@ def _image_up(view_dir, preferred, fallback):
 
 def _vertex_normals(vertices, faces):
     triangles = vertices[faces]
-    cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+    cross = np.cross(
+        triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0]
+    )
     normals = np.zeros_like(vertices)
     for corner in range(3):
         np.add.at(normals, faces[:, corner], cross)
@@ -528,7 +560,9 @@ def _foreground_is_gray(foreground, image):
     peak = foreground.max(axis=1)
     floor = foreground.min(axis=1)
     saturation = float(np.mean((peak - floor) / np.maximum(peak, 1.0)))
-    flat = (spread < 8.0 and saturation < 0.08) or (saturation < 0.045 and spread < 16.0)
+    flat = (spread < 8.0 and saturation < 0.08) or (
+        saturation < 0.045 and spread < 16.0
+    )
     if image is None:
         return flat
     texture = np.asarray(image, dtype=np.float32)
@@ -592,19 +626,19 @@ def _surface_label_gone(vertices, faces, image, uv, camera, rgb):
         uvs = uv[face]
         samples_uv = grid @ uvs
         texture_rgb = _sample_texture(image, samples_uv) * 255.0
-        render_rgb = []
+        render_samples = []
         screen = grid @ np.stack([xs, ys], axis=1)
         for sx, sy in screen:
-            xi = int(round(float(sx)))
-            yi = int(round(float(sy)))
+            xi = round(float(sx))
+            yi = round(float(sy))
             if xi < 0 or yi < 0 or xi >= rgb.shape[1] or yi >= rgb.shape[0]:
                 continue
             if zbuf is not None and not np.isfinite(zbuf[yi, xi]):
                 continue
-            render_rgb.append(rgb[yi, xi].astype(np.float32))
-        if len(render_rgb) < 8 or not np.isfinite(texture_rgb).all():
+            render_samples.append(rgb[yi, xi].astype(np.float32))
+        if len(render_samples) < 8 or not np.isfinite(texture_rgb).all():
             continue
-        render_rgb = np.asarray(render_rgb, dtype=np.float32)
+        render_rgb = np.asarray(render_samples, dtype=np.float32)
         tex_std = float(texture_rgb.std())
         render_std = float(render_rgb.std())
         compared += 1
@@ -653,7 +687,9 @@ def filter_visible(gaussians, views, features_by_view, clip_size=CLIP_SIZE):
     dino_sum = np.zeros((count, 384), dtype=np.float64)
     clip_sum = np.zeros((count, 512), dtype=np.float64)
     hits = np.zeros(count, dtype=np.int32)
-    radius = max(float(np.linalg.norm(means.max(axis=0) - means.min(axis=0))) * 0.5, 1e-4)
+    radius = max(
+        float(np.linalg.norm(means.max(axis=0) - means.min(axis=0))) * 0.5, 1e-4
+    )
     tolerance = max(1e-4, 0.03 * radius)
     for name, camera in views.items():
         dino_grid, clip_grid = features_by_view[name]
@@ -661,7 +697,13 @@ def filter_visible(gaussians, views, features_by_view, clip_size=CLIP_SIZE):
         xi = np.rint(px).astype(np.int64)
         yi = np.rint(py).astype(np.int64)
         height, width = camera["depth"].shape
-        inside = (depth > 1e-6) & (xi >= 1) & (yi >= 1) & (xi < width - 1) & (yi < height - 1)
+        inside = (
+            (depth > 1e-6)
+            & (xi >= 1)
+            & (yi >= 1)
+            & (xi < width - 1)
+            & (yi < height - 1)
+        )
         visible = np.zeros(count, dtype=bool)
         surface = np.full(count, np.nan)
         idx = np.flatnonzero(inside)
@@ -670,16 +712,35 @@ def filter_visible(gaussians, views, features_by_view, clip_size=CLIP_SIZE):
                 ys = yi[idx] + shift_y
                 xs = xi[idx] + shift_x
                 sampled = camera["depth"][ys, xs]
-                close = np.isfinite(sampled) & (np.abs(sampled - depth[idx]) <= tolerance)
-                better = close & (np.isnan(surface[idx]) | (np.abs(sampled - depth[idx]) < np.abs(surface[idx] - depth[idx])))
+                close = np.isfinite(sampled) & (
+                    np.abs(sampled - depth[idx]) <= tolerance
+                )
+                better = close & (
+                    np.isnan(surface[idx])
+                    | (np.abs(sampled - depth[idx]) < np.abs(surface[idx] - depth[idx]))
+                )
                 surface[idx[better]] = sampled[better]
                 visible[idx[better]] = True
         if not visible.any():
             continue
-        dino_patch = _patch_index(py[visible], px[visible], dino_grid.shape[0], dino_grid.shape[1], height, width)
+        dino_patch = _patch_index(
+            py[visible],
+            px[visible],
+            dino_grid.shape[0],
+            dino_grid.shape[1],
+            height,
+            width,
+        )
         clip_py = py[visible] * (clip_size / height)
         clip_px = px[visible] * (clip_size / width)
-        clip_patch = _patch_index(clip_py, clip_px, clip_grid.shape[0], clip_grid.shape[1], clip_size, clip_size)
+        clip_patch = _patch_index(
+            clip_py,
+            clip_px,
+            clip_grid.shape[0],
+            clip_grid.shape[1],
+            clip_size,
+            clip_size,
+        )
         dino_rows = dino_grid[dino_patch[:, 0], dino_patch[:, 1]]
         clip_rows = clip_grid[clip_patch[:, 0], clip_patch[:, 1]]
         usable = np.isfinite(dino_rows).all(axis=1) & np.isfinite(clip_rows).all(axis=1)
@@ -722,7 +783,9 @@ def write_splat(path, gaussians):
     )
     geometry = geometry_from_ply(path)
     if geometry.dropped != 0 or geometry.kept != len(gaussians["xyz"]):
-        raise PriorContractError("written ply did not round-trip through the geometry contract")
+        raise PriorContractError(
+            "written ply did not round-trip through the geometry contract"
+        )
     return geometry
 
 
@@ -745,7 +808,12 @@ def _texture_image(mesh, texture_path):
     if max(orig_w, orig_h) > TEXTURE_MAX_SIDE:
         rgb.thumbnail((TEXTURE_MAX_SIDE, TEXTURE_MAX_SIDE), Image.Resampling.BOX)
     array = np.asarray(rgb)
-    if array.ndim != 3 or array.shape[2] != 3 or array.shape[0] < 1 or array.shape[1] < 1:
+    if (
+        array.ndim != 3
+        or array.shape[2] != 3
+        or array.shape[0] < 1
+        or array.shape[1] < 1
+    ):
         raise PriorContractError("texture image is not RGB")
     if array.dtype != np.uint8:
         array = np.clip(np.rint(array), 0, 255).astype(np.uint8)
@@ -757,7 +825,11 @@ def _texture_image(mesh, texture_path):
         {
             "orig_w": int(orig_w),
             "orig_h": int(orig_h),
-            "stored_shape": [int(array.shape[0]), int(array.shape[1]), int(array.shape[2])],
+            "stored_shape": [
+                int(array.shape[0]),
+                int(array.shape[1]),
+                int(array.shape[2]),
+            ],
             "dtype": str(array.dtype),
             "nbytes": int(array.nbytes),
         },
@@ -807,7 +879,12 @@ def _sample_texture(image, uv):
     c10 = image[y0, x1]
     c01 = image[y1, x0]
     c11 = image[y1, x1]
-    return c00 * (1.0 - wx) * (1.0 - wy) + c10 * wx * (1.0 - wy) + c01 * (1.0 - wx) * wy + c11 * wx * wy
+    return (
+        c00 * (1.0 - wx) * (1.0 - wy)
+        + c10 * wx * (1.0 - wy)
+        + c01 * (1.0 - wx) * wy
+        + c11 * wx * wy
+    )
 
 
 def _outer(left, right):
@@ -946,7 +1023,9 @@ def _project(points, camera):
     return px, py, depth
 
 
-def _rasterize(vertices, faces, vertex_rgb, camera, uv=None, image=None, vertex_normals=None):
+def _rasterize(
+    vertices, faces, vertex_rgb, camera, uv=None, image=None, vertex_normals=None
+):
     if image is not None:
         image = _texture_unit(image)
     px, py, depth = _project(vertices, camera)
@@ -961,10 +1040,10 @@ def _rasterize(vertices, faces, vertex_rgb, camera, uv=None, image=None, vertex_
             continue
         xs = px[face]
         ys = py[face]
-        minx = max(int(math.floor(xs.min())), 0)
-        maxx = min(int(math.ceil(xs.max())), width - 1)
-        miny = max(int(math.floor(ys.min())), 0)
-        maxy = min(int(math.ceil(ys.max())), height - 1)
+        minx = max(math.floor(xs.min()), 0)
+        maxx = min(math.ceil(xs.max()), width - 1)
+        miny = max(math.floor(ys.min()), 0)
+        maxy = min(math.ceil(ys.max()), height - 1)
         if minx > maxx or miny > maxy:
             continue
         grid_y, grid_x = np.mgrid[miny : maxy + 1, minx : maxx + 1]
@@ -993,7 +1072,9 @@ def _rasterize(vertices, faces, vertex_rgb, camera, uv=None, image=None, vertex_
             mask_idx = np.flatnonzero(mask)
         if image is not None:
             if uv is None:
-                raise PriorContractError("texture is not bound; refusing an untextured view")
+                raise PriorContractError(
+                    "texture is not bound; refusing an untextured view"
+                )
             uvs = uv[face]
             interp_uv = (
                 (b0 / z[0])[:, None] * uvs[0]

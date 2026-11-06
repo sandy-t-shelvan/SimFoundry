@@ -8,7 +8,7 @@ How changes land in this tree. The product phases are in `docs/DESIGN.md`.
 2. **Design.** New behavior goes in `sceneagent/` or in a patch under `patches/` if OmniGibson itself must change. `scripts/pipeline/A_reconstruction`, `B_augmentation`, and `C_application` keep their current contracts. Scene JSON from SimFoundry stays compatible with `AGENTS.md`: additive keys only, no rewritten USD to move an object.
 3. **Implement.** Phase-1 code is CPU-only. GPU reconstruction, Isaac, and learned policies wait for a later phase and a machine that can hold them.
 4. **Test.** `python -m pytest tests/sceneagent -q` passes locally before a change is called done. Tests call the formulas and the pipeline. A test that only asserts `True` is not a test.
-5. **Release.** `main` is the integration branch. Feature work can sit on a branch and merge by pull request. CI on push and pull request runs `.github/workflows/sceneagent-ci.yml`: `compileall` on `sceneagent`, then `pytest tests/sceneagent`. The job is `ubuntu-latest`, CPU, with `numpy`, `pytest`, `trimesh`, and `pillow`. It does not install OmniGibson, CUDA, or checkpoints.
+5. **Release.** `main` is the integration branch. Feature work can sit on a branch and merge by pull request. CI on push and pull request runs `.github/workflows/sceneagent-ci.yml` on `ubuntu-latest` with Python 3.11. Three jobs: `ruff` (`ruff check sceneagent` and `ruff format --check sceneagent`), `mypy` (`mypy sceneagent`), and `pytest unit` (`compileall` on `sceneagent`, then `pytest tests/sceneagent -m "not gpu"`). Each job installs `requirements-sceneagent-ci.txt`: `ruff==0.17.4`, `mypy==2.4.1`, `numpy==2.4.6`, `pytest==9.2.0`, `trimesh==5.2.0`, and `pillow==13.0.0`. The jobs are CPU-only. They do not install OmniGibson, CUDA, or checkpoints. A test that needs a GPU is marked `gpu` and is not collected by the pytest job. Unknown markers fail collection (`--strict-markers`).
 
 ## Out of scope
 
@@ -34,4 +34,10 @@ Harvard SceneAgent is the specification. The only code base being upgraded is th
 
 Workflow: `.github/workflows/sceneagent-ci.yml`.
 
-The job checks out the repo, compiles `sceneagent`, installs `numpy`, `pytest`, `trimesh`, and `pillow`, and runs `pytest tests/sceneagent`. That list is what `main` installs. SF-2 is changing this CI workflow on another branch. SimFoundry's broader `tests/` tree needs optional packages (torch, Open3D, faiss) and is outside this job on purpose. `pytest.ini` still points `testpaths` at `tests` for people who have those environments. CI passes an explicit path so collection stays on the phase-1 suite.
+Three jobs, each on `ubuntu-latest` and Python 3.11. Each job installs the pins in `requirements-sceneagent-ci.txt`: `ruff==0.17.4`, `mypy==2.4.1`, `numpy==2.4.6`, `pytest==9.2.0`, `trimesh==5.2.0`, and `pillow==13.0.0`.
+
+- **ruff** runs `ruff check sceneagent`, then `ruff format --check sceneagent`.
+- **mypy** runs `mypy sceneagent`. numpy, trimesh, and Pillow are installed so those boundaries are typed. Optional stacks (torch, scipy, MuJoCo, SAM) are not installed.
+- **pytest unit** compiles `sceneagent`, then runs `pytest tests/sceneagent -m "not gpu"`.
+
+`pytest.ini` registers `gpu` and sets `--strict-markers`, so an unknown marker is an error. A GPU test is marked `gpu` and left out of this job. It is not skipped inside the job. SimFoundry's broader `tests/` tree needs optional packages (torch, Open3D, faiss) and is outside these jobs on purpose. `pytest.ini` still points `testpaths` at `tests` for people who have those environments. CI passes an explicit path so collection stays on the phase-1 suite.

@@ -17,7 +17,14 @@ import statistics
 from pathlib import Path
 
 STILL_IMAGE_SUFFIXES = {
-    ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp", ".ppm",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".tif",
+    ".tiff",
+    ".bmp",
+    ".ppm",
 }
 
 ASSET_SUFFIXES = {
@@ -45,7 +52,8 @@ def read_still_image_sequence(directory):
     if not root.is_dir():
         raise FileNotFoundError(str(root))
     paths = sorted(
-        item for item in root.iterdir()
+        item
+        for item in root.iterdir()
         if item.is_file() and item.suffix.lower() in STILL_IMAGE_SUFFIXES
     )
     return {
@@ -68,7 +76,9 @@ def _is_remote(path, source_name):
     text = f"{path} {source_name or ''}".lower()
     if "://" in str(path):
         return True
-    return any(marker in text for marker in _REMOTE_MARKERS) and not Path(path).is_file()
+    return (
+        any(marker in text for marker in _REMOTE_MARKERS) and not Path(path).is_file()
+    )
 
 
 def ingest_asset(path, kind, out_dir=None, source_name=None):
@@ -115,15 +125,17 @@ def _append_ledger(out_dir, record):
         payload = json.loads(path.read_text(encoding="utf-8"))
     else:
         payload = {"section": "3.2", "entries": []}
-    payload.setdefault("entries", []).append({
-        "item": record["file_type"],
-        "decision": record["decision"],
-        "skill": record["skill"],
-        "path": record["path"],
-        "file_type": record["file_type"],
-        "downloaded": False,
-        "reason": record["reason"],
-    })
+    payload.setdefault("entries", []).append(
+        {
+            "item": record["file_type"],
+            "decision": record["decision"],
+            "skill": record["skill"],
+            "path": record["path"],
+            "file_type": record["file_type"],
+            "downloaded": False,
+            "reason": record["reason"],
+        }
+    )
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
@@ -136,7 +148,9 @@ def mean_rgb_file(path):
     try:
         from PIL import Image
     except ImportError as exc:
-        raise ValueError(f"{file_path.name} is not a binary PPM and Pillow is not installed") from exc
+        raise ValueError(
+            f"{file_path.name} is not a binary PPM and Pillow is not installed"
+        ) from exc
     image = Image.open(file_path).convert("RGB")
     pixels = list(image.getdata())
     if not pixels:
@@ -155,7 +169,7 @@ def _mean_ppm(data):
     width, height, _maxval = header
     count = width * height
     needed = count * 3
-    pixels = data[pixel_at:pixel_at + needed]
+    pixels = data[pixel_at : pixel_at + needed]
     if len(pixels) < needed:
         raise ValueError("PPM pixel data is short")
     totals = [0, 0, 0]
@@ -169,7 +183,7 @@ def _mean_ppm(data):
 def _ppm_header(data):
     if not data.startswith(b"P6"):
         raise ValueError("not a binary PPM")
-    tokens = []
+    tokens: list[int] = []
     index = 2
     while len(tokens) < 3:
         while index < len(data) and data[index] in b" \t\r\n":
@@ -204,12 +218,14 @@ def color_calibration_report(means):
     frames = []
     for path, rgb in rows:
         l1 = sum(abs(float(channel) - center) for channel, center in zip(rgb, median))
-        frames.append({
-            "path": str(path),
-            "mean_rgb": [float(channel) for channel in rgb],
-            "l1_from_median": l1,
-            "flagged": l1 > OURS_COLOR_L1_LIMIT,
-        })
+        frames.append(
+            {
+                "path": str(path),
+                "mean_rgb": [float(channel) for channel in rgb],
+                "l1_from_median": l1,
+                "flagged": l1 > OURS_COLOR_L1_LIMIT,
+            }
+        )
     return {
         "heuristic": OURS_COLOR_HEURISTIC,
         "limit_l1": OURS_COLOR_L1_LIMIT,

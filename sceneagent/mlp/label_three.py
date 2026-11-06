@@ -24,11 +24,12 @@ import urllib.request
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from sceneagent.gemini_client import API_ROOT, redact
-from sceneagent.mlp.labels import REQUIRED_LABEL_KEYS, _BESIDE_KEYS, parse_label
+from sceneagent.mlp.labels import _BESIDE_KEYS, REQUIRED_LABEL_KEYS, parse_label
 from sceneagent.taxonomy import BODY_TYPES, COLLISION_PRIMITIVES, MATERIAL_CLASSES
 
 MODEL_ID = "gemini-3.8-flash"
@@ -169,27 +170,31 @@ def load_objects(manifest_path=MANIFEST_PATH):
         if row["source"] != source:
             raise RuntimeError(f"{obj_id} source is {row['source']}")
         obj_dir = PROJECT_ROOT / "data" / "mlp" / source / obj_id
-        representation = json.loads((obj_dir / "representation.json").read_text(encoding="utf-8"))
+        representation = json.loads(
+            (obj_dir / "representation.json").read_text(encoding="utf-8")
+        )
         views = _view_paths(obj_dir)
         prior = obj_dir / "prior_input.npy"
         shape = tuple(int(value) for value in np.load(prior, mmap_mode="r").shape)
         if len(shape) != 2 or shape[1] != 912:
             raise RuntimeError(f"{obj_id} prior_input shape is {shape}")
-        objects.append({
-            "id": obj_id,
-            "source": source,
-            "name": row["name"],
-            "extent_m": row["extent_m"],
-            "directory": obj_dir,
-            "views": views,
-            "prior_input": str(prior),
-            "prior_input_shape": list(shape),
-            "representation_views": [
-                representation["view_front"],
-                representation["view_side"],
-                representation["view_top"],
-            ],
-        })
+        objects.append(
+            {
+                "id": obj_id,
+                "source": source,
+                "name": row["name"],
+                "extent_m": row["extent_m"],
+                "directory": obj_dir,
+                "views": views,
+                "prior_input": str(prior),
+                "prior_input_shape": list(shape),
+                "representation_views": [
+                    representation["view_front"],
+                    representation["view_side"],
+                    representation["view_top"],
+                ],
+            }
+        )
     return objects
 
 
@@ -293,8 +298,8 @@ class GeminiBudget:
         self._clock = clock or time.monotonic
         self._sleep = sleeper or time.sleep
         self._lock = threading.Lock()
-        self._calls = deque()
-        self._tokens = deque()
+        self._calls: deque[float] = deque()
+        self._tokens: deque[dict[str, Any]] = deque()
         self._day = None
         self._day_count = 0
         self._load()
@@ -347,7 +352,9 @@ class GeminiBudget:
 
     def _seconds_until_midnight(self):
         now = datetime.now()
-        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         return max(1.0, (tomorrow - now).total_seconds())
 
     def _load(self):
@@ -438,12 +445,14 @@ def _generate(api_key, obj, prompt):
     parts = [{"text": prompt}]
     for name, path in zip(VIEW_NAMES, obj["views"]):
         parts.append({"text": captions[name]})
-        parts.append({
-            "inline_data": {
-                "mime_type": "image/png",
-                "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": "image/png",
+                    "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                }
             }
-        })
+        )
     payload = {
         "contents": [{"parts": parts}],
         "generationConfig": generation_config(),
@@ -565,7 +574,7 @@ def _extract_json(text):
         end = stripped.rfind("}")
         if start < 0 or end <= start:
             raise
-        return json.loads(stripped[start:end + 1])
+        return json.loads(stripped[start : end + 1])
 
 
 def _clip(text, limit=800):

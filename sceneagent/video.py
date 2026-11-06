@@ -18,13 +18,13 @@ from pathlib import Path
 def _boxes(data, start, end):
     cursor = start
     while cursor + 8 <= end:
-        size = int.from_bytes(data[cursor:cursor + 4], "big")
-        kind = data[cursor + 4:cursor + 8]
+        size = int.from_bytes(data[cursor : cursor + 4], "big")
+        kind = data[cursor + 4 : cursor + 8]
         header = 8
         if size == 1:
             if cursor + 16 > end:
                 break
-            size = int.from_bytes(data[cursor + 8:cursor + 16], "big")
+            size = int.from_bytes(data[cursor + 8 : cursor + 16], "big")
             header = 16
         elif size == 0:
             size = end - cursor
@@ -59,7 +59,11 @@ def _mvhd(payload):
         return None
     if timescale <= 0:
         return None
-    return {"timescale": timescale, "duration_ticks": duration, "duration_s": duration / timescale}
+    return {
+        "timescale": timescale,
+        "duration_ticks": duration,
+        "duration_s": duration / timescale,
+    }
 
 
 def inspect_video(path):
@@ -97,8 +101,13 @@ def inspect_video(path):
 def _ffprobe(binary, file_path):
     completed = subprocess.run(
         [
-            binary, "-v", "error", "-print_format", "json",
-            "-show_entries", "format=duration:stream=width,height,codec_type,nb_frames",
+            binary,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_entries",
+            "format=duration:stream=width,height,codec_type,nb_frames",
             str(file_path),
         ],
         check=False,
@@ -121,16 +130,24 @@ def run_video(path, out_dir):
     info = inspect_video(path)
     (out / "video.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     probe = probe_environment()
-    (out / "tool_probe.json").write_text(json.dumps(probe, indent=2) + "\n", encoding="utf-8")
+    (out / "tool_probe.json").write_text(
+        json.dumps(probe, indent=2) + "\n", encoding="utf-8"
+    )
     from sceneagent.colmap_stage import run_poses
 
     colmap = next(item for item in probe if item["sub_block"] == "COLMAP camera poses")
-    poses = run_poses(path, out / "colmap") if colmap["available"] else {
-        "ran": False,
-        "ok": False,
-        "reason": "colmap or ffmpeg is not on PATH",
-    }
-    (out / "colmap_poses.json").write_text(json.dumps(poses, indent=2) + "\n", encoding="utf-8")
+    poses = (
+        run_poses(path, out / "colmap")
+        if colmap["available"]
+        else {
+            "ran": False,
+            "ok": False,
+            "reason": "colmap or ffmpeg is not on PATH",
+        }
+    )
+    (out / "colmap_poses.json").write_text(
+        json.dumps(poses, indent=2) + "\n", encoding="utf-8"
+    )
     if not poses["ran"]:
         pose_entry = {
             "item": "COLMAP camera poses",
@@ -168,7 +185,9 @@ def run_video(path, out_dir):
             pose_entry,
         ],
     }
-    (out / "ledger.json").write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    (out / "ledger.json").write_text(
+        json.dumps(ledger, indent=2) + "\n", encoding="utf-8"
+    )
     deferred = [row["sub_block"] for row in rows() if row["status"] == "missing"]
     return {
         "video": info,

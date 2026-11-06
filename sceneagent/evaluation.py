@@ -54,13 +54,15 @@ def score_trials(starts_xy, reach_radius_m, sister_accepted):
         reached = distance <= reach
         success = bool(sister_accepted and reached)
         successes += int(success)
-        rows.append({
-            "trial": index,
-            "start_xy_m": [float(x), float(y)],
-            "distance_m": distance,
-            "reached": reached,
-            "success": success,
-        })
+        rows.append(
+            {
+                "trial": index,
+                "start_xy_m": [float(x), float(y)],
+                "distance_m": distance,
+                "reached": reached,
+                "success": success,
+            }
+        )
     return successes, rows
 
 
@@ -127,14 +129,16 @@ def sister_grid(sisters, starts_xy, reach_radius_m, lighting=LIGHTING_SETUPS):
             "policy": "scripted_geometric_place",
             "sister_accepted": sister["accepted"],
         }
-        rows.append({
-            "sister": sister["name"],
-            "kind": sister["kind"],
-            "accepted_for_training": sister["accepted"],
-            "reasons": sister["reasons"],
-            "cells": {name: dict(cell) for name in lighting},
-            "trials": trials,
-        })
+        rows.append(
+            {
+                "sister": sister["name"],
+                "kind": sister["kind"],
+                "accepted_for_training": sister["accepted"],
+                "reasons": sister["reasons"],
+                "cells": {name: dict(cell) for name in lighting},
+                "trials": trials,
+            }
+        )
     return {
         "task": "place_inside",
         "policy": "scripted_geometric_place",

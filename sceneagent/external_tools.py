@@ -33,11 +33,13 @@ def probe_environment():
         elif row["tool"] in {"segment_anything", "open_clip", "groundingdino"}:
             module = _module_present(row["tool"])
         available = bool(command or module)
-        found.append({
-            "sub_block": row["sub_block"],
-            "repo": row.get("repo") or "",
-            "available": available,
-            "status": row["status"],
-            "install": row.get("install") or row.get("next") or "",
-        })
+        found.append(
+            {
+                "sub_block": row["sub_block"],
+                "repo": row.get("repo") or "",
+                "available": available,
+                "status": row["status"],
+                "install": row.get("install") or row.get("next") or "",
+            }
+        )
     return found

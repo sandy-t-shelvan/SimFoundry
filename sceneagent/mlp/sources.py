@@ -14,14 +14,16 @@ import csv
 import gzip
 import io
 import json
+import math
 import re
 import shutil
+import tarfile
 import urllib.error
 import urllib.request
 import zipfile
-import tarfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sceneagent.mlp.check import CheckResult, check_sample, rgb_image_problem
 
@@ -41,7 +43,9 @@ GSO_SET_PAGE = (
     "https://app.gazebosim.org/GoogleResearch/fuel/collections/"
     "Scanned%20Objects%20by%20Google%20Research"
 )
-ABO_MODELS_CSV = "https://amazon-berkeley-objects.s3.amazonaws.com/3dmodels/metadata/3dmodels.csv.gz"
+ABO_MODELS_CSV = (
+    "https://amazon-berkeley-objects.s3.amazonaws.com/3dmodels/metadata/3dmodels.csv.gz"
+)
 ABO_INDEX = "https://amazon-berkeley-objects.s3.amazonaws.com/index.html"
 ABO_ASSET_ROOT = "https://amazon-berkeley-objects.s3.amazonaws.com/3dmodels/original/"
 ABO_LISTING_SHARD = "https://amazon-berkeley-objects.s3.amazonaws.com/listings/metadata/listings_{shard}.json.gz"
@@ -53,11 +57,13 @@ IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 SOURCES = ("ycb", "gso", "abo")
 PILOT_COUNTS = {"ycb": 8, "gso": 6, "abo": 6}
 # The three checked meshes stay. 001_chips_can stays skipped.
-PROTECTED_IDS = frozenset({
-    "002_master_chef_can",
-    "Weisshai_Great_White_Shark",
-    "B079TXJCR5",
-})
+PROTECTED_IDS = frozenset(
+    {
+        "002_master_chef_can",
+        "Weisshai_Great_White_Shark",
+        "B079TXJCR5",
+    }
+)
 SKIP_IDS = frozenset({"001_chips_can"})
 # One Gaussian per triangle. A million-face glTF is not a pilot row.
 MAX_PILOT_FACES = 80000
@@ -73,7 +79,9 @@ class Candidate:
     kind: str  # "archive" or "mesh"
 
 
-def download_one_from_each(root: Path | None = None, max_attempts: int = MAX_ATTEMPTS) -> dict:
+def download_one_from_each(
+    root: Path | None = None, max_attempts: int = MAX_ATTEMPTS
+) -> dict:
     """Download and check one object from each source.
 
     A candidate that fails the check is deleted and replaced, up to
@@ -111,7 +119,9 @@ def _acquire_one(source: str, root: Path, max_attempts: int):
         if object_dir.exists():
             shutil.rmtree(object_dir)
         object_dir.mkdir(parents=True)
-        print(f"[{source}] attempt {attempts}/{max_attempts}: {candidate.id} {candidate.download_url}")
+        print(
+            f"[{source}] attempt {attempts}/{max_attempts}: {candidate.id} {candidate.download_url}"
+        )
         try:
             mesh_path, image_path, name = _install(candidate, object_dir)
         except Exception as exc:
@@ -155,7 +165,7 @@ def download_pilot(root=None, counts=None, accept=None, protected_samples=None):
     root = Path(root) if root is not None else DEFAULT_ROOT
     counts = dict(PILOT_COUNTS if counts is None else counts)
     root.mkdir(parents=True, exist_ok=True)
-    kept = {source: [] for source in SOURCES}
+    kept: dict[str, list[Any]] = {source: [] for source in SOURCES}
     rejected = []
     have = set()
     for sample in protected_samples or []:
@@ -178,7 +188,10 @@ def download_pilot(root=None, counts=None, accept=None, protected_samples=None):
             )
             sample, rejection = attempt_download(candidate, root)
             if rejection is not None:
-                print(f"[{source}] {candidate.id} rejected: {rejection['reason']}", flush=True)
+                print(
+                    f"[{source}] {candidate.id} rejected: {rejection['reason']}",
+                    flush=True,
+                )
                 rejected.append(rejection)
                 continue
             if accept is not None:
@@ -187,7 +200,9 @@ def download_pilot(root=None, counts=None, accept=None, protected_samples=None):
                     print(f"[{source}] {candidate.id} replaced: {error}", flush=True)
                     rejected.append(_rejection(candidate, str(error)))
                     if candidate.id not in PROTECTED_IDS:
-                        shutil.rmtree(root / source / _safe_id(candidate.id), ignore_errors=True)
+                        shutil.rmtree(
+                            root / source / _safe_id(candidate.id), ignore_errors=True
+                        )
                     continue
             kept[source].append(sample)
             have.add(sample["id"])
@@ -289,7 +304,11 @@ def _gso_candidates(per_page=20, max_pages=20):
             seen.add(name)
             added += 1
             description = (model.get("description") or "").strip().splitlines()
-            label = description[0].strip() if description and description[0].strip() else name.replace("_", " ")
+            label = (
+                description[0].strip()
+                if description and description[0].strip()
+                else name.replace("_", " ")
+            )
             yield Candidate(
                 source="gso",
                 id=name,
@@ -315,10 +334,18 @@ def _abo_candidates():
             images = int(row["images"])
             textures = int(row["textures"])
             side = max(int(row["image_width_max"]), int(row["image_height_max"]))
-            extent = tuple(float(row[key]) for key in ("extent_x", "extent_y", "extent_z"))
+            extent = tuple(
+                float(row[key]) for key in ("extent_x", "extent_y", "extent_z")
+            )
         except (KeyError, TypeError, ValueError):
             continue
-        if faces < 100 or faces > MAX_PILOT_FACES or images < 1 or textures < 1 or side > 4096:
+        if (
+            faces < 100
+            or faces > MAX_PILOT_FACES
+            or images < 1
+            or textures < 1
+            or side > 4096
+        ):
             continue
         if not all(math_finite_positive(value) and value < 5 for value in extent):
             continue
@@ -345,16 +372,18 @@ def _install(candidate: Candidate, object_dir: Path):
         _download(candidate.download_url, mesh_path)
         image_path = _extract_glb_image(mesh_path, object_dir)
         return mesh_path, image_path, candidate.name
-    archive = object_dir / ("download.zip" if candidate.download_url.endswith(".zip") else "download.tgz")
+    archive = object_dir / (
+        "download.zip" if candidate.download_url.endswith(".zip") else "download.tgz"
+    )
     _download(candidate.download_url, archive)
     _extract(archive, object_dir)
     archive.unlink(missing_ok=True)
     _flatten_single_root(object_dir)
-    mesh_path = _select_mesh(object_dir)
+    selected_mesh = _select_mesh(object_dir)
     image_path = _select_image(object_dir)
-    if mesh_path is None:
+    if selected_mesh is None:
         raise ValueError("archive did not contain an OBJ, glTF, or SDF")
-    return mesh_path, image_path, candidate.name
+    return selected_mesh, image_path, candidate.name
 
 
 def _display_name(candidate: Candidate, current: str, mesh_path: Path) -> str:
@@ -531,7 +560,9 @@ def _unsafe_archive_name(name: str) -> bool:
 
 
 def _flatten_single_root(dest: Path) -> None:
-    entries = [path for path in dest.iterdir() if not path.name.endswith((".tgz", ".zip"))]
+    entries = [
+        path for path in dest.iterdir() if not path.name.endswith((".tgz", ".zip"))
+    ]
     directories = [path for path in entries if path.is_dir()]
     files = [path for path in entries if path.is_file()]
     if files or len(directories) != 1:
@@ -611,7 +642,11 @@ def _glb_label(mesh_path: Path) -> str | None:
             return value.strip()
     for scene in document.get("scenes") or []:
         name = scene.get("name")
-        if isinstance(name, str) and _useful_label(name) and name.strip() != mesh_path.stem:
+        if (
+            isinstance(name, str)
+            and _useful_label(name)
+            and name.strip() != mesh_path.stem
+        ):
             return name.strip()
     return None
 
@@ -660,17 +695,22 @@ def _lookup_abo_name(model_id: str) -> str | None:
         print(f"[abo] looking up product name in listings_{shard}")
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=60) as response:
-                with gzip.GzipFile(fileobj=response) as uncompressed:
-                    for line in uncompressed:
-                        if needle not in line:
-                            continue
-                        record = json.loads(line)
-                        if record.get("item_id") != model_id and record.get("3dmodel_id") != model_id:
-                            continue
-                        name = _english_name(record.get("item_name"))
-                        if name:
-                            return name
+            with (
+                urllib.request.urlopen(request, timeout=60) as response,
+                gzip.GzipFile(fileobj=response) as uncompressed,
+            ):
+                for line in uncompressed:
+                    if needle not in line:
+                        continue
+                    record = json.loads(line)
+                    if (
+                        record.get("item_id") != model_id
+                        and record.get("3dmodel_id") != model_id
+                    ):
+                        continue
+                    name = _english_name(record.get("item_name"))
+                    if name:
+                        return name
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 continue
@@ -701,11 +741,14 @@ def _english_name(value) -> str | None:
 
 
 def _download(url: str, dest: Path) -> None:
-    last_error = None
+    last_error: BaseException | None = None
     for _try in range(2):
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=120) as response, dest.open("wb") as output:
+            with (
+                urllib.request.urlopen(request, timeout=120) as response,
+                dest.open("wb") as output,
+            ):
                 shutil.copyfileobj(response, output)
             if dest.stat().st_size < 1:
                 raise ValueError("empty download")
@@ -714,11 +757,15 @@ def _download(url: str, dest: Path) -> None:
             if isinstance(exc, urllib.error.HTTPError):
                 raise
             last_error = exc
+    if last_error is None:
+        raise RuntimeError("download failed")
     raise last_error
 
 
 def _url_available(url: str) -> bool:
-    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(
+        url, method="HEAD", headers={"User-Agent": USER_AGENT}
+    )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             if response.status >= 400:
@@ -735,7 +782,9 @@ def _url_available(url: str) -> bool:
 
 
 def _content_length(url: str) -> int | None:
-    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(
+        url, method="HEAD", headers={"User-Agent": USER_AGENT}
+    )
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             length = response.headers.get("Content-Length")
@@ -758,7 +807,8 @@ def _safe_id(value: str) -> str:
 
 
 def math_finite_positive(value: float) -> bool:
-    return value == value and value not in (float("inf"), float("-inf")) and value > 0
+    # NaN and infinities fail isfinite. `value == value` was the NaN half of that.
+    return math.isfinite(value) and value > 0
 
 
 def main() -> None:

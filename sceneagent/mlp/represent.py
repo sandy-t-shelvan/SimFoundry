@@ -12,10 +12,13 @@ import json
 from pathlib import Path
 
 import numpy as np
-
-from sceneagent.mlp.contract import PriorContractError, pack_prior_input, save_prior_input
 from PIL import Image
 
+from sceneagent.mlp.contract import (
+    PriorContractError,
+    pack_prior_input,
+    save_prior_input,
+)
 from sceneagent.mlp.splat_from_mesh import (
     CLIP_SIZE,
     VIEW_SIZE,
@@ -58,10 +61,14 @@ class FeatureEncoders:
         """Return ``(dino_grid, clip_grid)`` for one uint8 RGB view."""
 
         if rgb.shape != (VIEW_SIZE, VIEW_SIZE, 3):
-            raise PriorContractError(f"view must be {VIEW_SIZE} square, got {rgb.shape}")
+            raise PriorContractError(
+                f"view must be {VIEW_SIZE} square, got {rgb.shape}"
+            )
         dino = self._dino_patches(rgb)
         clip_rgb = np.asarray(
-            Image.fromarray(rgb, mode="RGB").resize((CLIP_SIZE, CLIP_SIZE), Image.Resampling.BICUBIC),
+            Image.fromarray(rgb, mode="RGB").resize(
+                (CLIP_SIZE, CLIP_SIZE), Image.Resampling.BICUBIC
+            ),
             dtype=np.uint8,
         )
         clip = self._clip_patches(clip_rgb)
@@ -72,20 +79,28 @@ class FeatureEncoders:
         if dino.shape[0] * dino.shape[1] == 0 or clip.shape[0] * clip.shape[1] == 0:
             raise PriorContractError("feature grid is empty")
         if not np.isfinite(dino).all() or not np.isfinite(clip).all():
-            raise PriorContractError("a view feature is not finite; missing values are not filled")
+            raise PriorContractError(
+                "a view feature is not finite; missing values are not filled"
+            )
         if _all_zero(dino) or _all_zero(clip):
-            raise PriorContractError("a view feature is all zeros; refusing to substitute zeros")
+            raise PriorContractError(
+                "a view feature is all zeros; refusing to substitute zeros"
+            )
         return dino, clip
 
     def _dino_patches(self, rgb):
         model, mean, std = self._load_dino()
         torch = self._torch
+        if torch is None:
+            raise PriorContractError("feature stack is not loaded")
         batch = _batch_on_model(torch, model, _normalize(torch, rgb, mean, std))
         with torch.inference_mode():
             tokens = model.forward_features(batch)
         array = tokens.detach().float().cpu().numpy()
         if array.ndim != 3 or array.shape[-1] != 384:
-            raise PriorContractError(f"DINOv2 ViT-S/14 tokens have shape {array.shape}, expected (*, *, 384)")
+            raise PriorContractError(
+                f"DINOv2 ViT-S/14 tokens have shape {array.shape}, expected (*, *, 384)"
+            )
         prefix = int(getattr(model, "num_prefix_tokens", 1))
         patches = array[:, prefix:, :]
         grid = _square_grid(patches, VIEW_SIZE, 14, "DINOv2 ViT-S/14")
@@ -94,8 +109,12 @@ class FeatureEncoders:
     def _clip_patches(self, rgb):
         model, mean, std = self._load_clip()
         torch = self._torch
+        if torch is None:
+            raise PriorContractError("feature stack is not loaded")
         if rgb.shape != (CLIP_SIZE, CLIP_SIZE, 3):
-            raise PriorContractError(f"OpenCLIP view must be {CLIP_SIZE} square, got {rgb.shape}")
+            raise PriorContractError(
+                f"OpenCLIP view must be {CLIP_SIZE} square, got {rgb.shape}"
+            )
         batch = _batch_on_model(torch, model, _normalize(torch, rgb, mean, std))
         with torch.inference_mode():
             patches = _openclip_patch_tokens(model, batch)
@@ -187,7 +206,9 @@ def finish_object(sample, rendered, encoders):
     npy_path = object_dir / "prior_input.npy"
     try:
         geometry = write_splat(ply_path, kept)
-        if np.any(np.linalg.norm(kept["dino"], axis=1) <= 0.0) or np.any(np.linalg.norm(kept["clip"], axis=1) <= 0.0):
+        if np.any(np.linalg.norm(kept["dino"], axis=1) <= 0.0) or np.any(
+            np.linalg.norm(kept["clip"], axis=1) <= 0.0
+        ):
             raise PriorContractError("refusing to pack an all-zero feature row")
         packed = pack_prior_input(kept["dino"], kept["clip"], geometry.rows)
         save_prior_input(npy_path, packed)
@@ -219,7 +240,9 @@ def finish_object(sample, rendered, encoders):
         "view_size": VIEW_SIZE,
         "clip_size": CLIP_SIZE,
     }
-    (object_dir / "representation.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (object_dir / "representation.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
     return report
 
 
@@ -275,8 +298,8 @@ def _batch_on_model(torch, model, batch):
 
 def _import_feature_stack():
     try:
-        import torch
         import timm
+        import torch
     except ImportError as exc:
         raise PriorContractError(
             "DINOv2 and OpenCLIP are not installed on this machine; "
@@ -296,8 +319,12 @@ def _normalize(torch, rgb, mean, std):
 
 def _square_grid(patches, image_size, patch_size, name):
     count = int(patches.shape[1])
-    side = int(round(count ** 0.5))
-    if side * side != count or image_size % patch_size != 0 or side != image_size // patch_size:
+    side = round(count**0.5)
+    if (
+        side * side != count
+        or image_size % patch_size != 0
+        or side != image_size // patch_size
+    ):
         raise PriorContractError(
             f"{name} patch count {count} does not match a {image_size}/{patch_size} grid"
         )
@@ -340,7 +367,9 @@ def _drop_prefix_and_project(visual, tokens):
     patch_count = (CLIP_SIZE // 16) ** 2
     prefix = 1 if projected.shape[1] == patch_count + 1 else 0
     if projected.shape[1] - prefix != patch_count:
-        raise PriorContractError(f"OpenCLIP token count {projected.shape[1]} is not a 14 by 14 grid")
+        raise PriorContractError(
+            f"OpenCLIP token count {projected.shape[1]} is not a 14 by 14 grid"
+        )
     return projected[:, prefix:, :]
 
 
@@ -348,11 +377,15 @@ def _manual_openclip_tokens(visual, batch):
     import torch
 
     if not hasattr(visual, "conv1") or not hasattr(visual, "transformer"):
-        raise PriorContractError("this OpenCLIP visual has no patch transformer to read")
+        raise PriorContractError(
+            "this OpenCLIP visual has no patch transformer to read"
+        )
     x = visual.conv1(batch)
     x = x.reshape(x.shape[0], x.shape[1], -1).permute(0, 2, 1)
     class_embed = visual.class_embedding.to(x.dtype)
-    cls = class_embed + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device)
+    cls = class_embed + torch.zeros(
+        x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device
+    )
     x = torch.cat([cls, x], dim=1)
     x = x + visual.positional_embedding.to(x.dtype)
     x = visual.ln_pre(x)
