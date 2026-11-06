@@ -64,6 +64,14 @@ def _label(**overrides: object) -> tuple[bool, str]:
     return label_trigger_allowed(**payload)  # type: ignore[arg-type]
 
 
+def test_label_refuses_a_base_that_is_not_an_integration_branch():
+    allowed, reason = _label(base_ref="feat/unprotected")
+    assert allowed is False
+    assert "integration branch" in reason
+    assert _label(base_ref="main")[0] is True
+    assert _label(base_ref="Main_duplicate")[0] is True
+
+
 def test_fork_label_does_not_run():
     allowed, reason = _label(head_repo="someone/SimFoundry")
     assert allowed is False

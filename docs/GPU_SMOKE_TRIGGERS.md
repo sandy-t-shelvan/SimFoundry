@@ -25,6 +25,10 @@ file: `sandy-t-shelvan` and `cursor[bot]`. `cursor[bot]` is the login on pull
 request reviews from the Cursor GitHub App in this repository (for example
 <https://github.com/sandy-t-shelvan/SimFoundry/pull/13#pullrequestreview-5796167292>).
 
+The pull request base ref must be `main` or `Main_duplicate`. The keyed step
+checks out that base SHA, so any other base is refused before the secret is
+used.
+
 The event is `pull_request_target`. GitHub loads that workflow from the
 default branch, `main`, not from the pull request's base branch. A label does
 not start a run until `main` contains this file. The request-file push below

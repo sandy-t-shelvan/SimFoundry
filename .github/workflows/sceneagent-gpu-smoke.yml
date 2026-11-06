@@ -23,10 +23,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: gpu-smoke-58301075
-  cancel-in-progress: false
-
+# Concurrency is on the smoke job, not the workflow. pull_request_target
+# labeled starts a run for every label. A workflow-level group would let an
+# unrelated label cancel a pending smoke even with cancel-in-progress false.
 jobs:
   request_file_guard:
     name: request-file guard
@@ -83,12 +82,16 @@ jobs:
           github.event.action == 'labeled' &&
           github.event.label.name == 'run-gpu-smoke' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
+          (github.event.pull_request.base.ref == 'Main_duplicate' || github.event.pull_request.base.ref == 'main') &&
           (github.actor == 'sandy-t-shelvan' || github.actor == 'cursor[bot]') &&
           (!false || (contains(github.event.pull_request.labels.*.name, 'qa-pass') && contains(github.event.pull_request.labels.*.name, 'pm-pass')))
         )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    concurrency:
+      group: gpu-smoke-58301075
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:

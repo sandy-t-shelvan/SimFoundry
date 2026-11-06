@@ -47,13 +47,17 @@ def label_trigger_allowed(
     repository: str,
     actor: str,
     pr_labels: list[str] | None = None,
+    base_ref: str = "Main_duplicate",
     require_qa_pm_pass: bool = REQUIRE_QA_PM_PASS,
     allowed_actors: tuple[str, ...] = LABEL_ACTORS,
 ) -> tuple[bool, str]:
     """Return whether a label event may start a run, and the log line.
 
     A fork is refused even when the label and the actor would otherwise
-    match. ``head_repo`` is ``pull_request.head.repo.full_name``.
+    match. ``head_repo`` is ``pull_request.head.repo.full_name``. The
+    orchestrator is the PR base SHA, so that base must be ``main`` or
+    ``Main_duplicate``. Any other base would run unreviewed Python with
+    the Vast secret.
     """
     labels = list(pr_labels or [])
     if event_name != "pull_request_target" or action != "labeled":
@@ -62,6 +66,8 @@ def label_trigger_allowed(
         return False, "gpu-smoke label refused: label is not run-gpu-smoke"
     if not head_repo or head_repo != repository:
         return False, "gpu-smoke label refused: fork PRs are not run"
+    if base_ref not in {"main", "Main_duplicate"}:
+        return False, "gpu-smoke label refused: base is not an integration branch"
     if actor not in allowed_actors:
         return False, "gpu-smoke label refused: actor is not allowlisted"
     if require_qa_pm_pass and not {QA_PASS_LABEL, PM_PASS_LABEL} <= set(labels):
@@ -402,6 +408,11 @@ def workflow_safety_findings(text: str) -> list[str]:
         findings.append("concurrency group gpu-smoke-58301075 is missing")
     if "cancel-in-progress: false" not in text:
         findings.append("cancel-in-progress must be false")
+    before_jobs = text.split("jobs:", 1)[0]
+    if "group: gpu-smoke-58301075" in before_jobs:
+        findings.append(
+            "concurrency must be on the smoke job so an unrelated label does not take the group"
+        )
     if text.count("secrets.VAST_API_KEY") != 1:
         findings.append("VAST_API_KEY must appear in exactly one step")
     if "--instance-id 58301075" not in text:
@@ -433,6 +444,8 @@ def workflow_safety_findings(text: str) -> list[str]:
         "github.event_name == 'pull_request_target'",
         "github.event.label.name == 'run-gpu-smoke'",
         "github.event.pull_request.head.repo.full_name == github.repository",
+        "github.event.pull_request.base.ref == 'Main_duplicate'",
+        "github.event.pull_request.base.ref == 'main'",
         "needs.request_file_guard.outputs.proceed == 'true'",
     ):
         if needle not in smoke_if:
@@ -441,6 +454,10 @@ def workflow_safety_findings(text: str) -> list[str]:
         findings.append("the smoke job must not hold pull-requests: write")
     if "contents: read" not in smoke:
         findings.append("the smoke job needs contents: read")
+    if "group: gpu-smoke-58301075" not in smoke:
+        findings.append("the smoke job must use concurrency group gpu-smoke-58301075")
+    if "cancel-in-progress: false" not in smoke:
+        findings.append("the smoke job must set cancel-in-progress false")
     guard_run = "\n".join(_step_run(step) for step in _steps(guard))
     detach_at = guard_run.find('git checkout --detach "$BEFORE"')
     checker_at = guard_run.find(
