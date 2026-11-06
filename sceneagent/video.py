@@ -206,6 +206,8 @@ def run_video(path, out_dir, fps=1, max_frames=16, color_calibrate=True):
             "failed_step": poses.get("failed_step"),
             "frames": poses.get("frames"),
         }
+        if poses.get("reason"):
+            pose_entry["reason"] = poses["reason"]
     (out / "video.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     ledger = {
         "scene_name": Path(path).stem,
