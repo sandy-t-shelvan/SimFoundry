@@ -290,25 +290,29 @@ def color_calibration_directory(directory):
 
 
 def _bounded_channel_gain(mean, center):
-    """One channel's diagonal gain onto the named target, inside the bound.
+    """Return ``(raw, applied)`` for one channel.
 
-    This is our scale, not the paper's unpublished correction. A non-positive
-    mean stays at gain 1, because no scale maps 0 onto a positive target.
-    Non-finite inputs are rejected. A finite gain outside
-    ``[OURS_GAIN_MIN, OURS_GAIN_MAX]`` is clamped to that closed interval.
+    ``raw`` is the computed gain before the closed interval
+    ``[OURS_GAIN_MIN, OURS_GAIN_MAX]``. ``applied`` is what scales the
+    pixels. They differ only when that interval clamps ``raw``. A
+    non-positive mean uses 1 for both, because no scale maps 0 onto a
+    positive target, and that substitution is not a clamp. Non-finite
+    inputs are rejected. This scale is ours, not the paper's unpublished
+    correction.
     """
     if not math.isfinite(mean) or not math.isfinite(center):
         raise ValueError("color calibration means must be finite")
     if mean <= 0.0:
-        return 1.0
+        return 1.0, 1.0
     raw = center / mean
     if not math.isfinite(raw):
         raise ValueError("color calibration gain is not finite")
+    applied = raw
     if raw < OURS_GAIN_MIN:
-        return OURS_GAIN_MIN
-    if raw > OURS_GAIN_MAX:
-        return OURS_GAIN_MAX
-    return raw
+        applied = OURS_GAIN_MIN
+    elif raw > OURS_GAIN_MAX:
+        applied = OURS_GAIN_MAX
+    return raw, applied
 
 
 def per_image_color_gains(means):
@@ -318,9 +322,13 @@ def per_image_color_gains(means):
     ``color_calibration_report`` takes. Each image gets its own triple.
     Reusing one triple for every image would be a global correction, which
     this function does not do. The target name and the three median values
-    are part of the result so a manifest can record them. The section 3.2
-    color gap stays partial: the paper names per-image calibration and does
-    not publish this diagonal scale.
+    are part of the result so a manifest can record them. ``gains_by_image``
+    is the applied triple. ``raw_gain_rgb`` is the pre-clamp triple.
+    ``clamped`` is true when any channel was clamped, and
+    ``clamped_channels`` is that fact per channel. ``clamped_images`` lists
+    the names where ``clamped`` is true. The section 3.2 color gap stays
+    partial: the paper names per-image calibration and does not publish
+    this diagonal scale.
     """
     rows = []
     for path, rgb in means:
@@ -338,16 +346,31 @@ def per_image_color_gains(means):
     )
     gains = []
     gains_by_image = {}
+    raw_gain_rgb = {}
+    clamped = {}
+    clamped_channels = {}
+    clamped_images = []
     for path, rgb in rows:
-        image_gain = [
+        pairs = [
             _bounded_channel_gain(mean, center)
             for mean, center in zip(rgb, median, strict=True)
+        ]
+        raw_gain = [raw for raw, _applied in pairs]
+        applied_gain = [applied for _raw, applied in pairs]
+        channel_clamped = [
+            applied != raw for raw, applied in zip(raw_gain, applied_gain, strict=True)
         ]
         name = Path(str(path)).name
         if name in gains_by_image:
             raise ValueError(f"color calibration image name {name} is not unique")
-        gains_by_image[name] = image_gain
-        gains.append({"path": str(path), "gain_rgb": image_gain})
+        gains_by_image[name] = applied_gain
+        raw_gain_rgb[name] = raw_gain
+        image_clamped = any(channel_clamped)
+        clamped[name] = image_clamped
+        clamped_channels[name] = channel_clamped
+        if image_clamped:
+            clamped_images.append(name)
+        gains.append({"path": str(path), "gain_rgb": applied_gain})
     target_rgb = [float(channel) for channel in median]
     return {
         "paper_method": False,
@@ -359,6 +382,10 @@ def per_image_color_gains(means):
         "median_rgb": target_rgb,
         "gains": gains,
         "gains_by_image": gains_by_image,
+        "raw_gain_rgb": raw_gain_rgb,
+        "clamped": clamped,
+        "clamped_channels": clamped_channels,
+        "clamped_images": clamped_images,
     }
 
 
@@ -487,7 +514,10 @@ def apply_per_image_color_calibration(directory, out_dir=None):
     and the section 3.2 color gap stays partial. The gain triple is computed
     per image; it is not one global correction reused for the set. The
     returned manifest names the target, records its three values, and maps
-    each image name to ``[gR, gG, gB]``. ``in_memory_mean_rgb`` is the mean
+    each image name to ``[gR, gG, gB]`` (the applied gains). ``raw_gain_rgb``
+    is the pre-clamp triple for that same name. ``clamped`` is true when any
+    channel was clamped, ``clamped_channels`` is the per-channel list, and
+    ``clamped_images`` names those images. ``in_memory_mean_rgb`` is the mean
     of the corrected array before any JPEG encode.
     """
     sequence = read_still_image_sequence(directory)
@@ -537,6 +567,10 @@ def apply_per_image_color_calibration(directory, out_dir=None):
         "target_rgb": gain_report["target_rgb"],
         "median_rgb": gain_report["median_rgb"],
         "gains_by_image": gain_report["gains_by_image"],
+        "raw_gain_rgb": gain_report["raw_gain_rgb"],
+        "clamped": gain_report["clamped"],
+        "clamped_channels": gain_report["clamped_channels"],
+        "clamped_images": gain_report["clamped_images"],
         "frames": frames,
         "colmap_ran": False,
         "input_report": color_calibration_report(means),

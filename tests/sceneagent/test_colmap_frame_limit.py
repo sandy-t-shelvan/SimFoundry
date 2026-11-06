@@ -403,6 +403,14 @@ def test_nonfinite_means_are_rejected_and_extreme_gains_are_clamped():
         [("a", (1.0, 10.0, 10.0)), ("b", (1.0, 10.0, 10.0)), ("c", (200.0, 10.0, 10.0))]
     )
     assert low["gains_by_image"]["c"][0] == OURS_GAIN_MIN
+    # Median red is 1, so c's raw red gain is 1/200 = 0.005, below 0.05.
+    assert low["raw_gain_rgb"]["c"][0] == pytest.approx(1.0 / 200.0)
+    assert low["clamped"]["c"] is True
+    assert low["clamped_channels"]["c"][0] is True
+    assert "c" in low["clamped_images"]
+    assert low["clamped"]["a"] is False
+    assert low["raw_gain_rgb"]["a"] == low["gains_by_image"]["a"]
+    assert "a" not in low["clamped_images"]
     assert OURS_GAIN_MIN == 0.05
     assert OURS_GAIN_MAX == 8.0
 
@@ -572,8 +580,16 @@ def test_gain_above_eight_is_clamped_in_color_calibration_json(tmp_path, monkeyp
     run_poses(tmp_path / "clip.mp4", work, max_frames=3)
     manifest = json.loads((work / "color_calibration.json").read_text(encoding="utf-8"))
     assert manifest["gains_by_image"]["0001.jpg"][0] == 8.0
+    assert manifest["raw_gain_rgb"]["0001.jpg"][0] == 10.0
+    assert manifest["clamped"]["0001.jpg"] is True
+    assert manifest["clamped_channels"]["0001.jpg"] == [True, False, False]
+    assert manifest["clamped_images"] == ["0001.jpg"]
     assert manifest["gains_by_image"]["0002.jpg"][0] == pytest.approx(1.0)
     assert manifest["gains_by_image"]["0003.jpg"][0] == pytest.approx(1.0)
+    for name in ("0002.jpg", "0003.jpg"):
+        assert manifest["clamped"][name] is False
+        assert manifest["raw_gain_rgb"][name] == manifest["gains_by_image"][name]
+        assert name not in manifest["clamped_images"]
 
 
 def test_gain_of_eight_is_kept_and_anything_above_is_clamped():
@@ -586,6 +602,11 @@ def test_gain_of_eight_is_kept_and_anything_above_is_clamped():
     )
     # 40/5 is exactly 8, so the bound does not move it.
     assert exact["gains_by_image"]["dim"][0] == 8.0
+    assert exact["raw_gain_rgb"]["dim"][0] == 8.0
+    assert exact["clamped"]["dim"] is False
+    assert exact["clamped_channels"]["dim"] == [False, False, False]
+    assert "dim" not in exact["clamped_images"]
+    assert exact["raw_gain_rgb"]["dim"] == exact["gains_by_image"]["dim"]
     assert exact["gains_by_image"]["dim"][0] == pytest.approx(40.0 / 5.0)
     above = per_image_color_gains(
         [
@@ -597,6 +618,13 @@ def test_gain_of_eight_is_kept_and_anything_above_is_clamped():
     raw = 40.0 / (40.0 / 8.001)
     assert raw > 8.0
     assert above["gains_by_image"]["dim"][0] == 8.0
+    assert above["raw_gain_rgb"]["dim"][0] == pytest.approx(raw)
+    assert above["clamped"]["dim"] is True
+    assert above["clamped_channels"]["dim"][0] is True
+    assert "dim" in above["clamped_images"]
+    assert above["clamped"]["mid"] is False
+    assert "mid" not in above["clamped_images"]
+    assert above["raw_gain_rgb"]["mid"] == above["gains_by_image"]["mid"]
     assert above["gains_by_image"]["dim"][0] != pytest.approx(raw)
 
 
@@ -615,9 +643,11 @@ def test_bounded_channel_gain_rejects_nonfinite_and_keeps_unit_gain_at_zero():
     ):
         with pytest.raises(ValueError, match="finite"):
             _bounded_channel_gain(mean, center)
-    assert _bounded_channel_gain(0.0, 40.0) == 1.0
-    assert _bounded_channel_gain(0.0, 0.0) == 1.0
-    assert _bounded_channel_gain(-1.0, 40.0) == 1.0
+    # A non-positive mean is raw 1 and applied 1. That is not a clamp.
+    for mean, center in ((0.0, 40.0), (0.0, 0.0), (-1.0, 40.0)):
+        raw_gain, applied = _bounded_channel_gain(mean, center)
+        assert raw_gain == 1.0
+        assert applied == 1.0
 
 
 def test_jpeg_round_trip_mean_error_is_the_recorded_fixture_bound():
