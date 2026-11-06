@@ -2,6 +2,51 @@
 
 Design of the `sceneagent` package as it exists on `sandy-t-shelvan/SimFoundry` at commit `caf16b7` (`Train the physics prior in chunks so large meshes fit in memory.`). Sections 1–8 describe that package. Section 9 is the plan for reproducing Harvard SceneAgent section 4 on top of it, driven by the canvas "SceneAgent paper versus the SimFoundry upgrade". Section 10 is the build sequence for that plan. The living status of each paper block is `docs/GAP_MATRIX.md`, generated from `sceneagent/catalog.py`. The block-by-block build notes are `docs/EXPANSION_PLAN.md`. Product phases are `docs/DESIGN.md`. Landing rules are `docs/SDLC.md`.
 
+
+## Status as of Nov 6, 2026
+
+Living Cut 1 / Cut 2 progress against Jira project KAN and merges into `Main_duplicate` (tip `2a9a05c` as of ~1:05 AM America/New_York). Catalog row status words in sections 9–10 stay the canvas / `catalog.py` words; this section only records ticket and merge state. A paper gap is not closed here unless its ticket is Accepted in Jira.
+
+Branch note: `docs/expansion-and-harvard-results.md` and `docs/canvases/sceneagent-paper-gaps.canvas.tsx` are byte-identical on `main` and `Main_duplicate` at this check. Cut 2 epic KAN-15 is ON HOLD (comment 10166) until Cut 1 is complete.
+
+### Cut 1 ticket board
+
+| Ticket | Jira | True status | Evidence |
+|---|---|---|---|
+| SF-1 Fix red CI | KAN-1 | Accepted | Comment 10009; PR #5 merge `8f6756c` |
+| SF-2 CI stages | KAN-2 | Accepted | Comment 10082; PRs #8/`6b70479`, #9/`4fa621d` |
+| SF-3 Broader CPU tests | KAN-3 | Accepted | Comments 10114 (PM accepted) + 10121; PR #11 merge `1e41c38` |
+| SF-4 Vast GPU smoke | KAN-4 | Merged (part 2 CPU into Main_duplicate, GPU evidence pending) | PR #13 merged `2a9a05c` (head `6725740`); QA 10171 + PM 10172; GPU dc1–dc4 still PENDING (10175, 10177; workflow_dispatch 403) |
+| SF-5 Full-rate COLMAP + color calibration | KAN-5 | In progress | Draft PR #10; comments 10086 / 10136; dc3–dc4 wait on SF-4 GPU |
+| SF-6 Hungarian past 8 | KAN-6 | Accepted | Comment 10006; PR #5 `8f6756c` |
+| SF-7 Kitchen aggregator | KAN-7 | Accepted | Comment 10007; PR #5 `8f6756c` |
+| SF-8 ICP silhouette and pose | KAN-8 | In review | PR #14 open at `6f01879` (prior PASS on `b62490c` voided by head move; 10181); GPU dc1–dc3 pending |
+| SF-9 Background plane | KAN-9 | In review (sent back) | PR #16 FAIL QA 10186 + PM SENT BACK 10191 at `4913e4a` |
+| SF-10 CubePart + Articulate Anything | KAN-10 | In review | PR #15 open at `e2a2245`; no QA/PM PASS yet (10183); GPU part 2 pending |
+| SF-11 Fix docs drift | KAN-11 | Accepted | Comments 10084 (PM accepted) + 10085; PR #7 merge `136d759` |
+| SF-12 Photo check 16-bit LA PNG | KAN-12 | Accepted | Comment 10055; PR #6 merge `51a8d54` |
+| SF-14 Bot-runnable GPU smoke triggers | KAN-14 | In review | PR #17 at `dbf38aa`; rulings 10188 (dc2/dc5 → SF-14b after main merge) |
+| Cut 1 epic | KAN-13 | Not started (epic open) | To Do; standing full-review rule 10185 |
+
+### Cut 1 → paper-gap map (ticket progress only)
+
+| Canvas / plan row | Catalog status (unchanged) | Cut 1 ticket progress |
+|---|---|---|
+| Alignment acceptance gate | partial | SF-8 In review (CPU part 1); not Accepted |
+| COLMAP camera poses | partial | SF-5 In progress (CPU dc1–dc2 in draft PR #10); not Accepted |
+| Trimmed similarity ICP | partial | SF-8 In review; not Accepted |
+| LaMa background infill | missing | SF-9 In review (sent back); not Accepted; code not on Main_duplicate |
+| CubePart | missing | SF-10 In review; not Accepted |
+| Articulate Anything | partial | SF-10 In review; not Accepted |
+| F1 at 1 cm and Chamfer | partial | SF-6 Accepted unblocks matcher past 8; score file still absent → row stays partial |
+| (kitchen aggregator helper) | n/a (helper for Sec 4 kitchen file) | SF-7 Accepted; MessyKitchens inputs / score file still absent |
+| GraspClutter6D hard/000091 | missing | No Cut 1 ticket; still missing |
+| GroundingDINO / LangSplat / MLP / 4D / fracture / Meshy / Unreal / pi0.5 | missing or partial | Cut 2 (KAN-15) ON HOLD |
+
+### Stale sentences in this file (do not treat as current code)
+
+Section 2 and section 9.4 still say the Hungarian matcher raises / stops above 8 objects. That is stale relative to Accepted SF-6 (`_hungarian` on `Main_duplicate` / `main` handles past 8). Section 10.1 still lists `Match["partial: metrics._hungarian past 8 objects"]` as open work; the Cut 1 ticket is Accepted. The Sec 4 score files and GraspClutter / MessyKitchens inputs remain the open paper work.
+
 ## 1. Purpose and scope
 
 One system is being extended: the SimFoundry fork.
@@ -52,7 +97,7 @@ Non-goals, from the same code:
 - The USD writer carries rigid-body mass, density, friction, and restitution. It does not carry deformables, fracture, or fluids.
 - `skills.LATER_SKILLS` stay `not_implemented` on the phase-1 plan: video-to-4D, background orientation, native articulation, fracture, 4D timeseries, policy autoresearch, and VLA adaptation.
 - `evaluation.sister_grid` sets `not_a_learned_policy` and `lighting_simulated` false. Repeating one geometric result across the nine lighting names is not a lighting study.
-- `metrics.f1_at_threshold` and `symmetric_chamfer` implement the published formulas for later scoring. The phase-1 Hungarian matcher raises above 8 objects on a side. No GraspClutter or kitchen scene file is an input of this package.
+- `metrics.f1_at_threshold` and `symmetric_chamfer` implement the published formulas for later scoring. `metrics._hungarian` matches any object count. At most `_ENUMERATION_MAX` (8) rows and columns, with a column for every row, still returns `_enumerate_assignment`, including the phase-1 tie break (`test_at_most_eight_matches_phase1_enumeration`). Every other shape uses `_assign_every_row` (in-tree Kuhn-Munkres, no SciPy): the shorter side is fully matched, extra reference rows are omitted, and 9 and 20 objects match (`test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`, `test_more_ground_truth_than_predictions`). A non-finite cost on that path still raises `ValueError` (`test_non_finite_cost_past_the_enumerator_raises`). No GraspClutter or kitchen scene file is an input of this package.
 - Figure 5 harnesses (`Codex`, `Claude Code`, `Antigravity`, `Muse`, `Stirrup`, `Grok CLI`) are listed by `agent_loop.harness_status` as `still_open` and `called: []`.
 
 ## 3. Architecture
@@ -646,7 +691,7 @@ Done rows stay as the artifact named here. Partial and missing rows name the cod
 
 | Row | Status | Now | Counts as done | Do not |
 |---|---|---|---|---|
-| F1 at 1 cm and Chamfer | partial | `metrics.symmetric_chamfer` and `f1_at_threshold` with `TAU_1CM_M` 0.01. Tested on synthetic clouds. The matcher stops at 8 objects. | A score file that names MessyKitchens or the bin, the point counts, the alignment rule, and the match. | Score Fruits and file it here. Treat SimFoundry's own Pearson or cousin gains as this F1. |
+| F1 at 1 cm and Chamfer | partial | `metrics.symmetric_chamfer` and `f1_at_threshold` with `TAU_1CM_M` 0.01. Tested on synthetic clouds. `metrics._hungarian` matches any object count: `_assign_every_row` covers 9 and 20 (`test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`) and the shorter side (`test_more_ground_truth_than_predictions`); at most `_ENUMERATION_MAX` (8) with a column per row stays `_enumerate_assignment` (`test_at_most_eight_matches_phase1_enumeration`). A non-finite cost on the Kuhn-Munkres path still raises (`test_non_finite_cost_past_the_enumerator_raises`). | A score file that names MessyKitchens or the bin, the point counts, the alignment rule, and the match. | Score Fruits and file it here. Treat SimFoundry's own Pearson or cousin gains as this F1. |
 | GraspClutter6D hard/000091 | missing | This scene has not been started. Figure 6 labels stage S3 SplatGraph clustering. Section 3.3 grouping is `association.masks_same_object`, and that function has not been run on the bin. Stages S0 and S7 have no bin run. S1, S2, S4, S5, and S6 are partial on Fruits only. | The bin protocol above, after meshes of that scene exist. 60.75% and 6.9% / 4.29 cm stay the paper's comparison. | Enter `0001.glb` in that table. |
 | Official release | missing | This tree is the SimFoundry fork plus `sceneagent`. The paper's code, processed scenes, and example objects are a separate release. Section 4.3 has no reproduction phase. | That release, if it ships, as an upstream. It is not a substitute for the score files above. | Point the reproduction at another application checkout. |
 
@@ -695,7 +740,7 @@ flowchart TD
   Colmap["partial: colmap_stage.run_poses still caps at 16"]
   Assoc["partial: association.gaussian_belongs on the benchmark views"]
   Align["partial: similarity_icp then alignment.accept_alignment"]
-  Match["partial: metrics._hungarian past 8 objects"]
+  Match["done keep: metrics._hungarian any count; past _ENUMERATION_MAX 8 uses _assign_every_row; non-finite cost still raises; test_twenty_objects_use_the_planted_matching test_non_finite_cost_past_the_enumerator_raises"]
   BinFile["missing: bin score file"]
   KitFile["partial: kitchen score file"]
   Planes["missing: infill.complete_background fitted plane"]
