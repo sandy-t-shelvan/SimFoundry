@@ -120,13 +120,32 @@ def _ffprobe(binary, file_path):
     return {"available": True, "ok": True, "payload": payload}
 
 
+VIDEO_SOURCE = "simfoundry_example_video"
+
+
+def video_plan_steps():
+    """Steps this video run plans. Not read from a ledger."""
+    return [
+        {"skill": "SCENEAGENT-INGEST-DATA", "status": "implemented_phase1"},
+        {
+            "skill": "COLMAP camera poses",
+            "status": "implemented_phase1",
+            "reason": (
+                "Sample frames with ffmpeg and run COLMAP when both binaries are on PATH."
+            ),
+        },
+    ]
+
+
 def run_video(path, out_dir):
     """Write the video manifest. Run COLMAP when the binary and ffmpeg are on PATH."""
     from sceneagent.catalog import rows
     from sceneagent.external_tools import probe_environment
+    from sceneagent.pipeline import write_plan
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    write_plan(out, Path(path).stem, VIDEO_SOURCE, video_plan_steps())
     info = inspect_video(path)
     (out / "video.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     probe = probe_environment()
