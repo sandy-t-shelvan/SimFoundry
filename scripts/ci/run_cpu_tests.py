@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run the lightweight CPU tests outside tests/sceneagent.
 
-The skip list is ci/cpu-test-skips.txt. Entries are deselected. This runner
-does not apply the ``gpu`` marker. ``-m "not gpu"`` still drops a test that
-already carries that marker. A skip result fails the process: a skip is not
-a pass.
+The skip list is ci/cpu-test-skips.txt. Network entries are marked
+``network`` and dropped by ``-m "not gpu and not network"``. They are not
+marked ``gpu``. Other entries are deselected or omitted. A skip result
+fails the process: a skip is not a pass.
 """
 
 from __future__ import annotations
@@ -27,14 +27,14 @@ def _matches(nodeid: str, spec: str) -> bool:
     return nodeid == spec or nodeid.startswith(spec + "[") or nodeid.startswith(spec + "::")
 
 
-_KINDS = {"network", "torch", "open3d", "skip"}
+_KINDS = {"network", "torch", "skip"}
 
 
 def load_skip_list(path: Path) -> list[tuple[str, str, str]]:
     """Return (kind, node, reason) rows.
 
-    Kinds are ``network``, ``torch``, ``open3d``, and ``skip``. None of them
-    is the ``gpu`` marker.
+    Kinds are ``network``, ``torch``, and ``skip``. ``network`` is a marker.
+    It is not ``gpu``.
     """
     entries: list[tuple[str, str, str]] = []
     for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -58,21 +58,32 @@ def load_skip_list(path: Path) -> list[tuple[str, str, str]]:
 class _CpuGate:
     """Apply the skip list during collection and fail if anything skips."""
 
-    def __init__(self, entries: list[tuple[str, str, str]]) -> None:
+    def __init__(self, entries: list[tuple[str, str, str]], omitted_files: int) -> None:
         self._node_entries = [entry for entry in entries if "::" in entry[1]]
         self._matched = {entry[1]: 0 for entry in self._node_entries}
+        self._omitted_files = omitted_files
+        self._deselected = 0
 
+    def pytest_deselected(self, items: list[pytest.Item]) -> None:
+        self._deselected += len(items)
+
+    @pytest.hookimpl(tryfirst=True)
     def pytest_collection_modifyitems(self, config: pytest.Config, items: list[pytest.Item]) -> None:
         kept: list[pytest.Item] = []
         dropped: list[pytest.Item] = []
         for item in items:
             hit = False
-            for _kind, spec, _reason in self._node_entries:
+            for kind, spec, _reason in self._node_entries:
                 if not _matches(item.nodeid, spec):
                     continue
                 self._matched[spec] += 1
                 hit = True
-                dropped.append(item)
+                if kind == "network":
+                    # `-m "not gpu and not network"` drops these. Not `gpu`.
+                    item.add_marker(pytest.mark.network)
+                    kept.append(item)
+                else:
+                    dropped.append(item)
                 break
             if not hit:
                 kept.append(item)
@@ -84,6 +95,12 @@ class _CpuGate:
         if dropped:
             config.hook.pytest_deselected(items=dropped)
             items[:] = kept
+
+    def pytest_collection_finish(self, session: pytest.Session) -> None:
+        del session
+        print(f"Deselected tests: {self._deselected}", flush=True)
+        print(f"Omitted files: {self._omitted_files}", flush=True)
+        print("See ci/cpu-test-skips.txt", flush=True)
 
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
         reporter = session.config.pluginmanager.get_plugin("terminalreporter")
@@ -124,7 +141,14 @@ def main() -> int:
         print(f"  {path}")
     print(f"{len(files)} files")
     print()
-    for kind in ("network", "torch", "open3d", "skip"):
+    kind_counts: dict[str, int] = {}
+    for kind, _node, _reason in entries:
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+    detail = ", ".join(f"{kind}={kind_counts[kind]}" for kind in sorted(kind_counts))
+    print(f"Excluded entries by kind: {detail}")
+    print("See ci/cpu-test-skips.txt")
+    print()
+    for kind in ("network", "torch", "skip"):
         rows = [entry for entry in entries if entry[0] == kind]
         if not rows:
             continue
@@ -141,12 +165,12 @@ def main() -> int:
         "-v",
         "--tb=short",
         "-m",
-        "not gpu",
+        "not gpu and not network",
         "--strict-markers",
         "--override-ini",
         "addopts=--strict-markers",
     ]
-    return int(pytest.main(args, plugins=[_CpuGate(entries)]))
+    return int(pytest.main(args, plugins=[_CpuGate(entries, len(omitted))]))
 
 
 if __name__ == "__main__":

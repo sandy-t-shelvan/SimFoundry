@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Extra pins for the pytest-cpu job in .github/workflows/sceneagent-ci.yml.
-# Installed together with requirements-sceneagent-ci.txt. numpy stays 2.4.6:
-# Open3D 0.19's wheel forces numpy 2.2 and is not installed here.
+# Installed together with requirements-sceneagent-ci.txt. numpy stays 2.4.6.
+# open3d 0.19.0 requires numpy>=1.18 and imports with that pin.
+# opencv-python-headless 4.12 caps numpy at <2.3, so this job uses 4.13.
 
 numpy==2.4.6
 omegaconf==2.3.0
 scipy==1.16.3
 matplotlib==3.10.7
 embreex==2.17.7.post6
+open3d==0.19.0
+opencv-python-headless==4.13.0.90
