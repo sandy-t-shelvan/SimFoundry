@@ -95,10 +95,10 @@ const BLOCKS: Block[] = [
         status: "partial",
         addressed: "fixed",
         paper: "Section 3.1: accept a pose only when normalized median, p90, coverage, and silhouette all pass fixed thresholds. The numbers are not published.",
-        plan: "EXPANSION_PLAN still says 'Not run.' DESIGN phase 3 says choose thresholds on a held-out set and do not present them as the paper's. Missing thresholds stay undecided.",
+        plan: "The gate ran on 55073623 and catalog marks it partial. DESIGN phase 3 says choose thresholds on a held-out set and do not present them as the paper's. Missing thresholds stay undecided.",
         changelog: "ICP residual written. accept_alignment stayed undecided. TRIM_KEEP 0.7 is this implementation's overlap, not a published threshold. Silhouette raster union was empty.",
         ran: "icp_residual.json: normalized median 0.033103985722272695, p90 0.21563629180764, coverage 0.14616666666666667, silhouette None. Median nearest distance 0.04999262711481225. Full-rate residual icp_residual_fullrate.json: median 0.04373191475939739, p90 0.13867399840532532, normalized median 0.034355469766853275, coverage 0.09366666666666666, silhouette 0.17505342248569655.",
-        miss: "The gate cannot decide. Inventing the four thresholds would violate the plan. EXPANSION_PLAN's 'Not run' is stale against this residual file.",
+        miss: "The gate cannot decide with the paper's unpublished thresholds. ours_iteration_1 rejects the residual on coverage and silhouette. The cutoffs were not lowered.",
       },
     ],
   },
@@ -160,17 +160,17 @@ const BLOCKS: Block[] = [
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: SAM masks every tenth view by default. Across their scenes the stride ranges from 1 to 10.",
-        plan: "EXPANSION_PLAN's evaluation table still says 'Masks: Missing. SAM has not run.' That sentence is stale.",
+        plan: "The section 3.3 evaluation table records the SAM vit_h masks. Catalog row is done.",
         changelog: "SAM vit_h on every 10th frame of the 15-frame sample. Exit 0.",
         ran: "0001.jpg has 33 masks. 0011.jpg has 19. Files 0001_mask.png and 0011_mask.png.",
-        miss: "Two frames of a 1 fps sample, not a full-rate scene. The plan table was not updated.",
+        miss: "Two frames of a 1 fps sample, not a full-rate scene.",
       },
       {
         sub: "GroundingDINO",
         status: "missing",
         addressed: "still open",
         paper: "Not in section 3.3. The website step 02 says GroundingDINO + SAM assign semantic features to each Gaussian.",
-        plan: "Named beside SAM. The same 'all missing' sentence covers it, so the plan never split the website tool from the paper's SAM path.",
+        plan: "Named beside SAM. Masks and the two feature vectors exist. GroundingDINO did not run, and the feature-on-Gaussian file is still missing.",
         changelog: "Not shipped.",
         ran: "Not started.",
         miss: "Not in the paper's section 3.3. Required only by the website. Still absent from the code.",
@@ -180,20 +180,20 @@ const BLOCKS: Block[] = [
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: each masked crop is a 512-d vector. It is a physics-prior input, not the Gaussian assignment.",
-        plan: "EXPANSION_PLAN forbids substituting another CLIP and still says the feature file is missing.",
+        plan: "EXPANSION_PLAN forbids substituting another CLIP. OpenCLIP ViT-B-16 512-d crop vectors were produced. Evidence: /workspace/fruits-features/features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
         changelog: "512-d vectors for 0001.jpg and 0011.jpg. No new checkpoint download.",
         ran: "openai weights, stored in /workspace/fruits-features/features.json.",
-        miss: "Two crop vectors, not a feature on every Gaussian. The plan table still says missing.",
+        miss: "OpenCLIP ViT-B-16 512-d crop vectors were produced. Evidence: features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
       },
       {
         sub: "DINOv2 ViT-S/14",
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: DINOv2 ViT-S/14 is the other physics-prior feature. It does not assign Gaussians.",
-        plan: "Explicit rule: do not substitute DINOv3. The evaluation table still says the feature is missing.",
+        plan: "Explicit rule: do not substitute DINOv3. DINOv2 ViT-S/14 crop vectors were produced. Evidence: /workspace/fruits-features/features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
         changelog: "dinov2_vits14, 384-d, checkpoint already on disk. Not DINOv3.",
         ran: "384-d vectors for 0001.jpg and 0011.jpg in features.json.",
-        miss: "The forbidden DINOv3 swap was not made. The vectors are still one crop each, not the per-Gaussian MLP input in section 3.4.",
+        miss: "DINOv2 ViT-S/14 crop vectors were produced. Do not substitute DINOv3. Evidence: features.json. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).",
       },
       {
         sub: "LangSplat-style codebook",
@@ -220,10 +220,10 @@ const BLOCKS: Block[] = [
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: SAM3D generates object geometry. Trimmed similarity ICP starts from the SAM3D pose.",
-        plan: "Hunyuan, TRELLIS.2, and Pixal3D are not SAM 3D. The evaluation table still says 'Meshes: Missing.'",
+        plan: "Hunyuan, TRELLIS.2, and Pixal3D are not SAM 3D. The evaluation table records 0001.glb. Catalog row is done.",
         changelog: "An early bullet says the token was rejected and the row stays missing. The later bullet records the mesh. Catalog is done.",
         ran: "0001.glb is 3,238,692 bytes, max side 720, plus 0001_gaussian.ply (10,153,632 bytes), render, and overlay. Ledger sam3d attempt 2 accepted. Not Hunyuan.",
-        miss: "One frame. The stored SAM 3D rotation vector was absent, so ICP could not start from that pose. The plan table is stale.",
+        miss: "One frame. The stored SAM 3D rotation vector was absent, so ICP could not start from that pose.",
       },
       {
         sub: "Trimmed similarity ICP",
@@ -375,10 +375,10 @@ const BLOCKS: Block[] = [
         sub: "Isaac inspector",
         status: "done",
         paper: "Sections 3.1 and 3.7 and figure 7 skill SCENEAGENT-INSPECT-ISAAC: open the exported scene and accept or reject it.",
-        plan: "EXPANSION_PLAN still says 'Not run' and asks for inspection/isaac_lab.json.",
+        plan: "EXPANSION_PLAN records the headless open of phase1_place.usda and the accepted ledger line. It still names inspection/isaac_lab.json as the output path.",
         changelog: "Kit python opened phase1_place.usda. Ledger isaac_inspector attempt 2 accepted.",
         ran: "opened=True, prims /World, /World/box, /World/bowl. Artifact isaac_inspector.txt.",
-        miss: "The opened stage is primitives, not the reconstructed mesh. The plan's 'Not run' line is stale.",
+        miss: "The opened stage is primitives, not the reconstructed mesh.",
       },
       {
         sub: "Aligned mesh USDA",
@@ -753,11 +753,14 @@ function FlowDiagram({
 
 function BlockDetails() {
   const [filter, setFilter] = useState<Status | "all">("all");
+  const done = BLOCKS.reduce((sum, block) => sum + block.rows.filter((row) => row.status === "done").length, 0);
+  const partial = BLOCKS.reduce((sum, block) => sum + block.rows.filter((row) => row.status === "partial").length, 0);
+  const missing = BLOCKS.reduce((sum, block) => sum + block.rows.filter((row) => row.status === "missing").length, 0);
   const labels: Array<{ id: Status | "all"; label: string }> = [
-    { id: "all", label: "All 42 rows" },
-    { id: "done", label: "Done 17" },
-    { id: "partial", label: "Partial 10" },
-    { id: "missing", label: "Missing 15" },
+    { id: "all", label: `All ${done + partial + missing} rows` },
+    { id: "done", label: `Done ${done}` },
+    { id: "partial", label: `Partial ${partial}` },
+    { id: "missing", label: `Missing ${missing}` },
   ];
   return (
     <Stack gap={8}>
@@ -837,8 +840,8 @@ function MissedFruitsPass() {
         <Stat value="missing" label="CubePart, no part mesh" tone="danger" />
         <Stat value="0 / 6" label="Figure 5 harnesses called" tone="danger" />
       </Grid>
-      <Callout tone="danger" title="The tally above this section is the earlier snapshot">
-        catalog.py and the body of GAP_MATRIX.md, read on this pass, count 17 done, 11 partial, and 14 missing. The header of GAP_MATRIX.md and the summary at the top of this canvas still say 17 / 10 / 15. Articulate Anything is the row that moved to partial. Those older sentences stay.
+      <Callout tone="info" title="Counts match catalog.py">
+        catalog.py, the GAP_MATRIX.md header, and this canvas count 17 done, 11 partial, and 14 missing. Articulate Anything is partial: a PartNet URDF was accepted and the motion review failed.
       </Callout>
       <Text size="small" tone="secondary">
         Live page checked in the browser on 2 Nov 2026. Paper text is arXiv:2610.34745v1. Run status is sceneagent/catalog.py. A local file, runs/section34_pass/vlm_pass.json, is cited only where it is newer than that catalog row.
@@ -979,7 +982,7 @@ function MissedFruitsPass() {
           ],
           [
             "CPU CI has not seen this tree",
-            "New, as a process gap only. SDLC says .github/workflows/sceneagent-ci.yml runs compileall and pytest on ubuntu-latest with numpy and pytest. That job cannot prove COLMAP, splatfacto, Isaac, or CubePart. On this read, main is 8 commits ahead of origin/main, and the 3.1–3.4 files, including agent_loop.py, website_step02.py, and section34.py, are uncommitted. GitHub CI has not seen this working tree.",
+            "New, as a process gap only. SDLC says .github/workflows/sceneagent-ci.yml runs compileall and pytest on ubuntu-latest with numpy, pytest, trimesh, and pillow, which is what main installs. SF-2 is changing that workflow on another branch. That job cannot prove COLMAP, splatfacto, Isaac, or CubePart. On this read, main is 8 commits ahead of origin/main, and the 3.1–3.4 files, including agent_loop.py, website_step02.py, and section34.py, are uncommitted. GitHub CI has not seen this working tree.",
             <MissedMark key="ci" />,
           ],
         ]}
@@ -1001,7 +1004,7 @@ export default function SceneAgentPaperGaps() {
       <Stack gap={8}>
         <H1>SceneAgent paper versus the SimFoundry upgrade</H1>
         <Text>
-          The expansion plan covers sections 3.1–3.10 and section 4, but the paper’s agent is a coding harness on a model API, and this tree’s agent is two Gemini generateContent calls plus local Python. Fracture, 4D, hybrid scenes, Unreal, Meshy, and the policy loop are only named. catalog.py and GAP_MATRIX.md still agree: 17 done, 10 partial, 15 missing. That “done” on the agent loop means the ledger files exist.
+          The expansion plan covers sections 3.1–3.10 and section 4, but the paper’s agent is a coding harness on a model API, and this tree’s agent is two Gemini generateContent calls plus local Python. Fracture, 4D, hybrid scenes, Unreal, Meshy, and the policy loop are only named. catalog.py and GAP_MATRIX.md agree: 17 done, 11 partial, 14 missing. That “done” on the agent loop means the ledger files exist.
         </Text>
         <Text size="small" tone="secondary">
           Catalog status is the catalog.py field. A done row is an artifact this tree produced, not a paper metric. The This pass column on sections 3.1–3.4 is separate: fixed means this code or a real run does that paper requirement. Quebec evidence is instance 55073623, RTX 4090. Paper: Hollis, Fan, and Yang, arXiv:2610.34745v1. Site text checked against the saved extract and the live page: section 3.3 does not name GroundingDINO or SAM 2; website step 02 says GroundingDINO + SAM. Quebec SSH on 2 Nov 2026 connected. The RTX 4090 was not idle: articulate.py held 834 MiB, so GroundingDINO, SAM 2, full-rate COLMAP, and a 30000-step splat were not started.
@@ -1016,7 +1019,7 @@ export default function SceneAgentPaperGaps() {
       </Grid>
 
       <Callout tone="warning" title="The gap matrix does not lag the catalog">
-        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). The stale text is elsewhere: DESIGN.md opens with 4 done, 11 partial, 23 missing, 38 rows, while its later table says 17, 10, 15, 42. EXPANSION_PLAN still says the alignment gate and the Isaac inspector were not run, and its section 3.3 table still says masks, features, and SAM 3D meshes are missing. skills.py listed SCENEAGENT-INSPECT-ISAAC as not_implemented after Isaac opened the Fruits stage.         This pass sets that skill to stage_opened and records that no coding model wrote a fix report.
+        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). DESIGN.md’s opening counts match catalog.py: 17 done, 11 partial, 14 missing, 42 rows. Its block-map table is still an earlier snapshot and is not regenerated. EXPANSION_PLAN records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. Its section 3.3 table records the SAM masks and the SAM 3D mesh as produced. The Features row is partial: crop vectors exist and the per-Gaussian feature file is missing. skills.py lists SCENEAGENT-INSPECT-ISAAC as stage_opened. No coding model wrote a fix report.
       </Callout>
 
       <MissedFruitsPass />
@@ -1324,7 +1327,7 @@ export default function SceneAgentPaperGaps() {
 
       <H2>Catalog rows by paper block</H2>
       <Text size="small" tone="secondary">
-        Vertical axis: paper block. Horizontal axis: number of catalog.py rows. Stacked series are done, partial, and missing. Source: sceneagent/catalog.py status field, same 17 / 10 / 15 split as GAP_MATRIX.md. Quebec run 1 Nov 2026. The Sec 4 bar is the two section 4.1 rows plus the official-release row. Section 4.2 is the 3.6 bar, not a second count.
+        Vertical axis: paper block. Horizontal axis: number of catalog.py rows. Stacked series are done, partial, and missing. Source: sceneagent/catalog.py status field, same 17 / 11 / 14 split as GAP_MATRIX.md. Quebec run 1 Nov 2026. The Sec 4 bar is the two section 4.1 rows plus the official-release row. Section 4.2 is the 3.6 bar, not a second count.
       </Text>
       <BarChart
         horizontal
@@ -1348,18 +1351,18 @@ export default function SceneAgentPaperGaps() {
           ["Agent plan / manifest / ledger", "/workspace/fruits-agent. Repair accepted MJCF, SAM 3D, PartSAM, inspector, ICP file, aligned USDA, and one failed hull rollout.", "3.1 loop done"],
           ["CUDA COLMAP 4.2.1", "15/15 images, 603 points, mean reprojection 0.867273 px. Runner still 1 fps and a 16-frame cap.", "3.2 partial"],
           ["splatfacto-big", "2000 steps, not 30000. step-000001999.ckpt. 13 train renders. Cameras from this COLMAP are not in the train.", "3.2 done"],
-          ["SAM, OpenCLIP, DINOv2", "vit_h every 10th frame: 0001 has 33 masks, 0011 has 19. OpenCLIP 512-d. DINOv2 ViT-S/14 384-d. Not DINOv3.", "3.3 done"],
-          ["Association", "Equation (1) kept 27548/84993 Gaussians.", "3.3 done"],
+          ["SAM, OpenCLIP, DINOv2", "vit_h every 10th frame: 0001 has 33 masks, 0011 has 19. OpenCLIP ViT-B-16 512-d and DINOv2 ViT-S/14 crop vectors were produced. Evidence: /workspace/fruits-features/features.json. Not DINOv3. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).", "masks, meshes, crop features done; per-Gaussian features partial"],
+          ["Association", "Equation (1) kept 27548/84993 Gaussians.", "association done (Eq. 1)"],
           ["SAM 3D + ICP", "0001.glb, overlay, gaussian ply. Trimmed ICP median 0.04999262711481225. Ours iteration-1 gate rejects: coverage 0.146 and silhouette None.", "mesh done, ICP partial"],
           ["Aligned USDA", "phase1_aligned_mesh.usda, 5,339,577 bytes, 8095 faces. Isaac opened=True, 4 prims.", "3.7 done"],
           ["MuJoCo 3.17", "30 steps. Hull MJCF 327 verts, 650 faces. Box ended (0, 0, 0.1817534) m. Not a place.", "3.7 done"],
           ["PartSAM", "1168 masks, 15 after NMS, ply written.", "3.4 done"],
           ["CubePart", "2 Nov: inference exited 1 at step 0/50. QwenEmbedRope.forward() got multiple values for argument 'device'. No mesh. catalog.py still says the weights were not downloaded.", "catalog missing; log is a failed run"],
-          ["Articulate Anything", "Zip 5260981177 bytes. Listing 15616309082 bytes / 509821 files. Catalog says the zip was removed. No URDF.", "missing"],
+          ["Articulate Anything", "PartNet table 25959 URDF accepted (13408 bytes, five fixed joints). Motion review failed: sapien_simulate.py exited 139, feedback_score -1. Ledger attempts 3 and 4 rejected the table URDFs.", "partial"],
           ["Material vote", "gemini-2.5-flash HTTP 404. gemini-3.8-flash class wood. Unpublished MLP not started.", "vote done, VLM partial, MLP missing"],
           ["Sisters and place grid", "box.json and bowl.json only. +5% box does not fit. Wilson 0/1 is 0–0.7934506856227626.", "sisters done, grid partial"],
         ]}
-        rowTone={["success", "warning", "success", "success", "success", "warning", "success", "warning", "success", "danger", "danger", "warning", "warning"]}
+        rowTone={["success", "warning", "success", "success", "success", "warning", "success", "warning", "success", "danger", "warning", "warning", "warning"]}
         striped
         stickyHeader
       />
@@ -1411,14 +1414,14 @@ export default function SceneAgentPaperGaps() {
 
       <H2>Every paper block against the plan, the changelog, and the run</H2>
       <Text>
-        Each row is one catalog.py entry. The dot is that entry’s status. Open a block for the five-way comparison. Filter pills hide rows; they do not change the 17 / 10 / 15 counts.
+        Each row is one catalog.py entry. The dot is that entry’s status. Open a block for the five-way comparison. Filter pills hide rows; they do not change the 17 / 11 / 14 counts.
       </Text>
       <BlockDetails />
 
       <H2>Plan and design misses</H2>
       <Stack gap={10}>
-        <Callout tone="danger" title="1. The plan’s status sentences were not updated after the run">
-          EXPANSION_PLAN section 3.3 still says splat views, masks, OpenCLIP, DINOv2, and SAM 3D are missing, and that those files are “all missing.” Section 3.1 still says the alignment gate and the Isaac inspector were not run. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s first counts (4 / 11 / 23, 38 rows) contradict the table later in the same file. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
+        <Callout tone="warning" title="1. Opening counts match the catalog; two snapshots remain">
+          EXPANSION_PLAN section 3.3 records the splat, the SAM masks, and the SAM 3D mesh. The Features row is partial: OpenCLIP and DINOv2 crop vectors exist, and the per-Gaussian feature file is missing. Section 3.1 records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s opening counts match catalog.py (17 done, 11 partial, 14 missing, 42 rows). Its block-map table is still an earlier snapshot and is not regenerated. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
         </Callout>
         <Callout tone="warning" title="2. Two done-rules disagree on the splat">
           The splatfacto row is done at 2000 steps because a checkpoint and one render exist. The COLMAP row is done only when a full-rate sequence feeds splatfacto. Catalog says those cameras are not in the train, the runner is still 1 fps with a 16-frame cap, and nerfstudio’s default 30000 was not used. Marking one done and the other partial hides that the scene in section 3.2 was not built.
@@ -1436,7 +1439,7 @@ export default function SceneAgentPaperGaps() {
 
       <H3>Also recorded, and not a status change</H3>
       <Text>
-        The material-vote row is done as equation (2)’s formula. The Fruits class wood is the partial VLM row, from gemini-3.8-flash after gemini-2.5-flash returned HTTP 404. The unpublished per-Gaussian MLP is missing. Three.js is partial only because the SimFoundry light editor exists; it was not opened on these USDA files. Articulate Anything’s zip is recorded as removed in catalog.py, CHANGELOG.md, and GAP_MATRIX.md; no URDF is recorded. The convex-hull MJCF is recorded as written (327 vertices, 650 faces). Those files do not describe a trimesh crash.
+        The material-vote row is done as equation (2)’s formula. The Fruits class wood is the partial VLM row, from gemini-3.8-flash after gemini-2.5-flash returned HTTP 404. The unpublished per-Gaussian MLP is missing. Three.js is partial only because the SimFoundry light editor exists; it was not opened on these USDA files. Articulate Anything is partial: a PartNet table 25959 URDF was accepted (13408 bytes, five fixed joints) and the motion review failed (`sapien_simulate.py` exited 139, `feedback_score` -1). catalog.py and GAP_MATRIX.md record that URDF. The convex-hull MJCF is recorded as written (327 vertices, 650 faces). Those files do not describe a trimesh crash.
       </Text>
 
       <H2>Next phases from the run</H2>
@@ -1462,7 +1465,7 @@ export default function SceneAgentPaperGaps() {
             "3. CubePart, then Articulate",
             "0001.glb. PartSAM 0001.ply, 1168 masks, 15 after NMS. About 108 GB free after the failed inference.",
             "A part mesh from CubePart, then a URDF only if Articulate Anything emits one, then a motion review.",
-            "CubePart crashed earlier in QwenEmbedRope.forward and this pass did not start it. The part VLM answered no hidden geometry. Articulate Anything was already running on the GPU. No URDF.",
+            "CubePart crashed earlier in QwenEmbedRope.forward and this pass did not start it. The part VLM answered no hidden geometry. Articulate Anything wrote a PartNet table 25959 URDF; the ledger rejected it for this fruit and the motion review failed.",
           ],
           [
             "4. LaMa",

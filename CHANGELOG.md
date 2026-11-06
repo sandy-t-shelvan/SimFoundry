@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs follow `sceneagent.catalog.counts()`: 17 done, 11 partial, 14 missing, 42 rows. `docs/GAP_MATRIX.md` was regenerated from `sceneagent.catalog.to_markdown()`. The canvas tally and the Quebec Articulate Anything row follow that catalog. The section 3.3 Features row in `docs/EXPANSION_PLAN.md` stays partial. The canvas OpenCLIP and DINOv2 rows stay done: those crop vectors were produced, and `features.json` is the evidence. Per-Gaussian features stay on the separate conversion row in plan section 9.5 item 4. `docs/SDLC.md` lists the pins in `requirements-sceneagent-ci.txt`.
 - `_sdf_meshes` again records only the problem string from `_resolve_mesh_uri`, and `_palette_has_color` again uses the original `any(...)` color test. The 16-bit LA rejection is unchanged.
 - The MLP photo check rejects a 16-bit grayscale+alpha PNG. Pillow has no 16-bit LA mode, so that file (PNG color type 4, bit depth 16, raw mode `LA;16B`) opens as mode `RGBA` and used to pass. The rejection is the same sentence as 8-bit LA: `image mode LA is not RGB`. 8-bit RGB, RGBA, and color-palette photos are unchanged.
 - The sceneagent ruff job also runs `ruff format --check sceneagent`. `sceneagent/` was reformatted with `ruff format` only. The pull request template now has `goal`, a `done_criteria` section, and `proof links`, alongside the existing review fields.
