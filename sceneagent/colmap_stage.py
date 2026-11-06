@@ -7,10 +7,13 @@ a reconstruction, and this stage does not train a splat.
 
 The frame sample defaults to 1 fps and 16 frames. That cap is this runner's.
 ``max_frames`` None or 0 omits it, and ``fps`` None or 0 omits the fps
-filter. Both together keep every decoded frame. Sampled frames are
-color-calibrated per image before matching. That scale is our diagonal
-gain toward ``per_channel_median_of_set``, not the paper's exact method,
-so the section 3.2 color gap stays partial.
+filter. Both together keep every decoded frame. Omitting the filter is not
+the SF-5 evidence command: ``native_frames=True`` asks ffmpeg for
+``-fps_mode passthrough`` and rejects an fps filter or a frame cap (PM
+KAN-5 10314). Sampled frames are color-calibrated per image before
+matching. That scale is our diagonal gain toward
+``per_channel_median_of_set``, not the paper's exact method, so the
+section 3.2 color gap stays partial.
 
 A mapper that writes a sparse model is not accepted until
 ``reconstruction_gate`` passes. The gate runs ``model_analyzer`` on every
@@ -171,15 +174,41 @@ def _frame_cap(max_frames):
     return cap
 
 
-def sample_frame_command(ffmpeg, video_path, image_pattern, fps=1, max_frames=16):
+def sample_frame_command(
+    ffmpeg, video_path, image_pattern, fps=1, max_frames=16, *, native_frames=False
+):
     """ffmpeg argv for the frame sample.
 
     Defaults are this runner's 1 fps and 16-frame cap. The paper does not
     publish either number. ``None`` or ``0`` drops that limit. ffmpeg treats
     ``-frames:v 0`` as an empty extract and ``fps=0`` as an invalid filter,
     so those values omit the flag instead of being forwarded. Omitting both
-    keeps every decoded frame. Omitting only the cap still applies ``fps``.
+    keeps every decoded frame on ffmpeg's default image muxer. Omitting only
+    the cap still applies ``fps``.
+
+    ``native_frames=True`` is the SF-5 evidence extract (PM KAN-5 10314):
+    every native frame, no subsampling, and no cap. ``-fps_mode passthrough``
+    is that request. A positive ``fps`` or ``max_frames`` is rejected, so a
+    native-rate ``fps=30`` filter cannot stand in for it. The default and
+    the omit-only command are unchanged.
     """
+    if not isinstance(native_frames, bool):
+        raise ValueError("native_frames must be a bool")
+    if native_frames:
+        if not _no_limit(fps) or not _no_limit(max_frames):
+            raise ValueError(
+                "native_frames keeps every native frame and rejects an fps "
+                "filter or a frame cap"
+            )
+        return [
+            str(ffmpeg),
+            "-y",
+            "-i",
+            str(video_path),
+            "-fps_mode",
+            "passthrough",
+            str(image_pattern),
+        ]
     command = [str(ffmpeg), "-y", "-i", str(video_path)]
     if not _no_limit(fps):
         command.extend(["-vf", f"fps={_positive_rate(fps)}"])
@@ -201,13 +230,23 @@ def _request_is_full_rate(fps, max_frames):
 
 
 def run_poses(
-    video_path, work_dir, fps=1, max_frames=16, color_calibrate=True, *, analyzer=None
+    video_path,
+    work_dir,
+    fps=1,
+    max_frames=16,
+    color_calibrate=True,
+    *,
+    analyzer=None,
+    native_frames=False,
 ):
     """Sample frames, calibrate each image, and run COLMAP.
 
     The 1 fps sample and the 16-frame cap are this runner's, not the paper's.
     ``max_frames`` None or 0 omits ``-frames:v``. ``fps`` None or 0 omits the
     fps filter. Setting both keeps every decoded frame.
+    ``native_frames=True`` uses the passthrough extract and rejects a filter
+    or a cap. The SF-5 evidence runner sets it. Other callers stay on the
+    defaults.
 
     ``color_calibrate`` scales each extracted image by its own gain before
     ``feature_extractor``. Section 3.2 names per-image color calibration and
@@ -223,6 +262,18 @@ def run_poses(
     The default runs ``colmap model_analyzer``. Tests inject this so the
     gate does not need a COLMAP binary.
     """
+    if not isinstance(native_frames, bool):
+        raise ValueError("native_frames must be a bool")
+    # Reject a contradictory cap before any work directory is deleted.
+    if native_frames:
+        sample_frame_command(
+            "ffmpeg",
+            "in",
+            "out.jpg",
+            fps=fps,
+            max_frames=max_frames,
+            native_frames=True,
+        )
     full_rate = _request_is_full_rate(fps, max_frames)
     calibrated: dict[str, object] = {}
 
@@ -231,6 +282,7 @@ def run_poses(
         payload["max_frames"] = max_frames
         payload["color_calibrate"] = bool(color_calibrate)
         payload["full_rate"] = full_rate
+        payload["native_frames"] = native_frames
         if "report" in calibrated:
             payload["color_calibration"] = calibrated["report"]
         return payload
@@ -274,6 +326,7 @@ def run_poses(
             images / "%04d.jpg",
             fps=fps,
             max_frames=max_frames,
+            native_frames=native_frames,
         ),
         timeout_s=180,
     )
