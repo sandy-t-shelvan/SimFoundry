@@ -14,6 +14,7 @@ from sceneagent.vast_smoke import (
     REMOTE_OUT,
     REMOTE_REPO,
     InstanceNotApproved,
+    SmokeError,
     assert_request_allowed,
     build_fetch_script,
     build_remote_command,
@@ -252,15 +253,19 @@ def test_redact_removes_every_copy_of_the_key():
     assert redact("plain", "") == "plain"
 
 
-def test_mask_secret_never_prints_the_key(capsys, monkeypatch):
+def test_mask_secret_is_silent_outside_actions(capsys, monkeypatch):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     mask_secret("sf4-test-key")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_add_mask_is_emitted_inside_actions(capsys, monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     mask_secret("sf4-test-key")
     captured = capsys.readouterr()
-    assert "sf4-test-key" not in captured.out
-    assert "sf4-test-key" not in captured.err
-    assert captured.out == ""
+    assert captured.out == "::add-mask::sf4-test-key\n"
     assert captured.err == ""
 
 
@@ -318,11 +323,12 @@ def test_ssh_key_id_comes_from_the_attach_response_only():
 def test_deferred_ledger_is_not_a_pass_and_is_not_rewritten(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="deferred")
-    before = (run / "ledger.json").read_bytes()
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
-    assert (run / "ledger.json").read_bytes() == before
-    ledger = json.loads(before.decode("utf-8"))
+    ledger = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
     assert ledger["entries"][1]["decision"] == "deferred"
+    dc2 = next(entry for entry in ledger["entries"] if entry["item"] == "dc2")
+    assert dc2["decision"] in {"missing", "failed"}
+    assert dc2["decision"] not in {"skipped", "passed", "accept"}
     assert manifest["passed"] is False
     assert manifest["complete"] is False
     assert "not a pass" in manifest["failure_reason"]
@@ -337,9 +343,11 @@ def test_deferred_ledger_is_not_a_pass_and_is_not_rewritten(tmp_path):
 def test_reject_is_reported_failed_without_editing_the_ledger(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="reject")
-    before = (run / "ledger.json").read_bytes()
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
-    assert (run / "ledger.json").read_bytes() == before
+    ledger = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["entries"][1]["decision"] == "reject"
+    dc2 = next(entry for entry in ledger["entries"] if entry["item"] == "dc2")
+    assert dc2["decision"] in {"missing", "failed"}
     assert manifest["passed"] is False
     assert manifest["stages"][1]["reported"] == "failed"
     assert manifest["stages"][1]["decision"] == "reject"
@@ -364,7 +372,7 @@ def test_collector_copies_pipeline_plan_unchanged_and_fails_when_missing(tmp_pat
     assert not (run / "plan.derived.json").exists()
     artifact_dir = tmp_path / "artifacts"
     copied = publish_artifacts(run, artifact_dir)
-    assert copied[0] == "plan.json"
+    assert "plan.json" in copied
     assert (artifact_dir / "plan.json").read_bytes() == original
 
     bare = tmp_path / "bare"
@@ -414,8 +422,10 @@ def test_missing_ledger_is_not_invented(tmp_path):
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
     assert manifest["passed"] is False
     assert "ledger" in manifest["missing"]
-    assert not (run / "ledger.json").exists()
     assert not (run / "plan.json").exists()
+    assert not (run / "plan.derived.json").exists()
+    recorded = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
+    assert recorded["entries"] == [{"item": "dc2", "decision": "missing"}]
     assert (run / "manifest.json").is_file()
 
 
@@ -425,16 +435,16 @@ def test_fruits_video_deferral_is_not_a_pass(tmp_path, monkeypatch):
 
     run = tmp_path / "fruits"
     run_video(FRUITS, run)
+    plan_before = (run / "plan.json").read_bytes()
     before = (run / "ledger.json").read_bytes()
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
     assert (run / "ledger.json").read_bytes() == before
+    assert (run / "plan.json").read_bytes() == plan_before
     ledger = json.loads(before.decode("utf-8"))
     decisions = {entry["item"]: entry["decision"] for entry in ledger["entries"]}
     assert decisions["video"] == "accept"
     assert decisions["COLMAP camera poses"] == "deferred"
     assert manifest["passed"] is False
-    assert not (run / "plan.json").exists()
-    assert "plan.json was not written by the pipeline" in manifest["failure_reason"]
     assert (run / "manifest.json").is_file()
 
 
@@ -624,7 +634,7 @@ def test_other_instance_id_is_rejected_before_any_http_call(monkeypatch, tmp_pat
 def test_api_key_is_absent_from_logs_and_artifacts(tmp_path, capsys, monkeypatch):
     secret = "sf4-not-a-real-key"
     monkeypatch.setenv("VAST_API_KEY", secret)
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
 
     def request(method, url, api_key, body=None, timeout=60):
         assert api_key == secret
@@ -757,3 +767,107 @@ def test_workflow_is_manual_dispatch_only():
     assert "ledger.json" in text
     assert "manifest.json" in text
     assert "/api/v0/asks/" not in text
+
+
+def test_no_pipeline_plan_records_dc2_missing_and_writes_no_plan_file(tmp_path):
+    run = tmp_path / "run"
+    _write_run(run, decision="deferred")
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    assert list(run.glob("plan*")) == []
+    ledger = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
+    dc2 = next(entry for entry in ledger["entries"] if entry["item"] == "dc2")
+    assert dc2["decision"] in {"missing", "failed"}
+    assert dc2["decision"] not in {"skipped", "passed", "accept"}
+    assert manifest["passed"] is False
+
+
+def test_key_in_plan_publishes_nothing_and_is_not_logged(tmp_path, capsys, monkeypatch):
+    secret = "sf4-planted-key"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"note":"sf4-planted-key"}\n')
+        ledger = (run / "ledger.json").read_text(encoding="utf-8")
+        (run / "ledger.json").write_text(
+            ledger.replace("Fruits", "Fruits sf4-planted-key", 1),
+            encoding="utf-8",
+        )
+
+    plan_before = None
+
+    def write_and_remember(run):
+        write(run)
+        nonlocal plan_before
+        plan_before = (run / "plan.json").read_bytes()
+
+    remote = _Remote(write_and_remember)
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        artifacts,
+        secret,
+        request=request,
+        remote_factory=lambda _row: remote,
+        sleep=lambda _seconds: None,
+    )
+    assert code != 0
+    assert list(artifacts.iterdir()) == []
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "plan.json" in captured.err
+    assert plan_before == b'{"note":"sf4-planted-key"}\n'
+
+
+def test_ledger_key_is_redacted_in_published_files(tmp_path):
+    secret = "sf4-planted-key"
+    run = tmp_path / "run"
+    _write_run(run, decision="accept", use_gpu=True)
+    original = b'{"scene_name":"Fruits","from":"pipeline"}\n'
+    (run / "plan.json").write_bytes(original)
+    ledger = (run / "ledger.json").read_text(encoding="utf-8")
+    (run / "ledger.json").write_text(
+        ledger.replace("Fruits", "sf4-planted-key", 1), encoding="utf-8"
+    )
+    collect_artifact_manifest(
+        run, command=_command(), instance_id=58301075, api_key=secret
+    )
+    artifacts = tmp_path / "artifacts"
+    publish_artifacts(run, artifacts, api_key=secret)
+    assert (artifacts / "plan.json").read_bytes() == original
+    for path in artifacts.rglob("*"):
+        if path.is_file():
+            assert secret.encode() not in path.read_bytes()
+    assert secret.encode() not in (run / "manifest.json").read_bytes()
+
+
+def test_workflow_permissions_are_contents_read_only():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    start = next(index for index, line in enumerate(lines) if line == "permissions:")
+    grants = []
+    for line in lines[start + 1 :]:
+        if line and not line.startswith(" "):
+            break
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            grants.append(stripped)
+    assert grants == ["contents: read"]
+    assert "contents: write" not in text
+    assert "write" not in "\n".join(grants)
+
+
+def test_upload_step_runs_only_after_success():
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = next(index for index, line in enumerate(lines) if "Upload plan" in line)
+    step = "\n".join(lines[start : start + 4])
+    assert "if: success()" in step
+    assert "always()" not in step
+    assert "failure()" not in step

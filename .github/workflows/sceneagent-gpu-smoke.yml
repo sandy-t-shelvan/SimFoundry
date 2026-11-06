@@ -24,7 +24,7 @@ jobs:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
         run: python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts"
       - name: Upload plan, ledger, and manifest
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: sceneagent-fruits-smoke

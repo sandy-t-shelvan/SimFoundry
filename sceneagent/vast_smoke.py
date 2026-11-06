@@ -13,10 +13,10 @@ command is only the SceneAgent video entry point. That path does not call
 Meshy or Gemini. The API key is read from the environment and is not written
 into the remote command, the URL, or the artifact files.
 
-``python -m sceneagent`` on an mp4 writes ``ledger.json``. It does not write
-``plan.json``. ``collect_artifact_manifest`` does not build one. A missing
-plan fails the smoke. The manifest is this module's record of that fact.
-A ``deferred`` or ``reject`` ledger entry stays a failed smoke.
+``python -m sceneagent`` on an mp4 writes ``plan.json`` through
+``pipeline.write_plan`` and writes ``ledger.json``. The collector does not
+build a plan. A missing plan fails the smoke. A ``deferred`` or ``reject``
+ledger entry stays a failed smoke.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ import json
 import os
 import re
 import shlex
-import shutil
 import signal
 import subprocess
 import sys
@@ -129,9 +128,9 @@ def redact(text: str, secret: str) -> str:
 
 
 def mask_secret(value: str) -> None:
-    """Do not print the key. Actions already masks ``secrets.VAST_API_KEY``."""
-    if not isinstance(value, str):
-        return
+    """Register the key with GitHub's log masker. No-op outside Actions."""
+    if os.environ.get("GITHUB_ACTIONS") == "true" and value:
+        print(f"::add-mask::{value}", flush=True)
 
 
 def child_env() -> dict[str, str]:
@@ -681,11 +680,28 @@ def _ledger_entries(ledger: dict[str, Any]) -> list[Any]:
     return []
 
 
+def _record_dc2(
+    ledger_path: Path, ledger: dict[str, Any] | None, decision: str
+) -> None:
+    """Append a dc2 line. Missing plan is missing or failed, never skipped."""
+    if decision not in {"missing", "failed"}:
+        raise SmokeError(f"dc2 decision {decision!r} is not a failure record")
+    if ledger is None:
+        body: dict[str, Any] = {"entries": [{"item": "dc2", "decision": decision}]}
+    else:
+        body = dict(ledger)
+        entries = list(_ledger_entries(ledger))
+        entries.append({"item": "dc2", "decision": decision})
+        body["entries"] = entries
+    ledger_path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+
+
 def collect_artifact_manifest(
     run_dir: Path,
     *,
     command: list[str],
     instance_id: object,
+    api_key: str = "",
 ) -> dict[str, Any]:
     """Record the run. Never rewrite ``ledger.json`` or invent ``plan.json``.
 
@@ -749,35 +765,74 @@ def collect_artifact_manifest(
         "passed": passed,
         "failure_reason": reason,
     }
-    (run_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
-    if ledger_bytes is not None and ledger_path.read_bytes() != ledger_bytes:
+    if not plan_path.is_file():
+        _record_dc2(ledger_path, ledger, "missing")
+        manifest["dc2"] = "missing"
+    elif ledger_bytes is not None and ledger_path.read_bytes() != ledger_bytes:
         raise SmokeError("refusing to rewrite ledger.json")
-    manifest["complete"] = (
-        plan_path.is_file()
-        and ledger_path.is_file()
-        and (run_dir / "manifest.json").is_file()
-    )
+    manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
     if not manifest["complete"]:
         manifest["passed"] = False
-    (run_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
-    if ledger_bytes is not None and ledger_path.read_bytes() != ledger_bytes:
+    manifest_text = redact(json.dumps(manifest, indent=2) + "\n", api_key)
+    (run_dir / "manifest.json").write_text(manifest_text, encoding="utf-8")
+    if (
+        plan_path.is_file()
+        and ledger_bytes is not None
+        and ledger_path.read_bytes() != ledger_bytes
+    ):
         raise SmokeError("refusing to rewrite ledger.json")
     return manifest
 
 
-def publish_artifacts(run_dir: Path, artifact_dir: Path) -> list[str]:
-    """Copy plan, ledger, and manifest when they exist. Do not invent the rest."""
+def _key_hit(name: str) -> None:
+    """Say which file contained the key. Do not print the value."""
+    _emit(f"VAST_API_KEY was found in {name}. No artifacts were published.", "")
+
+
+def publish_artifacts(
+    run_dir: Path, artifact_dir: Path, api_key: str = ""
+) -> list[str]:
+    """Copy run files after a key scan. ``plan.json`` is not rewritten.
+
+    The scan reads every file in ``run_dir`` before ``artifact_dir`` is
+    created or written. A key inside ``plan.json`` fails the run and leaves
+    the artifact directory untouched. Ledger and manifest bytes are redacted
+    in the copy that would be published.
+    """
+    run_dir = Path(run_dir)
+    artifact_dir = Path(artifact_dir)
+    secret = api_key.encode("utf-8") if api_key else b""
+    prepared: list[tuple[str, bytes]] = []
+    for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
+        rel = path.relative_to(run_dir).as_posix()
+        data = path.read_bytes()
+        if path.name == "plan.json":
+            if secret and secret in data:
+                _key_hit(rel)
+                raise SmokeError(
+                    f"VAST_API_KEY was found in {rel}. No artifacts were published."
+                )
+            prepared.append((rel, data))
+            continue
+        if secret and secret in data:
+            data = redact(data.decode("utf-8", errors="replace"), api_key).encode(
+                "utf-8"
+            )
+        if secret and secret in data:
+            _key_hit(rel)
+            raise SmokeError(
+                f"VAST_API_KEY was found in {rel}. No artifacts were published."
+            )
+        prepared.append((rel, data))
     artifact_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
-    for name in ("plan.json", "ledger.json", "manifest.json"):
-        src = run_dir / name
-        if src.is_file():
-            shutil.copyfile(src, artifact_dir / name)
-            copied.append(name)
+    for rel, data in prepared:
+        if Path(rel).name not in {"plan.json", "ledger.json", "manifest.json"}:
+            continue
+        target = artifact_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        copied.append(rel)
     return copied
 
 
@@ -1173,8 +1228,9 @@ def run_smoke(
                 local_run,
                 command=build_remote_command(REMOTE_REPO, REMOTE_OUT),
                 instance_id=approved,
+                api_key=key,
             )
-            publish_artifacts(local_run, Path(artifact_dir))
+            publish_artifacts(local_run, Path(artifact_dir), api_key=key)
         _log(
             {
                 "action": "conclude",

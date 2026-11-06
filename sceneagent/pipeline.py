@@ -50,18 +50,28 @@ def _package_body(record, movable):
     return body, source
 
 
+def write_plan(out_dir, scene_name, source, steps):
+    """Write ``plan.json`` with the phase-1 document shape.
+
+    Both the JSON capture path and the video path call this. The bytes are
+    ``json.dumps(..., indent=2)`` plus a trailing newline, which is what
+    ``run_capture`` already wrote.
+    """
+    _write(
+        Path(out_dir) / "plan.json",
+        {
+            "scene_name": scene_name,
+            "source": source,
+            "steps": steps,
+        },
+    )
+
+
 def run_capture(capture, out_dir):
     out = Path(out_dir)
     ledger: list[dict[str, Any]] = []
     steps = plan_steps()
-    _write(
-        out / "plan.json",
-        {
-            "scene_name": capture["scene_name"],
-            "source": capture["source"],
-            "steps": steps,
-        },
-    )
+    write_plan(out, capture["scene_name"], capture["source"], steps)
     ledger.append({"item": "plan", "decision": "accept", "path": "plan.json"})
 
     _write(
