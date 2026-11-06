@@ -24,12 +24,23 @@ import shutil
 import sys
 import time
 from collections import deque
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ProcessPoolExecutor,
+    ThreadPoolExecutor,
+    wait,
+)
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
-from sceneagent.mlp.represent import FeatureEncoders, _object_dir, finish_object, render_object
+from sceneagent.mlp.represent import (
+    FeatureEncoders,
+    _object_dir,
+    finish_object,
+    render_object,
+)
 from sceneagent.mlp.sources import (
     ABO_ASSET_ROOT,
     ABO_LISTING_SHARD,
@@ -88,7 +99,7 @@ _ENCODER_PEAK_PRIVATE_MB = 2446
 _RENDER_SLOT_FLOOR_MB = 700
 _MAX_RENDER_WORKERS = 8
 _WORKER_RSS_LOGS = 0
-_LABELED_OK = set()
+_LABELED_OK: set[str] = set()
 
 
 def _limit_numeric_threads(load_torch=False):
@@ -103,7 +114,9 @@ def _limit_numeric_threads(load_torch=False):
 
         torch.set_num_threads(1)
     except Exception:
-        pass
+        # Torch is optional here. A missing import or a failed thread limit
+        # must not stop the numeric-library caps set above.
+        return
 
 
 def _mem_snapshot():
@@ -170,7 +183,7 @@ def acquire_candidate(payload):
             _delete_unprotected(source, obj_id)
             return _failure(payload, f"{fast_faces} triangles is too many to render")
         mesh, _image, _uv = load_textured_mesh(sample["mesh_path"], sample.get("image_path"))
-        faces = int(len(mesh.faces))
+        faces = len(mesh.faces)
         del mesh, _image, _uv
         if faces > MAX_RENDER_FACES:
             _delete_unprotected(source, obj_id)
@@ -192,7 +205,7 @@ def acquire_candidate(payload):
                     **_mem_snapshot(),
                     "id": obj_id,
                     "encoders": False,
-                    "gaussians": int(len(rendered["gaussians"]["xyz"])),
+                    "gaussians": len(rendered["gaussians"]["xyz"]),
                 },
             )
             # endregion
@@ -358,7 +371,11 @@ def extend_unlabeled(jobs, skip_ids):
 def run_acquire(jobs, workers):
     """Pack and label unlabeled catalog objects. Already-ok ids are skipped."""
 
-    from sceneagent.mlp.label_three import GEMINI_MAX_RPD, GEMINI_MAX_RPM, GEMINI_MAX_TPM
+    from sceneagent.mlp.label_three import (
+        GEMINI_MAX_RPD,
+        GEMINI_MAX_RPM,
+        GEMINI_MAX_TPM,
+    )
 
     global _LABELED_OK
     signature = _view_signature()
@@ -480,8 +497,8 @@ def run_acquire(jobs, workers):
         {"requested": int(workers), "workers": pool_workers, **_mem_snapshot()},
     )
     # endregion
-    pending = {}
-    label_pending = {}
+    pending: dict[Any, Any] = {}
+    label_pending: dict[Any, Any] = {}
     label_threads = min(GEMINI_MAX_RPM, 64)
 
     def harvest_labels(block):
@@ -520,55 +537,57 @@ def run_acquire(jobs, workers):
                 )
             _write_state(packed, labels, rejected, kept_ids)
 
-    with ProcessPoolExecutor(
-        max_workers=pool_workers,
-        mp_context=multiprocessing.get_context("spawn"),
-        initializer=_init_worker,
-    ) as pool:
-        with ThreadPoolExecutor(max_workers=label_threads, thread_name_prefix="gemini") as label_pool:
-            while True:
-                while len(pending) < _submission_slots(pool_workers, len(pending)):
-                    job = plan.next_job()
-                    if job is None:
-                        break
-                    if job["id"] in kept_ids or job["id"] in _LABELED_OK:
-                        raise SystemExit(f"refusing to relabel {job['id']}")
-                    pending[pool.submit(acquire_candidate, job)] = job
-                if not pending and not label_pending:
+    with (
+        ProcessPoolExecutor(
+            max_workers=pool_workers,
+            mp_context=multiprocessing.get_context("spawn"),
+            initializer=_init_worker,
+        ) as pool,
+        ThreadPoolExecutor(max_workers=label_threads, thread_name_prefix="gemini") as label_pool,
+    ):
+        while True:
+            while len(pending) < _submission_slots(pool_workers, len(pending)):
+                job = plan.next_job()
+                if job is None:
                     break
-                done = set()
-                if pending:
-                    timeout = 5 if label_pending else 120
-                    done, _pending_left = wait(pending, return_when=FIRST_COMPLETED, timeout=timeout)
-                if not done and pending:
-                    harvest_labels(False)
-                    if not label_pending:
-                        print(
-                            "still rendering "
-                            + " ".join(item["id"] for item in list(pending.values())[:6]),
-                            flush=True,
-                        )
+                if job["id"] in kept_ids or job["id"] in _LABELED_OK:
+                    raise SystemExit(f"refusing to relabel {job['id']}")
+                pending[pool.submit(acquire_candidate, job)] = job
+            if not pending and not label_pending:
+                break
+            done: set[Any] = set()
+            if pending:
+                timeout = 5 if label_pending else 120
+                done, _pending_left = wait(pending, return_when=FIRST_COMPLETED, timeout=timeout)
+            if not done and pending:
+                harvest_labels(False)
+                if not label_pending:
+                    print(
+                        "still rendering "
+                        + " ".join(item["id"] for item in list(pending.values())[:6]),
+                        flush=True,
+                    )
+                continue
+            for future in done:
+                job = pending.pop(future)
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = _failure(job, f"{type(exc).__name__}: {exc}")
+                plan.finish_job(job)
+                if result.get("ok") and "rendered" in result:
+                    result = _finish_rendered(result, encoders)
+                if not result.get("ok"):
+                    rejected.append(result)
+                    print(f"replace {job['source']} {job['id']}: {result.get('reason')}", flush=True)
+                    _write_state(packed, labels, rejected, kept_ids)
                     continue
-                for future in done:
-                    job = pending.pop(future)
-                    try:
-                        result = future.result()
-                    except Exception as exc:
-                        result = _failure(job, f"{type(exc).__name__}: {exc}")
-                    plan.finish_job(job)
-                    if result.get("ok") and "rendered" in result:
-                        result = _finish_rendered(result, encoders)
-                    if not result.get("ok"):
-                        rejected.append(result)
-                        print(f"replace {job['source']} {job['id']}: {result.get('reason')}", flush=True)
-                        _write_state(packed, labels, rejected, kept_ids)
-                        continue
-                    row = result["row"]
-                    packed[row["id"]] = row
-                    if row["id"] in kept_ids or row["id"] in _LABELED_OK:
-                        raise SystemExit(f"refusing to relabel {row['id']}")
-                    label_pending[label_pool.submit(_label_with_retries, row)] = row
-                harvest_labels(block=not pending)
+                row = result["row"]
+                packed[row["id"]] = row
+                if row["id"] in kept_ids or row["id"] in _LABELED_OK:
+                    raise SystemExit(f"refusing to relabel {row['id']}")
+                label_pending[label_pool.submit(_label_with_retries, row)] = row
+            harvest_labels(block=not pending)
     _write_state(packed, labels, rejected, kept_ids)
     _check_views(signature)
     return labels
@@ -610,8 +629,8 @@ def main():
 
 class _Plan:
     def __init__(self, jobs, blocked, rejected, skip_ids=()):
-        self.ycb = deque()
-        self.buckets = {
+        self.ycb: deque[Any] = deque()
+        self.buckets: dict[str, dict[str, deque[Any]]] = {
             source: {material: deque() for material in MATERIAL_CLASSES}
             for source in ("gso", "abo")
         }
@@ -712,7 +731,7 @@ class _Plan:
 
 
 def _gso_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL, max_pages=80):
-    grouped = {material: [] for material in MATERIAL_CLASSES}
+    grouped: dict[str, list[Any]] = {material: [] for material in MATERIAL_CLASSES}
     seen = set()
     consecutive_failures = 0
     page_limit = 400 if max_pages is None else max_pages
@@ -754,7 +773,7 @@ def _gso_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL, max_page
         print(f"gso page {page} models {added}", flush=True)
         if added == 0 and per_material is not None:
             break
-    jobs = []
+    jobs: list[Any] = []
     for material, items in grouped.items():
         if per_material is None:
             jobs.extend(_job_from_item("gso", item) for item in items)
@@ -769,7 +788,7 @@ def _abo_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL):
         text = gzip.decompress(raw).decode("utf-8")
     else:
         text = raw.decode("utf-8")
-    grouped = {material: [] for material in MATERIAL_CLASSES}
+    grouped: dict[str, list[Any]] = {material: [] for material in MATERIAL_CLASSES}
     wanted = {}
     for row in csv.DictReader(io.StringIO(text)):
         rel = row.get("path") or ""
@@ -814,19 +833,18 @@ def _abo_jobs(blocked, occupied_names, per_material=QUEUE_PER_MATERIAL):
             "kind": "mesh",
         })
     print(f"abo named {named} of {len(wanted)}", flush=True)
+    jobs: list[Any] = []
     if per_material is None:
         if wanted and named / len(wanted) < 0.5:
             print(
                 f"abo names covered {named} of {len(wanted)}; keeping mesh ids",
                 flush=True,
             )
-        jobs = []
         for items in grouped.values():
             jobs.extend(_job_from_item("abo", item) for item in items)
         return jobs
     if wanted and named / len(wanted) < 0.5:
         raise SystemExit("ABO product names were missing for more than half of the models")
-    jobs = []
     for material, items in grouped.items():
         preferred = _prefer_faces(items, QUEUE_PER_MATERIAL + 20)
         ordered = _queue_material("abo", preferred, occupied_names)
@@ -859,7 +877,7 @@ def _prefer_faces(items, need):
 
 
 def _abo_names(wanted):
-    found = {}
+    found: dict[str, str] = {}
     shards = [str(index) for index in range(10)] + list("abcdef")
     for shard in shards:
         if len(found) >= len(wanted):
@@ -871,6 +889,7 @@ def _abo_names(wanted):
         except Exception as exc:
             print(f"abo listings_{shard} failed: {exc}", flush=True)
             continue
+        stream: gzip.GzipFile | io.BytesIO
         if raw[:2] == b"\x1f\x8b":
             stream = gzip.GzipFile(fileobj=io.BytesIO(raw))
         else:
@@ -964,7 +983,7 @@ def _label_with_retries(row):
         "prior_input": row["prior_input"],
         "prior_input_shape": row["prior_input_shape"],
     }
-    record = None
+    record: dict[str, Any] | None = None
     try:
         for attempt in range(4):
             record = _label_object(key, obj)
@@ -976,6 +995,8 @@ def _label_with_retries(row):
             time.sleep(20 * (attempt + 1))
     except Exception as exc:
         raise SystemExit(redact(str(exc), key)) from None
+    if record is None:
+        raise SystemExit("label was not attempted")
     if record.get("error"):
         record["error"] = redact(record["error"], key)
     if record.get("status") == "ok":
@@ -1079,7 +1100,7 @@ def _write_labels(labels):
 
 
 def _load_labels():
-    found = {}
+    found: dict[str, Any] = {}
     if not LABELS_PATH.is_file():
         return found
     for line in LABELS_PATH.read_text(encoding="utf-8").splitlines():
@@ -1309,7 +1330,7 @@ def _obj_face_lines(path):
     count = 0
     with path.open("rb") as handle:
         for line in handle:
-            if line.startswith(b"f ") or line.startswith(b"f\t"):
+            if line.startswith((b"f ", b"f\t")):
                 count += 1
     return count
 

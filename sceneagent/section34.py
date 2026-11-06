@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from sceneagent.agent_loop import parse_material_class
 from sceneagent.gemini_client import PAPER_MODEL_ID
@@ -50,8 +51,8 @@ def equation2_vote(object_name, vlm_class=None, physics_prior=None, vlm_confiden
     with ``class`` and ``confidence``, or None. ``claimed_mlp`` stays false
     unless the caller sets ``from_mlp`` on a prior this process did not train.
     """
-    sources = []
-    voters = []
+    sources: list[dict[str, Any]] = []
+    voters: list[dict[str, Any]] = []
     if physics_prior is None:
         sources.append({
             "source": "physics_prior",

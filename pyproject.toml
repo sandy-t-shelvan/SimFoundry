@@ -1,0 +1,65 @@
+# Tooling for the sceneagent CPU gate. Packaging still goes through setup.py.
+# The selectors below are scoped to sceneagent/ so this file does not lint or
+# type-check the SimFoundry pipelines.
+
+[tool.ruff]
+target-version = "py311"
+src = ["sceneagent"]
+include = ["sceneagent/**/*.py"]
+extend-exclude = [".ruff_cache"]
+
+[tool.ruff.lint]
+# Ruff 0.17.4's default rule set, minus two rules that would change contracts
+# this tree already tests:
+# BLE001 — download, label, and tool wrappers catch Exception so the failure
+# is recorded and the run continues. Narrowing them would turn that record
+# into a crash.
+# TRY004 — parsers and the MessyKitchens entry point raise ValueError for a
+# bad type. tests/sceneagent locks ValueError. TypeError would be a different
+# contract.
+ignore = ["BLE001", "TRY004"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sceneagent"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "."
+files = ["sceneagent"]
+packages = ["sceneagent"]
+# Check bodies of functions that have no annotations. Requiring an annotation
+# on every signature (disallow_untyped_defs) is a separate pass.
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+show_error_codes = true
+
+# numpy and Pillow are installed in the CPU job and checked at the boundary.
+# The modules below are either absent from that job or, for trimesh, published
+# with a union (`trimesh.load` -> Geometry) that does not expose Scene.geometry.
+# Skip them instead of ignoring sceneagent modules that import them.
+[[tool.mypy.overrides]]
+module = [
+    "trimesh",
+    "trimesh.*",
+    "groundingdino",
+    "groundingdino.*",
+    "torch",
+    "torch.*",
+    "mujoco",
+    "mujoco.*",
+    "sam2",
+    "sam2.*",
+    "simple_lama_inpainting",
+    "simple_lama_inpainting.*",
+    "open_clip",
+    "open_clip.*",
+    "timm",
+    "timm.*",
+    "scipy",
+    "scipy.*",
+    "psutil",
+    "psutil.*",
+]
+ignore_missing_imports = true
+follow_imports = "skip"

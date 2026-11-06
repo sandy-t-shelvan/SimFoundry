@@ -132,7 +132,7 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
     except Exception:
         tree = None
     base_scale, _, _ = initial_similarity(source, target)
-    keep_count = max(3, int(round(float(trim_keep) * len(source))))
+    keep_count = max(3, round(float(trim_keep) * len(source)))
     best = None
     for seed_index, seed in enumerate(rotation_seeds()):
         scale = base_scale
@@ -159,6 +159,8 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
                 "target_index": index,
                 "aligned": transformed,
             }
+    if best is None:
+        raise RuntimeError("trimmed similarity ICP produced no seed")
     inlier_distance = best["distance"][best["inlier_index"]]
     return {
         "scale": best["scale"],
@@ -168,8 +170,8 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
         "trim_keep": float(trim_keep),
         "iterations": int(iterations),
         "inlier_count": int(keep_count),
-        "source_count": int(len(source)),
-        "target_count": int(len(target)),
+        "source_count": len(source),
+        "target_count": len(target),
         "distance": best["distance"],
         "inlier_index": best["inlier_index"],
         "target_index": best["target_index"],
@@ -194,7 +196,7 @@ def measure_residuals(result, target):
         raise ValueError("target points are coincident")
     median = float(np.median(distance))
     p90 = float(np.percentile(distance, 90))
-    covered = len(set(int(index) for index in result["target_index"][result["inlier_index"]]))
+    covered = len({int(index) for index in result["target_index"][result["inlier_index"]]})
     return {
         "normalized_median": median / target_rms,
         "p90": p90,

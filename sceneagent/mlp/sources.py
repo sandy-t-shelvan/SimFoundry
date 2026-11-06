@@ -14,14 +14,16 @@ import csv
 import gzip
 import io
 import json
+import math
 import re
 import shutil
+import tarfile
 import urllib.error
 import urllib.request
 import zipfile
-import tarfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sceneagent.mlp.check import CheckResult, check_sample, rgb_image_problem
 
@@ -155,7 +157,7 @@ def download_pilot(root=None, counts=None, accept=None, protected_samples=None):
     root = Path(root) if root is not None else DEFAULT_ROOT
     counts = dict(PILOT_COUNTS if counts is None else counts)
     root.mkdir(parents=True, exist_ok=True)
-    kept = {source: [] for source in SOURCES}
+    kept: dict[str, list[Any]] = {source: [] for source in SOURCES}
     rejected = []
     have = set()
     for sample in protected_samples or []:
@@ -350,11 +352,11 @@ def _install(candidate: Candidate, object_dir: Path):
     _extract(archive, object_dir)
     archive.unlink(missing_ok=True)
     _flatten_single_root(object_dir)
-    mesh_path = _select_mesh(object_dir)
+    selected_mesh = _select_mesh(object_dir)
     image_path = _select_image(object_dir)
-    if mesh_path is None:
+    if selected_mesh is None:
         raise ValueError("archive did not contain an OBJ, glTF, or SDF")
-    return mesh_path, image_path, candidate.name
+    return selected_mesh, image_path, candidate.name
 
 
 def _display_name(candidate: Candidate, current: str, mesh_path: Path) -> str:
@@ -660,17 +662,19 @@ def _lookup_abo_name(model_id: str) -> str | None:
         print(f"[abo] looking up product name in listings_{shard}")
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=60) as response:
-                with gzip.GzipFile(fileobj=response) as uncompressed:
-                    for line in uncompressed:
-                        if needle not in line:
-                            continue
-                        record = json.loads(line)
-                        if record.get("item_id") != model_id and record.get("3dmodel_id") != model_id:
-                            continue
-                        name = _english_name(record.get("item_name"))
-                        if name:
-                            return name
+            with (
+                urllib.request.urlopen(request, timeout=60) as response,
+                gzip.GzipFile(fileobj=response) as uncompressed,
+            ):
+                for line in uncompressed:
+                    if needle not in line:
+                        continue
+                    record = json.loads(line)
+                    if record.get("item_id") != model_id and record.get("3dmodel_id") != model_id:
+                        continue
+                    name = _english_name(record.get("item_name"))
+                    if name:
+                        return name
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 continue
@@ -701,7 +705,7 @@ def _english_name(value) -> str | None:
 
 
 def _download(url: str, dest: Path) -> None:
-    last_error = None
+    last_error: BaseException | None = None
     for _try in range(2):
         try:
             request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -714,6 +718,8 @@ def _download(url: str, dest: Path) -> None:
             if isinstance(exc, urllib.error.HTTPError):
                 raise
             last_error = exc
+    if last_error is None:
+        raise RuntimeError("download failed")
     raise last_error
 
 
@@ -758,7 +764,8 @@ def _safe_id(value: str) -> str:
 
 
 def math_finite_positive(value: float) -> bool:
-    return value == value and value not in (float("inf"), float("-inf")) and value > 0
+    # NaN and infinities fail isfinite. `value == value` was the NaN half of that.
+    return math.isfinite(value) and value > 0
 
 
 def main() -> None:

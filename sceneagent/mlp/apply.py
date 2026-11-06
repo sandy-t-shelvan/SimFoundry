@@ -27,7 +27,12 @@ from sceneagent.mlp.prior import (
     SLOT_RIGIDITY,
     PhysicsPrior,
 )
-from sceneagent.physics import build_physics_record, proposals_for_prior, store_log_mass_density, vote_material
+from sceneagent.physics import (
+    build_physics_record,
+    proposals_for_prior,
+    store_log_mass_density,
+    vote_material,
+)
 from sceneagent.taxonomy import BODY_TYPES, COLLISION_PRIMITIVES, MATERIAL_CLASSES
 
 

@@ -117,7 +117,7 @@ def run_sam2(image_path, box=None, config_name=None, weights_path=None, gpu_busy
         "status": "ran",
         "weights_loaded": True,
         "device": device,
-        "mask_count": int(len(masks)),
+        "mask_count": len(masks),
         "scores": [float(score) for score in scores],
         "reason": "SAM 2 ran. This is not the paper's SAM vit_h and does not close section 3.3.",
     }

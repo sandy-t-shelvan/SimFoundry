@@ -82,7 +82,7 @@ class GeminiClient:
         }
 
     def list_model_ids(self):
-        names = []
+        names: list[str] = []
         page = ""
         for _ in range(5):
             url = f"{API_ROOT}/models"

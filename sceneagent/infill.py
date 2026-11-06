@@ -15,6 +15,7 @@ from __future__ import annotations
 import struct
 import zlib
 from pathlib import Path
+from typing import Any
 
 
 def write_rgb_png(path, rows):
@@ -94,7 +95,7 @@ def detect_plane(association):
         return None
     sample = list(centers)[:5000]
     axes = list(zip(*sample))
-    best = None
+    best: dict[str, Any] | None = None
     for index, axis in enumerate("xyz"):
         values = [float(value) for value in axes[index]]
         spread = max(values) - min(values)
@@ -140,10 +141,10 @@ def plane_fill_from_association(association, out_path):
     if kept is not None and total:
         removed = min(0.9, max(0.05, 1.0 - (kept / total)))
     side = 16
-    hole = max(1, int(round(side * removed)))
+    hole = max(1, round(side * removed))
     rows = []
     for y in range(side):
-        row = []
+        row: list[int] = []
         for x in range(side):
             if x < hole and y < hole:
                 row.extend((0, 0, 0))
@@ -193,6 +194,9 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
             "lama": "not_called",
             "reason": "no image in, no image out",
         }
+    # `exists` already requires a real file. Restate it so the type checker
+    # can see that the path used below is present.
+    assert source is not None
     backend, why = _lama_backend()
     if backend is None:
         return {
@@ -206,8 +210,8 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
             "image_in": str(source),
             "reason": why,
         }
-    from simple_lama_inpainting import SimpleLama
     from PIL import Image
+    from simple_lama_inpainting import SimpleLama
 
     image = Image.open(source).convert("RGB")
     if mask_path and Path(mask_path).is_file():

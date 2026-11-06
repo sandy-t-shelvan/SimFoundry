@@ -46,5 +46,5 @@ def gaussian_belongs(projects_inside_mask, depth, cell_min_depth):
 
 
 def mask_cell_side_px(short_side_px):
-    side = int(round(float(short_side_px) / CELL_DIVISOR))
+    side = round(float(short_side_px) / CELL_DIVISOR)
     return min(CELL_MAX, side)

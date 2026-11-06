@@ -12,10 +12,13 @@ import json
 from pathlib import Path
 
 import numpy as np
-
-from sceneagent.mlp.contract import PriorContractError, pack_prior_input, save_prior_input
 from PIL import Image
 
+from sceneagent.mlp.contract import (
+    PriorContractError,
+    pack_prior_input,
+    save_prior_input,
+)
 from sceneagent.mlp.splat_from_mesh import (
     CLIP_SIZE,
     VIEW_SIZE,
@@ -80,6 +83,8 @@ class FeatureEncoders:
     def _dino_patches(self, rgb):
         model, mean, std = self._load_dino()
         torch = self._torch
+        if torch is None:
+            raise PriorContractError("feature stack is not loaded")
         batch = _batch_on_model(torch, model, _normalize(torch, rgb, mean, std))
         with torch.inference_mode():
             tokens = model.forward_features(batch)
@@ -94,6 +99,8 @@ class FeatureEncoders:
     def _clip_patches(self, rgb):
         model, mean, std = self._load_clip()
         torch = self._torch
+        if torch is None:
+            raise PriorContractError("feature stack is not loaded")
         if rgb.shape != (CLIP_SIZE, CLIP_SIZE, 3):
             raise PriorContractError(f"OpenCLIP view must be {CLIP_SIZE} square, got {rgb.shape}")
         batch = _batch_on_model(torch, model, _normalize(torch, rgb, mean, std))
@@ -275,8 +282,8 @@ def _batch_on_model(torch, model, batch):
 
 def _import_feature_stack():
     try:
-        import torch
         import timm
+        import torch
     except ImportError as exc:
         raise PriorContractError(
             "DINOv2 and OpenCLIP are not installed on this machine; "
@@ -296,7 +303,7 @@ def _normalize(torch, rgb, mean, std):
 
 def _square_grid(patches, image_size, patch_size, name):
     count = int(patches.shape[1])
-    side = int(round(count ** 0.5))
+    side = round(count ** 0.5)
     if side * side != count or image_size % patch_size != 0 or side != image_size // patch_size:
         raise PriorContractError(
             f"{name} patch count {count} does not match a {image_size}/{patch_size} grid"

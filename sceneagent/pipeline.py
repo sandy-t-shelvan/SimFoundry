@@ -9,13 +9,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from sceneagent.adapter import load_document
 from sceneagent.alignment import accept_alignment
 from sceneagent.evaluation import sister_grid, trial_starts
 from sceneagent.physics import build_physics_record
 from sceneagent.report import render_report
-from sceneagent.sisters import appearance_sister, geometry_sisters, scene_sisters, task_sisters
+from sceneagent.sisters import (
+    appearance_sister,
+    geometry_sisters,
+    scene_sisters,
+    task_sisters,
+)
 from sceneagent.skills import plan_steps
 from sceneagent.taxonomy import keyword_material
 
@@ -30,8 +36,7 @@ def _write(path, payload):
 
 def _proposals_for(obj):
     proposals = [keyword_material(obj["name"])]
-    for extra in obj.get("proposals") or []:
-        proposals.append(extra)
+    proposals.extend(obj.get("proposals") or [])
     return proposals
 
 
@@ -47,7 +52,7 @@ def _package_body(record, movable):
 
 def run_capture(capture, out_dir):
     out = Path(out_dir)
-    ledger = []
+    ledger: list[dict[str, Any]] = []
     steps = plan_steps()
     _write(out / "plan.json", {"scene_name": capture["scene_name"], "source": capture["source"], "steps": steps})
     ledger.append({"item": "plan", "decision": "accept", "path": "plan.json"})

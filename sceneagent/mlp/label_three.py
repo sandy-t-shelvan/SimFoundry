@@ -24,11 +24,12 @@ import urllib.request
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from sceneagent.gemini_client import API_ROOT, redact
-from sceneagent.mlp.labels import REQUIRED_LABEL_KEYS, _BESIDE_KEYS, parse_label
+from sceneagent.mlp.labels import _BESIDE_KEYS, REQUIRED_LABEL_KEYS, parse_label
 from sceneagent.taxonomy import BODY_TYPES, COLLISION_PRIMITIVES, MATERIAL_CLASSES
 
 MODEL_ID = "gemini-3.8-flash"
@@ -293,8 +294,8 @@ class GeminiBudget:
         self._clock = clock or time.monotonic
         self._sleep = sleeper or time.sleep
         self._lock = threading.Lock()
-        self._calls = deque()
-        self._tokens = deque()
+        self._calls: deque[float] = deque()
+        self._tokens: deque[dict[str, Any]] = deque()
         self._day = None
         self._day_count = 0
         self._load()

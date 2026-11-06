@@ -22,9 +22,9 @@ from __future__ import annotations
 import math
 import warnings
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 import numpy as np
 import trimesh
@@ -237,23 +237,23 @@ def _sdf_meshes(sdf_path: Path) -> tuple[list[Path], list[str]]:
         tree = ET.parse(sdf_path)
     except ET.ParseError as exc:
         return [], [f"SDF is not readable XML: {exc}"]
-    uris = []
-    seen = set()
+    uris: list[str] = []
+    seen: set[str] = set()
     for mesh in tree.getroot().iter("mesh"):
-        for uri in mesh.iter("uri"):
-            text = uri.text.strip() if uri.text else ""
+        for element in mesh.iter("uri"):
+            text = element.text.strip() if element.text else ""
             if text and text not in seen:
                 seen.add(text)
                 uris.append(text)
     if not uris:
         return [], ["SDF does not reference a mesh"]
 
-    targets = []
-    reasons = []
-    for uri in uris:
-        resolved, problem = _resolve_mesh_uri(sdf_path, uri)
-        if problem:
-            reasons.append(problem)
+    targets: list[Path] = []
+    reasons: list[str] = []
+    for mesh_uri in uris:
+        resolved, problem = _resolve_mesh_uri(sdf_path, mesh_uri)
+        if problem or resolved is None:
+            reasons.append(problem or "referenced mesh is missing")
             continue
         container = _container_problem(resolved, kind="referenced mesh")
         if container:
@@ -329,7 +329,15 @@ def _palette_has_color(image: Image.Image) -> bool:
     colors = rgb.getcolors(maxcolors=256 * 256)
     if not colors:
         return True
-    return any(red != green or green != blue for _count, (red, green, blue) in colors)
+    for _count, pixel in colors:
+        # RGB conversion yields channel tuples. The float arm is the mode-F
+        # shape of getcolors, which this function does not feed.
+        if not isinstance(pixel, tuple) or len(pixel) < 3:
+            continue
+        red, green, blue = pixel[0], pixel[1], pixel[2]
+        if red != green or green != blue:
+            return True
+    return False
 
 
 def _as_path(value) -> Path | None:

@@ -25,7 +25,11 @@ import numpy as np
 import trimesh
 from PIL import Image
 
-from sceneagent.mlp.contract import PriorContractError, geometry_from_ply, write_gaussian_ply
+from sceneagent.mlp.contract import (
+    PriorContractError,
+    geometry_from_ply,
+    write_gaussian_ply,
+)
 
 
 def _agent_log(hypothesis_id, location, message, data, run_id="post-fix"):
@@ -73,20 +77,20 @@ def _triangle_mesh_path(mesh_path):
         root = ET.parse(path).getroot()
     except ET.ParseError as exc:
         raise PriorContractError(f"SDF is not readable XML: {exc}") from exc
-    uris = []
+    uris: list[str] = []
     for mesh in root.iter("mesh"):
-        for uri in mesh.iter("uri"):
-            text = uri.text.strip() if uri.text else ""
+        for element in mesh.iter("uri"):
+            text = element.text.strip() if element.text else ""
             if text and text not in uris:
                 uris.append(text)
     if not uris:
         raise PriorContractError("SDF does not reference a mesh")
     base = path.parent.resolve()
-    for uri in uris:
-        lowered = uri.lower()
+    for mesh_uri in uris:
+        lowered = mesh_uri.lower()
         if lowered.startswith(("http://", "https://")):
             raise PriorContractError("mesh uri is remote")
-        text = uri.strip().replace("\\", "/")
+        text = mesh_uri.strip().replace("\\", "/")
         if lowered.startswith("model://"):
             rest = text.split("://", 1)[1]
             parts = rest.split("/", 1)
@@ -176,7 +180,7 @@ def gaussians_from_mesh(mesh, image, uv):
         "opacity": opacity,
         "rotation": quaternions,
         "f_dc": f_dc,
-        "triangles_in": int(len(faces)),
+        "triangles_in": len(faces),
         "dropped_geometry": dropped,
     }
 
@@ -232,10 +236,8 @@ def choose_front_view(vertices, faces, uv=None, image=None, exclude=()):
     for _score, aspect, projected, direction in ranked[1:]:
         if abs(float(np.dot(direction, front_dir))) > 0.85:
             continue
-        if aspect > alternative:
-            alternative = aspect
-        if projected > alternative_projected:
-            alternative_projected = projected
+        alternative = max(alternative, aspect)
+        alternative_projected = max(alternative_projected, projected)
     axes = _axes_from_front(front_dir)
     axes["front_aspect"] = float(best_aspect)
     axes["alternative_aspect"] = float(alternative)
@@ -425,7 +427,7 @@ def _candidate_directions(vertices):
 
 
 def _unique_directions(directions):
-    kept = []
+    kept: list[np.ndarray] = []
     for direction in directions:
         direction = np.asarray(direction, dtype=np.float64)
         norm = float(np.linalg.norm(direction))
@@ -592,19 +594,19 @@ def _surface_label_gone(vertices, faces, image, uv, camera, rgb):
         uvs = uv[face]
         samples_uv = grid @ uvs
         texture_rgb = _sample_texture(image, samples_uv) * 255.0
-        render_rgb = []
+        render_samples = []
         screen = grid @ np.stack([xs, ys], axis=1)
         for sx, sy in screen:
-            xi = int(round(float(sx)))
-            yi = int(round(float(sy)))
+            xi = round(float(sx))
+            yi = round(float(sy))
             if xi < 0 or yi < 0 or xi >= rgb.shape[1] or yi >= rgb.shape[0]:
                 continue
             if zbuf is not None and not np.isfinite(zbuf[yi, xi]):
                 continue
-            render_rgb.append(rgb[yi, xi].astype(np.float32))
-        if len(render_rgb) < 8 or not np.isfinite(texture_rgb).all():
+            render_samples.append(rgb[yi, xi].astype(np.float32))
+        if len(render_samples) < 8 or not np.isfinite(texture_rgb).all():
             continue
-        render_rgb = np.asarray(render_rgb, dtype=np.float32)
+        render_rgb = np.asarray(render_samples, dtype=np.float32)
         tex_std = float(texture_rgb.std())
         render_std = float(render_rgb.std())
         compared += 1
@@ -961,10 +963,10 @@ def _rasterize(vertices, faces, vertex_rgb, camera, uv=None, image=None, vertex_
             continue
         xs = px[face]
         ys = py[face]
-        minx = max(int(math.floor(xs.min())), 0)
-        maxx = min(int(math.ceil(xs.max())), width - 1)
-        miny = max(int(math.floor(ys.min())), 0)
-        maxy = min(int(math.ceil(ys.max())), height - 1)
+        minx = max(math.floor(xs.min()), 0)
+        maxx = min(math.ceil(xs.max()), width - 1)
+        miny = max(math.floor(ys.min()), 0)
+        maxy = min(math.ceil(ys.max()), height - 1)
         if minx > maxx or miny > maxy:
             continue
         grid_y, grid_x = np.mgrid[miny : maxy + 1, minx : maxx + 1]

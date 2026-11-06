@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Pinned CPU packages for .github/workflows/sceneagent-ci.yml.
+# numpy 2.5 requires Python >= 3.12. This job stays on 3.11, so 2.4.6 is the
+# newest numpy that still installs there.
+
+ruff==0.17.4
+mypy==2.4.1
+numpy==2.4.6
+pytest==9.2.0
+trimesh==5.2.0
+pillow==13.0.0

@@ -19,7 +19,6 @@ from sceneagent.gemini_client import PAPER_MODEL_ID
 from sceneagent.mjcf_contract import write_physics_mjcf
 from sceneagent.taxonomy import MATERIAL_CLASSES
 
-
 # The model is asked to plan from the input state. The prompt does not
 # contain a JSON object to copy and does not name a figure-5 harness.
 PLAN_PROMPT = (

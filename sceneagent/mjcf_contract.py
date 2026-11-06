@@ -75,9 +75,9 @@ def write_physics_mjcf(contract, path):
                     f'      <geom name="{name}_geom" type="{geom_type}" size="{_size_attr(geom_type)}"'
                     f'{mass_attr}{density_attr}{friction}/>'
                 ),
-                f"      <!-- material_class={escape(str(obj.get('material_class')))} "
+                (f"      <!-- material_class={escape(str(obj.get('material_class')))} "
                 f"mass_source={mass_note} restitution={obj.get('restitution')} "
-                f"body_type={escape(str(obj.get('body_type')))} -->",
+                f"body_type={escape(str(obj.get('body_type')))} -->"),
                 "    </body>",
             ])
         )

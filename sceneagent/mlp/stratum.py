@@ -8,8 +8,10 @@ a small extent and a large extent when the catalog has both.
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
+from typing import Any
 
 from sceneagent.taxonomy import MATERIAL_CLASSES
 
@@ -277,7 +279,7 @@ def labels_should_stop(records):
     unknown = sum(row["material"] == "unknown" for row in ok) / len(ok)
     if unknown > 0.25:
         return f"unknown is {unknown:.0%} of labels"
-    grouped = {}
+    grouped: dict[str, list[Any]] = {}
     for row in ok:
         grouped.setdefault(row.get("source") or "", []).append(row)
     for source, rows in grouped.items():
@@ -326,7 +328,7 @@ def _extent_value(row):
             number = float(max(value))
         except (TypeError, ValueError):
             return None
-    if number != number or number <= 0.0:
+    if math.isnan(number) or number <= 0.0:
         return None
     return number
 

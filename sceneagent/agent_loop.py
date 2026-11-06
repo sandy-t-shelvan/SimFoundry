@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from sceneagent.taxonomy import MATERIAL_CLASSES
 
@@ -226,7 +227,7 @@ def record_and_repair(out_dir, step_id, result, tools=None, context=None):
 
     Does not invent a pose when the repair tool is missing or returns none.
     """
-    calls = []
+    calls: list[str] = []
     entries = []
     for item, is_repair in consider_repair(step_id, result, tools, context, calls):
         entries.append(append_step(out_dir, step_id, item, repair=is_repair))
@@ -256,6 +257,7 @@ def run_agent_loop(out_dir, tools, plan, context=None):
     calls = []
     for step_id in chosen:
         tool = tools.get(step_id)
+        result: dict[str, Any]
         if tool is None:
             result = {"ok": False, "artifact": None, "reason": "no tool registered", "detail": {}}
         else:

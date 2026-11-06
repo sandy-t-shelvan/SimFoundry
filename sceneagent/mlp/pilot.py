@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -24,7 +25,12 @@ from sceneagent.mlp.label_three import (
     _write_jsonl,
     load_api_key,
 )
-from sceneagent.mlp.represent import MANIFEST, FeatureEncoders, _object_dir, represent_sample
+from sceneagent.mlp.represent import (
+    MANIFEST,
+    FeatureEncoders,
+    _object_dir,
+    represent_sample,
+)
 from sceneagent.mlp.sources import (
     MAX_PILOT_FACES,
     PROTECTED_IDS,
@@ -57,7 +63,7 @@ def run_pilot(stage="all"):
                 _write_manifest(_manifest_rows(protected, {}), [])
             print("protected views ready", flush=True)
             return
-    reports = {}
+    reports: dict[str, Any] = {}
     if stage in {"acquire", "all"}:
         encoders = FeatureEncoders()
 

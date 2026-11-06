@@ -81,7 +81,7 @@ def _mesh_block(name, vertices, faces, physics):
         _float_attr("physics:dynamicFriction", physics.get("friction_dynamic")),
         _float_attr("physics:restitution", physics.get("restitution")),
         f'        string sceneagent:body_type = "{_literal(physics.get("body_type"))}"',
-        f'        string sceneagent:collision = "mesh"',
+        '        string sceneagent:collision = "mesh"',
         f'        string sceneagent:material_class = "{_literal(physics.get("material_class"))}"',
         '        def Mesh "geometry"',
         "        {",

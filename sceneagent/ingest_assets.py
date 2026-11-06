@@ -169,7 +169,7 @@ def _mean_ppm(data):
 def _ppm_header(data):
     if not data.startswith(b"P6"):
         raise ValueError("not a binary PPM")
-    tokens = []
+    tokens: list[int] = []
     index = 2
     while len(tokens) < 3:
         while index < len(data) and data[index] in b" \t\r\n":
