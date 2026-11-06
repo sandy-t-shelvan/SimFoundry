@@ -137,12 +137,21 @@ def video_plan_steps():
     ]
 
 
-def run_video(path, out_dir):
-    """Write the video manifest. Run COLMAP when the binary and ffmpeg are on PATH."""
+def run_video(path, out_dir, fps=1, max_frames=16, color_calibrate=True):
+    """Write the video manifest. Run COLMAP when the binary and ffmpeg are on PATH.
+
+    ``fps`` and ``max_frames`` are forwarded to ``run_poses``. The defaults
+    stay 1 fps and 16 frames. ``color_calibrate`` scales each sampled frame
+    on its own before feature extraction.
+    """
     from sceneagent.catalog import rows
+    from sceneagent.colmap_stage import run_poses, validate_frame_limits
     from sceneagent.external_tools import probe_environment
     from sceneagent.pipeline import write_plan
 
+    # A bad cap fails before any manifest is written, including when COLMAP
+    # is absent and the pose call itself is skipped.
+    validate_frame_limits(fps, max_frames)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_plan(out, Path(path).stem, VIDEO_SOURCE, video_plan_steps())
@@ -152,16 +161,23 @@ def run_video(path, out_dir):
     (out / "tool_probe.json").write_text(
         json.dumps(probe, indent=2) + "\n", encoding="utf-8"
     )
-    from sceneagent.colmap_stage import run_poses
-
     colmap = next(item for item in probe if item["sub_block"] == "COLMAP camera poses")
     poses = (
-        run_poses(path, out / "colmap")
+        run_poses(
+            path,
+            out / "colmap",
+            fps=fps,
+            max_frames=max_frames,
+            color_calibrate=color_calibrate,
+        )
         if colmap["available"]
         else {
             "ran": False,
             "ok": False,
             "reason": "colmap or ffmpeg is not on PATH",
+            "fps": fps,
+            "max_frames": max_frames,
+            "color_calibrate": bool(color_calibrate),
         }
     )
     (out / "colmap_poses.json").write_text(
