@@ -141,6 +141,8 @@ def _entry(step_id, attempt, result, repair):
         "artifact": result.get("artifact"),
         "reason": result.get("reason") or "",
     }
+    # ICP puts the stored SAM 3D start and the iteration-1 constants on the
+    # ledger line. Other steps leave these keys out of their detail.
     for key in (
         "model_id",
         "paper_model_id",
@@ -148,6 +150,10 @@ def _entry(step_id, attempt, result, repair):
         "paper_http_status",
         "material_class",
         "used_paper_model",
+        "gate",
+        "pose_initialization",
+        "alignment_constants",
+        "residuals",
     ):
         if key in detail:
             entry[key] = detail[key]
