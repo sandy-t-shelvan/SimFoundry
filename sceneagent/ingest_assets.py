@@ -289,21 +289,24 @@ def color_calibration_directory(directory):
     return report
 
 
+_CHANNEL_NAMES = ("red", "green", "blue")
+
+
 def _bounded_channel_gain(mean, center):
     """Return ``(raw, applied)`` for one channel.
 
     ``raw`` is the computed gain before the closed interval
-    ``[OURS_GAIN_MIN, OURS_GAIN_MAX]``. ``applied`` is what scales the
-    pixels. They differ only when that interval clamps ``raw``. A
-    non-positive mean uses 1 for both, because no scale maps 0 onto a
-    positive target, and that substitution is not a clamp. Non-finite
-    inputs are rejected. This scale is ours, not the paper's unpublished
-    correction.
+    ``[OURS_GAIN_MIN, OURS_GAIN_MAX]``, or ``None`` when ``mean`` is not
+    positive. JSON writes that ``None`` as null so a zero-mean channel is
+    not stored as a real gain of 1. ``applied`` still scales the pixels
+    and is 1 in that case. They differ only when the interval clamps a
+    finite ``raw``. A non-positive mean is not a clamp. Non-finite inputs
+    are rejected. This scale is ours, not the paper's unpublished correction.
     """
     if not math.isfinite(mean) or not math.isfinite(center):
         raise ValueError("color calibration means must be finite")
     if mean <= 0.0:
-        return 1.0, 1.0
+        return None, 1.0
     raw = center / mean
     if not math.isfinite(raw):
         raise ValueError("color calibration gain is not finite")
@@ -322,11 +325,15 @@ def per_image_color_gains(means):
     ``color_calibration_report`` takes. Each image gets its own triple.
     Reusing one triple for every image would be a global correction, which
     this function does not do. The target name and the three median values
-    are part of the result so a manifest can record them. ``gains_by_image``
-    is the applied triple. ``raw_gain_rgb`` is the pre-clamp triple.
-    ``clamped`` is true when any channel was clamped, and
+    are part of the result so a manifest can record them.     ``gains_by_image``
+    is the applied triple. ``raw_gain_rgb`` is the pre-clamp triple, with
+    ``None`` (JSON null) on a channel whose mean is not positive.
+    ``clamped`` is true when any finite channel was clamped, and
     ``clamped_channels`` is that fact per channel. ``clamped_images`` lists
-    the names where ``clamped`` is true. The section 3.2 color gap stays
+    the names where ``clamped`` is true. ``uncomputable_channels`` maps an
+    image name to the channel names (``red``, ``green``, ``blue``) whose
+    means are not positive, and omits images with none. A missing raw gain
+    is not a clamp. The section 3.2 color gap stays
     partial: the paper names per-image calibration and does not publish
     this diagonal scale.
     """
@@ -346,10 +353,12 @@ def per_image_color_gains(means):
     )
     gains = []
     gains_by_image = {}
-    raw_gain_rgb = {}
+    raw_gain_rgb: dict[str, list[float | None]] = {}
     clamped = {}
     clamped_channels = {}
     clamped_images = []
+    # Only images with a non-positive channel mean. Absence means every raw gain was computed.
+    uncomputable_channels: dict[str, list[str]] = {}
     for path, rgb in rows:
         pairs = [
             _bounded_channel_gain(mean, center)
@@ -358,7 +367,13 @@ def per_image_color_gains(means):
         raw_gain = [raw for raw, _applied in pairs]
         applied_gain = [applied for _raw, applied in pairs]
         channel_clamped = [
-            applied != raw for raw, applied in zip(raw_gain, applied_gain, strict=True)
+            raw is not None and applied != raw
+            for raw, applied in zip(raw_gain, applied_gain, strict=True)
+        ]
+        missing = [
+            channel
+            for channel, raw in zip(_CHANNEL_NAMES, raw_gain, strict=True)
+            if raw is None
         ]
         name = Path(str(path)).name
         if name in gains_by_image:
@@ -370,6 +385,8 @@ def per_image_color_gains(means):
         clamped_channels[name] = channel_clamped
         if image_clamped:
             clamped_images.append(name)
+        if missing:
+            uncomputable_channels[name] = missing
         gains.append({"path": str(path), "gain_rgb": applied_gain})
     target_rgb = [float(channel) for channel in median]
     return {
@@ -386,6 +403,7 @@ def per_image_color_gains(means):
         "clamped": clamped,
         "clamped_channels": clamped_channels,
         "clamped_images": clamped_images,
+        "uncomputable_channels": uncomputable_channels,
     }
 
 
@@ -515,9 +533,12 @@ def apply_per_image_color_calibration(directory, out_dir=None):
     per image; it is not one global correction reused for the set. The
     returned manifest names the target, records its three values, and maps
     each image name to ``[gR, gG, gB]`` (the applied gains). ``raw_gain_rgb``
-    is the pre-clamp triple for that same name. ``clamped`` is true when any
-    channel was clamped, ``clamped_channels`` is the per-channel list, and
-    ``clamped_images`` names those images. ``in_memory_mean_rgb`` is the mean
+    is the pre-clamp triple for that same name, with ``None`` where the mean
+    is not positive. ``clamped`` is true when any finite channel was clamped,
+    ``clamped_channels`` is the per-channel list, and ``clamped_images`` names
+    those images. ``uncomputable_channels`` maps an image name to
+    ``red`` / ``green`` / ``blue`` for each non-positive mean, and omits the
+    rest. A missing raw gain is not a clamp. ``in_memory_mean_rgb`` is the mean
     of the corrected array before any JPEG encode.
     """
     sequence = read_still_image_sequence(directory)
@@ -571,6 +592,7 @@ def apply_per_image_color_calibration(directory, out_dir=None):
         "clamped": gain_report["clamped"],
         "clamped_channels": gain_report["clamped_channels"],
         "clamped_images": gain_report["clamped_images"],
+        "uncomputable_channels": gain_report["uncomputable_channels"],
         "frames": frames,
         "colmap_ran": False,
         "input_report": color_calibration_report(means),

@@ -643,11 +643,42 @@ def test_bounded_channel_gain_rejects_nonfinite_and_keeps_unit_gain_at_zero():
     ):
         with pytest.raises(ValueError, match="finite"):
             _bounded_channel_gain(mean, center)
-    # A non-positive mean is raw 1 and applied 1. That is not a clamp.
+    # A non-positive mean has no computed gain. Applied stays 1. That is not a clamp.
     for mean, center in ((0.0, 40.0), (0.0, 0.0), (-1.0, 40.0)):
         raw_gain, applied = _bounded_channel_gain(mean, center)
-        assert raw_gain == 1.0
+        assert raw_gain is None
         assert applied == 1.0
+
+
+def test_zero_red_mean_is_null_in_color_calibration_json(tmp_path, monkeypatch):
+    monkeypatch.setattr("sceneagent.colmap_stage.shutil.which", _which_binaries)
+    monkeypatch.setattr("sceneagent.colmap_stage.subprocess.run", _banner)
+
+    def fake_run(command, timeout_s=600):
+        if Path(str(command[0])).name == "ffmpeg":
+            folder = Path(command[-1]).parent
+            (folder / "0001.jpg").write_bytes(_p6_bytes((0, 40, 40)))
+        return {
+            "command": command,
+            "returncode": 0,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr("sceneagent.colmap_stage._run", fake_run)
+    work = tmp_path / "colmap"
+    run_poses(tmp_path / "clip.mp4", work, max_frames=1)
+    manifest = json.loads((work / "color_calibration.json").read_text(encoding="utf-8"))
+    raw = manifest["raw_gain_rgb"]["0001.jpg"]
+    assert raw[0] is None
+    assert raw[1] == 1.0
+    assert raw[2] == 1.0
+    assert manifest["gains_by_image"]["0001.jpg"] == [1.0, 1.0, 1.0]
+    assert manifest["clamped"]["0001.jpg"] is False
+    assert manifest["clamped_channels"]["0001.jpg"] == [False, False, False]
+    assert "0001.jpg" not in manifest["clamped_images"]
+    assert manifest["uncomputable_channels"]["0001.jpg"] == ["red"]
 
 
 def test_jpeg_round_trip_mean_error_is_the_recorded_fixture_bound():
