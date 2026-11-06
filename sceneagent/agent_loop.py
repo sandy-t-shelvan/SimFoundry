@@ -129,12 +129,28 @@ def _manifest(out, step_id, attempt, result):
     return str(path)
 
 
+def _ledger_decision(result, detail):
+    """Accept only a clean ok result.
+
+    A motion review of ``fail`` is a crashed process. Folding that into
+    ``reject`` would hide the crash, and ``ok`` must not turn it into accept.
+    """
+    review = detail.get("review")
+    if review == "fail":
+        return "fail"
+    if review == "reject":
+        return "reject"
+    if review == "accept":
+        return "accept" if result.get("ok") else "reject"
+    return "accept" if result.get("ok") else "reject"
+
+
 def _entry(step_id, attempt, result, repair):
     detail = result.get("detail") or {}
     entry = {
         "item": step_id,
         "section": STEP_SECTION[step_id],
-        "decision": "accept" if result.get("ok") else "reject",
+        "decision": _ledger_decision(result, detail),
         "attempt": attempt,
         "repair": repair,
         "skill": STEP_SKILL[step_id],
@@ -154,6 +170,16 @@ def _entry(step_id, attempt, result, repair):
         "pose_initialization",
         "alignment_constants",
         "residuals",
+        "part_mesh",
+        "urdf",
+        "review",
+        "returncode",
+        "links_match",
+        "forced_for",
+        "completion_needed",
+        "diffusers_version",
+        "propose_returncode",
+        "urdf_guard",
     ):
         if key in detail:
             entry[key] = detail[key]
