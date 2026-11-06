@@ -67,9 +67,12 @@ SSH_READY_MAX_ATTEMPTS = 6
 SSH_READY_TIMEOUT_S = 45.0
 SSH_READY_BACKOFF_S = 2.0
 SSH_READY_BACKOFF_CAP_S = 8.0
-# Leftover keys are recorded from the show body. Removing them is a later
-# explicit step, and this stays off until that step is asked for.
+# Earlier runs' keys stay. This flag does not authorize deleting them.
+# This run's own key is detached only when the pinned listing has exactly
+# one byte-for-byte match, and the request guard refuses every other id.
 DETACH_LEFTOVER_KEYS = False
+# Armed only for the duration of this run's own matched DELETE.
+_ARMED_OWN_KEY_ID: str | None = None
 REQUIRED_LEDGER_ITEMS = ("video", "COLMAP camera poses")
 FETCH_NAMES = (
     "ledger.json",
@@ -346,6 +349,39 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
     raise InstanceNotApproved(f"refusing Vast {method} {parsed.path}")
 
 
+def arm_own_key_delete(key_id: str | None) -> None:
+    """Arm the one id ``guard_own_key_delete`` will send. ``None`` disarms it."""
+    global _ARMED_OWN_KEY_ID
+    if key_id is not None:
+        _require_ssh_key_id(key_id)
+    _ARMED_OWN_KEY_ID = key_id
+
+
+def guard_own_key_delete(method: str, url: str) -> None:
+    """Request-layer gate. DELETE is sent only for this run's single matched id.
+
+    The instance must be 58301075. Any other id, instance, or a DELETE while
+    nothing is armed is refused before the transport runs. ``DETACH_LEFTOVER_KEYS``
+    does not widen this. Trailing-whitespace-normalized byte match is what
+    arms the id, not the attach response.
+    """
+    if method.upper() != "DELETE":
+        return
+    parsed = urllib.parse.urlsplit(url)
+    match = _INSTANCE_PATH_RE.fullmatch(parsed.path)
+    if match is None or "/ssh/" not in parsed.path:
+        raise InstanceNotApproved(f"refusing Vast DELETE {parsed.path}")
+    if int(match.group("id")) != ALLOWED_INSTANCE_ID:
+        raise InstanceNotApproved(
+            f"refusing to detach a key on instance {match.group('id')}"
+        )
+    key_id = match.group("key")
+    if not key_id or key_id != _ARMED_OWN_KEY_ID:
+        raise InstanceNotApproved(
+            "refusing to detach a key that is not this run's single matched key"
+        )
+
+
 def endpoint_for(
     kind: str,
     instance_id: object,
@@ -401,6 +437,7 @@ def request_json(
 ) -> tuple[int, dict[str, Any]]:
     """Perform one allowlisted Vast request. The key travels in the header."""
     assert_request_allowed(method, url, body)
+    guard_own_key_delete(method, url)
     payload = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method=method)
     req.add_header("Authorization", "Bearer " + api_key)
@@ -432,6 +469,7 @@ def call_json(
     timeout: float = 60,
 ) -> tuple[int, dict[str, Any]]:
     """Call ``request``, waiting out HTTP 429. Other statuses return immediately."""
+    guard_own_key_delete(method, url)
     status = 0
     payload: dict[str, Any] = {}
     for attempt in range(attempts):
@@ -844,6 +882,56 @@ def ssh_fingerprints(payload: dict[str, Any]) -> list[str]:
     return fingerprints
 
 
+def _listed_key_id(item: dict[str, Any]) -> str | None:
+    for name in ("id", "key_id", "ssh_key_id"):
+        value = item.get(name)
+        if isinstance(value, bool) or value is None:
+            continue
+        if isinstance(value, int) or (
+            isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_-]+", value)
+        ):
+            return str(value)
+    return None
+
+
+def match_own_public_key(
+    public_key: str, payload: dict[str, Any]
+) -> tuple[dict[str, Any], str | None]:
+    """Find listing rows whose public key equals ``public_key``.
+
+    The only normalization is ``str.rstrip`` on both sides, so a trailing
+    newline does not hide a match. A different comment or blob does not match.
+    The returned record has no key material. The id, when there is exactly
+    one, is the second value and is not part of the record.
+    """
+    wanted = public_key.rstrip()
+    items, bad = _key_items(payload.get("ssh_keys"))
+    found: list[str] = []
+    if not bad and items is not None:
+        for item in items:
+            listed = _public_key_text(item)
+            if not isinstance(listed, str) or listed.rstrip() != wanted:
+                continue
+            if isinstance(item, dict):
+                key_id = _listed_key_id(item)
+                if key_id is not None:
+                    found.append(key_id)
+    fingerprint = _fingerprint(public_key)
+    record: dict[str, Any] = {
+        "match_count": len(found),
+        "detached": False,
+        "fingerprint": fingerprint,
+    }
+    if len(found) == 1:
+        record["reason"] = "exactly one listed key matched this run's public key"
+        return record, found[0]
+    if len(found) == 0:
+        record["reason"] = "no listed key matched this run's public key"
+        return record, None
+    record["reason"] = "more than one listed key matched this run's public key"
+    return record, None
+
+
 def ssh_key_summary(fingerprints: list[str]) -> dict[str, Any]:
     """Count and fingerprints only. Anything else is dropped."""
     clean = [
@@ -1029,6 +1117,30 @@ def _manifest_ssh_keys(value: dict[str, Any] | None) -> dict[str, Any] | None:
     return ssh_key_summary([item for item in fingerprints if isinstance(item, str)])
 
 
+def _manifest_own_key(value: dict[str, Any] | None) -> dict[str, Any] | None:
+    """match_count, detached, reason, and a fingerprint. No key material."""
+    if value is None:
+        return None
+    count = value.get("match_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        count = 0
+    detached = value.get("detached") is True
+    reason = value.get("reason")
+    if not isinstance(reason, str) or "ssh-" in reason or "PRIVATE" in reason:
+        reason = "match recorded without key material"
+    kept: dict[str, Any] = {
+        "match_count": count,
+        "detached": detached,
+        "reason": reason,
+    }
+    fingerprint = value.get("fingerprint")
+    if isinstance(fingerprint, str) and re.fullmatch(
+        r"SHA256:[A-Za-z0-9+/]+", fingerprint
+    ):
+        kept["fingerprint"] = fingerprint
+    return kept
+
+
 def _manifest_ephemeral(value: dict[str, Any] | None) -> dict[str, Any] | None:
     """Keep the local fingerprint and the post-attach membership bit."""
     if value is None:
@@ -1175,6 +1287,7 @@ def collect_artifact_manifest(
     ssh: dict[str, Any] | None = None,
     ssh_keys: dict[str, Any] | None = None,
     ephemeral_ssh_key: dict[str, Any] | None = None,
+    own_key: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Record the run. Never rewrite ``ledger.json`` or invent ``plan.json``.
 
@@ -1250,6 +1363,9 @@ def collect_artifact_manifest(
     ephemeral = _manifest_ephemeral(ephemeral_ssh_key)
     if ephemeral is not None:
         manifest["ephemeral_ssh_key"] = ephemeral
+    own = _manifest_own_key(own_key)
+    if own is not None:
+        manifest["own_key"] = own
     if ssh is not None:
         manifest["ssh"] = _public_ssh_report(ssh)
     manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
@@ -1341,6 +1457,7 @@ def publish_failure_manifest(
     ssh: dict[str, Any] | None = None,
     ssh_keys: dict[str, Any] | None = None,
     ephemeral_ssh_key: dict[str, Any] | None = None,
+    own_key: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write only a redacted manifest after the same scan as a successful publish.
 
@@ -1368,6 +1485,9 @@ def publish_failure_manifest(
     ephemeral = _manifest_ephemeral(ephemeral_ssh_key)
     if ephemeral is not None:
         document["ephemeral_ssh_key"] = ephemeral
+    own = _manifest_own_key(own_key)
+    if own is not None:
+        document["own_key"] = own
     if ssh is not None:
         document["ssh"] = _public_ssh_report(ssh)
     with tempfile.TemporaryDirectory() as tmp:
@@ -1461,6 +1581,13 @@ class SshRemote:
             "detach": "skipped",
             "accepted": None,
         }
+        self.own_key: dict[str, Any] = {
+            "match_count": 0,
+            "detached": False,
+            "reason": "ssh key list was not read",
+        }
+        self._own_key_id: str | None = None
+        self._detach_done = False
         self._attach()
 
     def close(self) -> None:
@@ -1512,12 +1639,25 @@ class SshRemote:
             raise SmokeError(
                 f"attaching an ephemeral ssh key failed (HTTP {status}). The key is not printed."
             )
-        after = load_ssh_key_fingerprints(self.request, self.api_key, self.sleep)
+        after, after_payload = fetch_pinned_ssh_keys(
+            self.request, self.api_key, self.sleep
+        )
         if fingerprint is None:
             raise SmokeError(
                 "ephemeral ssh key could not be fingerprinted. The key is not printed."
             )
         self.ephemeral_ssh_key = ephemeral_key_record(self.public, after)
+        record, key_id = match_own_public_key(self.public, after_payload)
+        self.own_key = record
+        self._own_key_id = key_id
+        _log(
+            {
+                "action": "own_key",
+                "match_count": record["match_count"],
+                "detached": False,
+            },
+            self.api_key,
+        )
         _log(
             {
                 "action": "ssh_keys",
@@ -1540,15 +1680,36 @@ class SshRemote:
         if self.key_id is not None:
             self.ssh_report["key_id"] = self.key_id
 
-    def _detach(self) -> None:
-        if not self.key_id:
+    def detach_own_key(self) -> None:
+        """DELETE this run's key when the listing has exactly one match.
+
+        Runs on the success path before the manifest is published, and again
+        from ``close`` so a failure still removes it. A second call is a no-op.
+        Zero matches or several matches delete nothing.
+        """
+        if self._detach_done:
             return
-        status, payload = self._call("detach_ssh", ssh_key_id=self.key_id)
+        self._detach_done = True
+        if self.own_key.get("match_count") != 1 or self._own_key_id is None:
+            self.own_key["detached"] = False
+            return
+        arm_own_key_delete(self._own_key_id)
+        try:
+            status, payload = self._call("detach_ssh", ssh_key_id=self._own_key_id)
+        finally:
+            arm_own_key_delete(None)
         if status not in {200, 204} or payload.get("success") is False:
-            raise SmokeError(
-                f"detaching the ephemeral ssh key failed (HTTP {status}). The key is not printed."
+            self.own_key["detached"] = False
+            self.own_key["reason"] = (
+                f"detach of the matched key failed (HTTP {status}). "
+                "The key is not printed."
             )
+            raise SmokeError(self.own_key["reason"])
+        self.own_key["detached"] = True
         self.key_id = None
+
+    def _detach(self) -> None:
+        self.detach_own_key()
 
     def _probe_ssh(self) -> tuple[int, str]:
         argv = [
@@ -1694,6 +1855,28 @@ def _remote_key_facts(
     return listing, ephemeral
 
 
+def _remote_own_key(remote: Any) -> dict[str, Any] | None:
+    found = getattr(remote, "own_key", None)
+    if isinstance(found, dict):
+        return found
+    return None
+
+
+def fetch_pinned_ssh_keys(
+    request: RequestFn,
+    api_key: str,
+    sleep: Callable[[float], None],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """GET the pinned ssh list. The summary has no key material."""
+    method, url, body = endpoint_for("show_ssh_keys", ALLOWED_INSTANCE_ID)
+    status, payload = call_json(request, method, url, api_key, body, sleep=sleep)
+    if status != 200:
+        raise SmokeError(
+            f"listing ssh keys failed (HTTP {status}). The keys are not printed."
+        )
+    return ssh_key_summary(ssh_fingerprints(payload)), payload
+
+
 def load_ssh_key_fingerprints(
     request: RequestFn,
     api_key: str,
@@ -1703,15 +1886,8 @@ def load_ssh_key_fingerprints(
 
     This does not detach, and it does not return key material.
     """
-    if DETACH_LEFTOVER_KEYS:
-        raise SmokeError("leftover ssh keys are not detached")
-    method, url, body = endpoint_for("show_ssh_keys", ALLOWED_INSTANCE_ID)
-    status, payload = call_json(request, method, url, api_key, body, sleep=sleep)
-    if status != 200:
-        raise SmokeError(
-            f"listing ssh keys failed (HTTP {status}). The keys are not printed."
-        )
-    return ssh_key_summary(ssh_fingerprints(payload))
+    summary, _payload = fetch_pinned_ssh_keys(request, api_key, sleep)
+    return summary
 
 
 def list_attached_ssh_keys(
@@ -1842,6 +2018,7 @@ def run_smoke(
     failure_reason: str | None = None
     key_report: dict[str, Any] | None = None
     ephemeral_ssh_key: dict[str, Any] | None = None
+    own_key: dict[str, Any] | None = None
     ssh_report: dict[str, Any] | None = None
 
     def restore() -> bool:
@@ -1898,12 +2075,15 @@ def run_smoke(
         with tempfile.TemporaryDirectory() as tmp:
             local_run = Path(tmp) / "run"
             remote_code = int(remote.run(Path(checkout), local_run))
+            if hasattr(remote, "detach_own_key"):
+                remote.detach_own_key()
             found = getattr(remote, "ssh_report", None)
             if isinstance(found, dict):
                 ssh_report = found
             key_report, ephemeral_ssh_key = _remote_key_facts(
                 remote, key_report, ephemeral_ssh_key
             )
+            own_key = _remote_own_key(remote)
             manifest = collect_artifact_manifest(
                 local_run,
                 command=build_remote_command(REMOTE_REPO, REMOTE_OUT),
@@ -1912,6 +2092,7 @@ def run_smoke(
                 ssh=ssh_report,
                 ssh_keys=key_report,
                 ephemeral_ssh_key=ephemeral_ssh_key,
+                own_key=own_key,
             )
             publish_artifacts(local_run, Path(artifact_dir), api_key=key)
             published = True
@@ -1937,17 +2118,18 @@ def run_smoke(
         code = 1
     finally:
         if remote is not None:
+            try:
+                remote.close()
+            except Exception as exc:
+                _emit("ssh cleanup failed: " + str(exc), key)
+                code = 1
             found = getattr(remote, "ssh_report", None)
             if ssh_report is None and isinstance(found, dict):
                 ssh_report = found
             key_report, ephemeral_ssh_key = _remote_key_facts(
                 remote, key_report, ephemeral_ssh_key
             )
-            try:
-                remote.close()
-            except Exception as exc:
-                _emit("ssh cleanup failed: " + str(exc), key)
-                code = 1
+            own_key = _remote_own_key(remote)
         if not restore():
             code = 1
         if (
@@ -1966,6 +2148,7 @@ def run_smoke(
                     ssh=ssh_report,
                     ssh_keys=key_report,
                     ephemeral_ssh_key=ephemeral_ssh_key,
+                    own_key=own_key,
                 )
             except SmokeError as exc:
                 _emit(str(exc), key)
