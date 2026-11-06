@@ -890,6 +890,15 @@ def normalize_run_context(
     return {"trigger": trigger, "actor": actor, "commit_sha": commit_sha}
 
 
+def may_start_instance(trigger: str | None) -> bool:
+    """True only for an explicit ``workflow_dispatch``.
+
+    A missing trigger defaults to refuse. A label and a request-file push
+    must not start a stopped instance. That needs Sandeep's own click.
+    """
+    return trigger == "dispatch"
+
+
 def _apply_run_record(
     document: dict[str, Any],
     run_context: dict[str, str] | None,
@@ -2410,7 +2419,10 @@ def run_smoke(
         shown = True
         _log({"action": "show", "instance": public_instance_view(row)}, key)
         kind = classify_status(row)
+        trigger_name = "" if context is None else context["trigger"]
         if kind == "stopped":
+            if not may_start_instance(trigger_name):
+                raise InstanceNotApproved("instance stopped; start needs Sandeep")
             started = True
             _change_state("start", request, key, sleep)
             _log({"action": "start", "instance_id": approved}, key)
@@ -2418,10 +2430,14 @@ def run_smoke(
                 request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
             )
         elif kind == "starting":
+            if not may_start_instance(trigger_name):
+                raise InstanceNotApproved("instance not running; start needs Sandeep")
             row = wait_until_running(
                 request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
             )
         elif kind != "running":
+            if not may_start_instance(trigger_name):
+                raise InstanceNotApproved("instance state unknown; start needs Sandeep")
             actual = row.get("actual_status")
             raise InstanceNotApproved(
                 f"instance {approved} status {actual!r} is not running or stopped. "

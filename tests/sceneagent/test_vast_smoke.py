@@ -529,6 +529,7 @@ def test_run_smoke_starts_and_stops_a_stopped_instance_when_the_remote_fails(tmp
         raise AssertionError((method, body))
 
     remote = _Remote(lambda run: _write_run(run, decision="deferred"), rc=0)
+    # Only an explicit workflow_dispatch may start a stopped instance.
     code = run_smoke(
         "58301075",
         _checkout(tmp_path),
@@ -537,6 +538,9 @@ def test_run_smoke_starts_and_stops_a_stopped_instance_when_the_remote_fails(tmp
         request=request,
         remote_factory=lambda _row: remote,
         sleep=lambda _seconds: None,
+        trigger="dispatch",
+        actor="sandy-t-shelvan",
+        commit_sha="d" * 40,
     )
     assert code == 1
     assert calls[0][0] == "GET"
@@ -2051,6 +2055,151 @@ def test_mentioning_the_key_name_is_not_treated_as_forwarding_the_value(tmp_path
     assert problems == []
     assert record["secrets_forwarded"] is False
     assert record["payload_secret_hits"] == 0
+
+
+def _calls_for_status(status):
+    """Record every HTTP call. A start PUT is what the refusal tests forbid.
+
+    After a start PUT the next show is running, so a missing guard fails the
+    PUT assertion instead of sitting in the boot poll.
+    """
+    calls = []
+    phase = {"started": False}
+
+    def request(method, url, api_key, body=None, timeout=60):
+        recorded = None if body is None else dict(body)
+        calls.append((method, url, recorded))
+        if method == "GET":
+            shown = "running" if phase["started"] else status
+            return 200, {"instances": _texas(shown)}
+        if method == "PUT" and recorded == {"state": "running"}:
+            phase["started"] = True
+            return 200, {"success": True}
+        if method == "PUT":
+            return 200, {"success": True}
+        return 200, {"success": True}
+
+    return calls, request
+
+
+def _puts(calls):
+    return [
+        call
+        for call in calls
+        if call[0] == "PUT" or (call[2] or {}).get("state") == "running"
+    ]
+
+
+def test_label_trigger_does_not_start_a_stopped_instance(tmp_path, capsys):
+    calls, request = _calls_for_status("exited")
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+        trigger="label",
+        actor="cursor[bot]",
+        commit_sha="a" * 40,
+    )
+    assert code != 0
+    assert _puts(calls) == []
+    assert "instance stopped; start needs Sandeep" in capsys.readouterr().err
+    manifest = json.loads(
+        (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["failure_reason"] == "instance stopped; start needs Sandeep"
+    assert manifest["passed"] is False
+
+
+def test_request_file_trigger_does_not_start_a_stopped_instance(tmp_path, capsys):
+    calls, request = _calls_for_status("stopped")
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+        trigger="request-file",
+        actor="sandy-t-shelvan",
+        commit_sha="b" * 40,
+    )
+    assert code != 0
+    assert _puts(calls) == []
+    assert "instance stopped; start needs Sandeep" in capsys.readouterr().err
+
+
+def test_bot_trigger_refuses_an_unknown_instance_state(tmp_path, capsys):
+    calls, request = _calls_for_status("offline")
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+        trigger="label",
+        actor="cursor[bot]",
+        commit_sha="a" * 40,
+    )
+    assert code != 0
+    assert _puts(calls) == []
+    assert "instance state unknown; start needs Sandeep" in capsys.readouterr().err
+
+
+def test_missing_trigger_does_not_start_a_stopped_instance(tmp_path):
+    calls, request = _calls_for_status("exited")
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+    )
+    assert code != 0
+    assert _puts(calls) == []
+
+
+def test_dispatch_may_start_a_stopped_instance(tmp_path):
+    calls = []
+    phase = {"started": False}
+
+    def request(method, url, api_key, body=None, timeout=60):
+        recorded = None if body is None else dict(body)
+        calls.append((method, url, recorded))
+        if method == "GET":
+            status = "running" if phase["started"] else "exited"
+            return 200, {"instances": _texas(status)}
+        if method == "PUT" and recorded == {"state": "running"}:
+            phase["started"] = True
+            return 200, {"success": True}
+        if method == "PUT" and recorded == {"state": "stopped"}:
+            return 200, {"success": True}
+        raise AssertionError((method, recorded))
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        "test-key",
+        request=request,
+        remote_factory=lambda _row: _Remote(write),
+        sleep=lambda _seconds: None,
+        trigger="dispatch",
+        actor="sandy-t-shelvan",
+        commit_sha="c" * 40,
+    )
+    assert any(
+        method == "PUT" and body == {"state": "running"} for method, _url, body in calls
+    )
+    assert code == 0
 
 
 def test_orchestrator_refuses_when_payload_is_importable(tmp_path, monkeypatch, capsys):

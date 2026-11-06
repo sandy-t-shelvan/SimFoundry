@@ -16,6 +16,9 @@ written into the payload, and not copied from `.git`.
 Anyone who can dispatch Actions runs `.github/workflows/sceneagent-gpu-smoke.yml`
 from the Actions tab. The workflow has no inputs. The ref that was dispatched
 is the tree the GPU runs, and it is also the orchestrator on the runner.
+This is the only trigger that may start instance 58301075 when it is stopped.
+That click is Sandeep's explicit yes. A label or a request-file push never
+sends the start PUT.
 
 ## Label `run-gpu-smoke`
 
@@ -52,13 +55,19 @@ turns that requirement on without moving the secret or the checkout.
 
 The job logs `gpu-smoke actor=<login>`.
 
+If the instance is stopped, not running, or in an unknown state, the label
+run refuses before any start PUT. The failure manifest says
+`instance stopped; start needs Sandeep` when the show call reports stopped.
+
 ## Request file
 
 Push a commit to `Main_duplicate` that changes only `ci/gpu-run-request.json`.
 This is a plain `push`, so GitHub uses the workflow file on `Main_duplicate`.
 Once that file is on `Main_duplicate`, the push starts a run by itself. It does
 not need `workflow_dispatch`, and it does not need Sandeep to click anything.
-It does not wait for `main` to be updated.
+It does not wait for `main` to be updated. It does not start a stopped
+instance. A stopped or unknown machine is refused before any PUT, with the
+same rule as a label run. Only `workflow_dispatch` may start 58301075.
 
 The file is only a run trigger. It is not a way to land code without the QA
 and PM merge rule. The changed-path set must be exactly
