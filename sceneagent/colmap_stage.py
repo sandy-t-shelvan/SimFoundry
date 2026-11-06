@@ -11,6 +11,11 @@ filter. Both together keep every decoded frame. Sampled frames are
 color-calibrated per image before matching. That scale is our diagonal
 gain toward ``per_channel_median_of_set``, not the paper's exact method,
 so the section 3.2 color gap stays partial.
+
+A mapper that writes a sparse model is not accepted until
+``reconstruction_gate`` passes. The gate runs ``model_analyzer`` on every
+subdirectory of ``sparse/``, not on ``sparse/0`` alone, and rejects the
+reconstruction when the largest model misses the bar.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import subprocess
 from pathlib import Path
 
 from sceneagent.ingest_assets import apply_per_image_color_calibration
+from sceneagent.reconstruction_gate import EVIDENCE_DIRNAME, accept_reconstruction
 
 
 def use_gpu_from_banner(banner):
@@ -191,7 +197,9 @@ def _request_is_full_rate(fps, max_frames):
     return _no_limit(fps) and _no_limit(max_frames)
 
 
-def run_poses(video_path, work_dir, fps=1, max_frames=16, color_calibrate=True):
+def run_poses(
+    video_path, work_dir, fps=1, max_frames=16, color_calibrate=True, *, analyzer=None
+):
     """Sample frames, calibrate each image, and run COLMAP.
 
     The 1 fps sample and the 16-frame cap are this runner's, not the paper's.
@@ -205,6 +213,12 @@ def run_poses(video_path, work_dir, fps=1, max_frames=16, color_calibrate=True):
     ``per_channel_median_of_set``, records its three values, and maps each
     image name to ``[gR, gG, gB]``. Pass false to leave the sampled pixels
     unchanged.
+
+    The reconstruction is accepted only when the quality bar passes on the
+    largest sparse model. ``analyzer``, when passed, is called with each
+    model directory and returns ``returncode``, ``stdout``, and ``stderr``.
+    The default runs ``colmap model_analyzer``. Tests inject this so the
+    gate does not need a COLMAP binary.
     """
     full_rate = _request_is_full_rate(fps, max_frames)
     calibrated: dict[str, object] = {}
@@ -244,6 +258,10 @@ def run_poses(video_path, work_dir, fps=1, max_frames=16, color_calibrate=True):
     calibration_path = work / "color_calibration.json"
     if calibration_path.exists():
         calibration_path.unlink()
+    # A previous acceptance must not survive a run that never reaches the gate.
+    evidence_dir = work / EVIDENCE_DIRNAME
+    if evidence_dir.exists():
+        shutil.rmtree(evidence_dir)
     # JPEG stays. The q95 4:4:4 round trip on the recorded fixture moves
     # channel means by 0.0185546875 levels, under the 1.5-level PNG switch.
     extract = _run(
@@ -300,33 +318,33 @@ def run_poses(video_path, work_dir, fps=1, max_frames=16, color_calibrate=True):
                 frames=frames,
                 steps=steps,
             )
-    model_dir = sparse / "0"
-    if not (model_dir / "cameras.bin").is_file():
+    # No subdirectory means the mapper wrote nothing. That stays a mapper
+    # failure. A model that exists is accepted only by the quality bar, and
+    # the bar reads every subdirectory rather than sparse/0 alone.
+    wrote_model = any(path.is_dir() for path in sparse.iterdir())
+    gate = accept_reconstruction(sparse, len(frames), evidence_dir, runner=analyzer)
+    if not gate["pass"]:
         return _result(
             ran=True,
             ok=False,
             use_gpu=use_gpu,
             colmap_major=major,
-            failed_step="mapper",
+            failed_step="mapper" if not wrote_model else "reconstruction_gate",
             frames=frames,
-            reason="mapper wrote no sparse/0/cameras.bin",
+            reason=gate["reason"],
             steps=steps,
+            reconstruction_gate=gate["document"],
         )
-    steps["model_analyzer"] = _run(
-        [colmap, "model_analyzer", "--path", str(model_dir)],
-        timeout_s=120,
-    )
-    analyzer_ok = steps["model_analyzer"]["returncode"] == 0
     return _result(
         ran=True,
-        ok=analyzer_ok,
+        ok=True,
         use_gpu=use_gpu,
         colmap_major=major,
         frames=frames,
-        model_dir=str(model_dir),
-        analyzer=steps["model_analyzer"],
+        model_dir=str(sparse / gate["model"]),
         steps=steps,
-        reason="" if analyzer_ok else "model_analyzer failed",
+        reason="",
+        reconstruction_gate=gate["document"],
     )
 
 
