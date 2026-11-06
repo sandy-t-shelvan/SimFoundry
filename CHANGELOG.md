@@ -75,6 +75,7 @@
 - SF-20 part 1 (KAN-21): a present physics-prior npz without features and a mask is rejected before any VLM call, and an empty object list is rejected before a Gemini client is built.
 - SF-20 part 1 (KAN-21): an unloadable prior npz or an empty mask is rejected before any VLM call. A VLM confidence outside `[0, 1]`, including a non-finite one, is rejected and is not clamped. Unknown votes stay scaled by 0.4 (§3.4 page 9). Keyword weight 1.0 is a SimFoundry choice, not published. The material-vote model remains `gemini-3.8-flash`, our configuration, not the PDF's Meshy Gemini 2.5 Flash sentence.
 - SF-20 part 1 (KAN-21): a prior whose features are not finite `(N, 912)`, or whose mask is not rank-1 shape `(N,)`, is rejected before any VLM call. A column `(N, 1)` does not pass. `material_vote.json` always stores `votes`, for one object and for several.
+- SF-20 part 1 (KAN-21): `+inf` and `-inf` features are rejected with `physics prior features must be finite` before any VLM call and before `PhysicsPrior.load`. No vote file is written. The guard stays `np.isfinite`, not `np.isnan`.
 
 ## Not in this tree
 

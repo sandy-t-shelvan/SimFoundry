@@ -681,6 +681,51 @@ def test_nan_features_raise_before_any_vlm_call(tmp_path, monkeypatch):
     assert not (out / "material_vote.json").exists()
 
 
+@pytest.mark.parametrize("fill", [np.inf, -np.inf])
+def test_infinite_features_raise_before_vlm_or_prior_load(tmp_path, monkeypatch, fill):
+    path = _synthetic_prior(tmp_path / "physics_prior.npz")
+    features = np.zeros((2, 912))
+    features[1, 3] = fill
+    client = _RecordingVlm("plastic", 0.4)
+    loads = []
+    real_load = PhysicsPrior.load
+
+    def _counting_load(checkpoint):
+        loads.append(str(checkpoint))
+        return real_load(checkpoint)
+
+    monkeypatch.setattr("sceneagent.material_vote.PhysicsPrior.load", _counting_load)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("vote_loaded_prior ran on infinite features")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "inf"
+    raised = None
+    try:
+        run_material_vote(
+            out,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": features,
+                    "mask": np.array([True, False]),
+                }
+            ],
+            client=client,
+            checkpoint=path,
+        )
+    except Exception as exc:
+        raised = exc
+    assert loads == []
+    assert client.calls == 0
+    assert not (out / "material_vote.json").exists()
+    assert not (out / "manifest.json").exists()
+    assert isinstance(raised, ValueError)
+    assert str(raised) == "physics prior features must be finite"
+
+
 def test_confidence_endpoints_zero_and_one_are_votes(tmp_path):
     for confidence, winner in ((0.0, "unknown"), (1.0, "plastic")):
         client = _RecordingVlm("plastic", confidence)
