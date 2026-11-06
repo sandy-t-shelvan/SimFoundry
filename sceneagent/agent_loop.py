@@ -172,6 +172,8 @@ def _entry(step_id, attempt, result, repair):
         "forced_for",
         "completion_needed",
         "diffusers_version",
+        "propose_returncode",
+        "urdf_guard",
     ):
         if key in detail:
             entry[key] = detail[key]

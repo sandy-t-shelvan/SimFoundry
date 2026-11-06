@@ -748,9 +748,12 @@ def run_partsam_articulation(out_dir, parts, part_mesh=None, propose=None, revie
         review_command,
         review_dir,
     )
+    # A failed propose must not point the ledger at a URDF, including one
+    # left in the directory by an earlier run.
+    count_urdf = bool(outcome.get("count_urdf"))
     detail = {
         "part_mesh": mesh,
-        "urdf": str(urdf_path) if urdf_path.is_file() else None,
+        "urdf": str(urdf_path) if count_urdf and urdf_path.is_file() else None,
         "review": outcome["review"],
         "returncode": outcome["returncode"],
         "links_match": outcome["links_match"],
@@ -758,6 +761,10 @@ def run_partsam_articulation(out_dir, parts, part_mesh=None, propose=None, revie
         "review_command": review_command,
         "kind": "partsam_motion_review",
     }
+    if "propose_returncode" in outcome:
+        detail["propose_returncode"] = outcome["propose_returncode"]
+    if "urdf_guard" in outcome:
+        detail["urdf_guard"] = outcome["urdf_guard"]
     result = {
         "ok": outcome["ok"],
         "artifact": detail["urdf"],
@@ -789,8 +796,12 @@ def _articulation_outcome(
             "review": "reject",
             "returncode": None,
             "links_match": False,
+            "count_urdf": False,
             "reason": "Articulate Anything was not started. No motion review ran.",
         }
+    # Drop a leftover mobility.urdf before propose. Review must not open a
+    # file this run did not write.
+    urdf_guard = _delete_existing_urdf(urdf_path)
     proposed = _invoke(
         propose,
         {
@@ -801,6 +812,11 @@ def _articulation_outcome(
         },
     )
     propose_code, _stdout, stderr = _completed_io(proposed)
+    propose_note = {
+        "propose_returncode": propose_code,
+        "urdf_guard": urdf_guard,
+        "count_urdf": False,
+    }
     if _crashed(propose_code):
         return {
             "ok": False,
@@ -811,6 +827,21 @@ def _articulation_outcome(
                 f"Articulate Anything crashed with return code {propose_code} "
                 "before the motion review. A crash is fail, not a pass."
             ),
+            **propose_note,
+        }
+    # A non-zero propose is a failure even when a URDF is still on disk.
+    # That file is not this run's output, so review does not start.
+    if propose_code != 0:
+        return {
+            "ok": False,
+            "review": "reject",
+            "returncode": propose_code,
+            "links_match": False,
+            "reason": (
+                f"propose_failed: Articulate Anything exited {propose_code}. "
+                "Motion review was not started."
+            ),
+            **propose_note,
         }
     if not urdf_path.is_file() or urdf_path.stat().st_size <= 0:
         tail = (stderr or "").strip()
@@ -823,6 +854,7 @@ def _articulation_outcome(
             "returncode": propose_code,
             "links_match": False,
             "reason": reason,
+            **propose_note,
         }
     reviewed = _invoke(
         review,
@@ -834,6 +866,11 @@ def _articulation_outcome(
     )
     code, stdout, review_err = _completed_io(reviewed)
     verdict = classify_motion_review(code, stdout, review_err)
+    counted = {
+        "propose_returncode": propose_code,
+        "urdf_guard": urdf_guard,
+        "count_urdf": True,
+    }
     if verdict == "fail":
         return {
             "ok": False,
@@ -844,6 +881,7 @@ def _articulation_outcome(
                 f"Motion review crashed with return code {code}. "
                 "Exit 139 or a signal is fail, not a pass."
             ),
+            **counted,
         }
     # Provenance runs before a URDF is allowed to count. A crash above is
     # already fail, so this reject cannot hide one.
@@ -855,6 +893,7 @@ def _articulation_outcome(
             "returncode": code,
             "links_match": False,
             "reason": provenance["reason"],
+            **counted,
         }
     if verdict == "accept":
         return {
@@ -863,6 +902,7 @@ def _articulation_outcome(
             "returncode": code,
             "links_match": True,
             "reason": "",
+            **counted,
         }
     return {
         "ok": False,
@@ -870,7 +910,16 @@ def _articulation_outcome(
         "returncode": code,
         "links_match": True,
         "reason": "Motion review rejected the URDF.",
+        **counted,
     }
+
+
+def _delete_existing_urdf(urdf_path):
+    """Remove a leftover mobility.urdf before propose writes this run's file."""
+    if urdf_path.is_file() or urdf_path.is_symlink():
+        urdf_path.unlink()
+        return "deleted_existing_mobility_urdf"
+    return "no_existing_mobility_urdf"
 
 
 def _invoke(func, payload):

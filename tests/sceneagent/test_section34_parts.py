@@ -11,6 +11,7 @@ Test inventory:
 - test_urdf_provenance_rejects_link_count_mismatch
 - test_urdf_provenance_rejects_unmatched_mesh
 - test_diffusers_version_0_39_0_passes_and_other_versions_raise
+- test_failed_propose_does_not_review_a_stale_urdf
 """
 
 import hashlib
@@ -393,3 +394,34 @@ def test_diffusers_version_0_39_0_passes_and_other_versions_raise(tmp_path, capl
             version_lookup=lambda: "0.38.1",
         )
     assert calls == []
+
+
+def test_failed_propose_does_not_review_a_stale_urdf(tmp_path):
+    parts, good_urdf = _two_part_assets(tmp_path)
+    out = tmp_path / "run"
+    out.mkdir()
+    (out / "mobility.urdf").write_text(good_urdf, encoding="utf-8")
+    calls = []
+
+    def propose(call):
+        calls.append("propose")
+        # The leftover file is removed before this call. A failed propose
+        # can still leave a URDF behind; that file must not be reviewed.
+        assert not Path(call["urdf_path"]).exists()
+        Path(call["urdf_path"]).write_text(good_urdf, encoding="utf-8")
+        return _Proc(1, "", "propose failed")
+
+    def review(_call):
+        calls.append("review")
+        return _Proc(0, '{"failure_reason": "success", "realism_rating": 10}', "")
+
+    run_partsam_articulation(out, parts, propose=propose, review=review)
+    assert calls == ["propose"]
+    entry = _ledger_entry(out, "articulate")
+    assert entry["returncode"] == 1
+    assert entry["propose_returncode"] == 1
+    assert entry["artifact"] is None
+    assert entry["urdf"] is None
+    assert entry["decision"] != "accept"
+    assert "propose_failed" in entry["reason"]
+    assert entry["urdf_guard"] == "deleted_existing_mobility_urdf"
