@@ -323,12 +323,12 @@ def test_ssh_key_id_comes_from_the_attach_response_only():
 def test_deferred_ledger_is_not_a_pass_and_is_not_rewritten(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="deferred")
+    before = (run / "ledger.json").read_bytes()
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
-    ledger = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
+    assert (run / "ledger.json").read_bytes() == before
+    ledger = json.loads(before.decode("utf-8"))
     assert ledger["entries"][1]["decision"] == "deferred"
-    dc2 = next(entry for entry in ledger["entries"] if entry["item"] == "dc2")
-    assert dc2["decision"] in {"missing", "failed"}
-    assert dc2["decision"] not in {"skipped", "passed", "accept"}
+    assert manifest["dc2"] == "missing"
     assert manifest["passed"] is False
     assert manifest["complete"] is False
     assert "not a pass" in manifest["failure_reason"]
@@ -343,11 +343,9 @@ def test_deferred_ledger_is_not_a_pass_and_is_not_rewritten(tmp_path):
 def test_reject_is_reported_failed_without_editing_the_ledger(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="reject")
+    before = (run / "ledger.json").read_bytes()
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
-    ledger = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
-    assert ledger["entries"][1]["decision"] == "reject"
-    dc2 = next(entry for entry in ledger["entries"] if entry["item"] == "dc2")
-    assert dc2["decision"] in {"missing", "failed"}
+    assert (run / "ledger.json").read_bytes() == before
     assert manifest["passed"] is False
     assert manifest["stages"][1]["reported"] == "failed"
     assert manifest["stages"][1]["decision"] == "reject"
@@ -422,10 +420,10 @@ def test_missing_ledger_is_not_invented(tmp_path):
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
     assert manifest["passed"] is False
     assert "ledger" in manifest["missing"]
+    assert manifest["ledger_status"] == "missing"
+    assert manifest["dc2"] == "missing"
+    assert not (run / "ledger.json").exists()
     assert not (run / "plan.json").exists()
-    assert not (run / "plan.derived.json").exists()
-    recorded = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
-    assert recorded["entries"] == [{"item": "dc2", "decision": "missing"}]
     assert (run / "manifest.json").is_file()
 
 
@@ -772,12 +770,12 @@ def test_workflow_is_manual_dispatch_only():
 def test_no_pipeline_plan_records_dc2_missing_and_writes_no_plan_file(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="deferred")
+    before = (run / "ledger.json").read_bytes()
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
     assert list(run.glob("plan*")) == []
-    ledger = json.loads((run / "ledger.json").read_text(encoding="utf-8"))
-    dc2 = next(entry for entry in ledger["entries"] if entry["item"] == "dc2")
-    assert dc2["decision"] in {"missing", "failed"}
-    assert dc2["decision"] not in {"skipped", "passed", "accept"}
+    assert (run / "ledger.json").read_bytes() == before
+    assert manifest["dc2"] in {"missing", "failed"}
+    assert manifest["dc2"] not in {"skipped", "passed", "accept"}
     assert manifest["passed"] is False
 
 
@@ -826,26 +824,52 @@ def test_key_in_plan_publishes_nothing_and_is_not_logged(tmp_path, capsys, monke
     assert plan_before == b'{"note":"sf4-planted-key"}\n'
 
 
-def test_ledger_key_is_redacted_in_published_files(tmp_path):
+def test_key_in_ledger_publishes_nothing(tmp_path, capsys, monkeypatch):
     secret = "sf4-planted-key"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+        ledger = (run / "ledger.json").read_text(encoding="utf-8")
+        (run / "ledger.json").write_text(
+            ledger.replace("Fruits", "sf4-planted-key", 1), encoding="utf-8"
+        )
+
+    remote = _Remote(write)
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        artifacts,
+        secret,
+        request=request,
+        remote_factory=lambda _row: remote,
+        sleep=lambda _seconds: None,
+    )
+    assert code != 0
+    assert list(artifacts.iterdir()) == []
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "ledger.json" in captured.err
+
+
+def test_published_ledger_is_byte_identical_to_the_pipeline(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="accept", use_gpu=True)
-    original = b'{"scene_name":"Fruits","from":"pipeline"}\n'
-    (run / "plan.json").write_bytes(original)
-    ledger = (run / "ledger.json").read_text(encoding="utf-8")
-    (run / "ledger.json").write_text(
-        ledger.replace("Fruits", "sf4-planted-key", 1), encoding="utf-8"
-    )
-    collect_artifact_manifest(
-        run, command=_command(), instance_id=58301075, api_key=secret
-    )
+    (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+    before = (run / "ledger.json").read_bytes()
+    collect_artifact_manifest(run, command=_command(), instance_id=58301075)
     artifacts = tmp_path / "artifacts"
-    publish_artifacts(run, artifacts, api_key=secret)
-    assert (artifacts / "plan.json").read_bytes() == original
-    for path in artifacts.rglob("*"):
-        if path.is_file():
-            assert secret.encode() not in path.read_bytes()
-    assert secret.encode() not in (run / "manifest.json").read_bytes()
+    publish_artifacts(run, artifacts)
+    assert (run / "ledger.json").read_bytes() == before
+    assert (artifacts / "ledger.json").read_bytes() == before
 
 
 def test_workflow_permissions_are_contents_read_only():

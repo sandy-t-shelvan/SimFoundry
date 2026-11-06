@@ -680,20 +680,11 @@ def _ledger_entries(ledger: dict[str, Any]) -> list[Any]:
     return []
 
 
-def _record_dc2(
-    ledger_path: Path, ledger: dict[str, Any] | None, decision: str
-) -> None:
-    """Append a dc2 line. Missing plan is missing or failed, never skipped."""
+def _record_dc2(decision: str) -> str:
+    """Dc2 lives in the manifest. The pipeline ledger is not touched."""
     if decision not in {"missing", "failed"}:
         raise SmokeError(f"dc2 decision {decision!r} is not a failure record")
-    if ledger is None:
-        body: dict[str, Any] = {"entries": [{"item": "dc2", "decision": decision}]}
-    else:
-        body = dict(ledger)
-        entries = list(_ledger_entries(ledger))
-        entries.append({"item": "dc2", "decision": decision})
-        body["entries"] = entries
-    ledger_path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    return decision
 
 
 def collect_artifact_manifest(
@@ -766,20 +757,23 @@ def collect_artifact_manifest(
         "failure_reason": reason,
     }
     if not plan_path.is_file():
-        _record_dc2(ledger_path, ledger, "missing")
-        manifest["dc2"] = "missing"
-    elif ledger_bytes is not None and ledger_path.read_bytes() != ledger_bytes:
-        raise SmokeError("refusing to rewrite ledger.json")
+        manifest["dc2"] = _record_dc2("missing")
+    if ledger_bytes is None:
+        manifest["ledger_status"] = "missing"
     manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
     if not manifest["complete"]:
         manifest["passed"] = False
     manifest_text = redact(json.dumps(manifest, indent=2) + "\n", api_key)
+    if api_key and api_key in manifest_text:
+        raise SmokeError(
+            "VAST_API_KEY was found in manifest.json after redaction. "
+            "No artifacts were published."
+        )
     (run_dir / "manifest.json").write_text(manifest_text, encoding="utf-8")
-    if (
-        plan_path.is_file()
-        and ledger_bytes is not None
-        and ledger_path.read_bytes() != ledger_bytes
-    ):
+    if ledger_bytes is None:
+        if ledger_path.exists():
+            raise SmokeError("refusing to create ledger.json")
+    elif ledger_path.read_bytes() != ledger_bytes:
         raise SmokeError("refusing to rewrite ledger.json")
     return manifest
 
@@ -792,38 +786,42 @@ def _key_hit(name: str) -> None:
 def publish_artifacts(
     run_dir: Path, artifact_dir: Path, api_key: str = ""
 ) -> list[str]:
-    """Copy run files after a key scan. ``plan.json`` is not rewritten.
+    """Copy run files after a key scan. ``plan.json`` and ``ledger.json`` stay byte copies.
 
     The scan reads every file in ``run_dir`` before ``artifact_dir`` is
-    created or written. A key inside ``plan.json`` fails the run and leaves
-    the artifact directory untouched. Ledger and manifest bytes are redacted
-    in the copy that would be published.
+    created or written. A key in any file other than the collector's
+    manifest fails the run and leaves the artifact directory untouched.
+    ``manifest.json`` is redacted and scanned again before it is written.
     """
     run_dir = Path(run_dir)
     artifact_dir = Path(artifact_dir)
     secret = api_key.encode("utf-8") if api_key else b""
     prepared: list[tuple[str, bytes]] = []
+    hits: list[str] = []
     for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
         rel = path.relative_to(run_dir).as_posix()
         data = path.read_bytes()
-        if path.name == "plan.json":
+        if path.name == "manifest.json":
             if secret and secret in data:
-                _key_hit(rel)
-                raise SmokeError(
-                    f"VAST_API_KEY was found in {rel}. No artifacts were published."
+                data = redact(data.decode("utf-8", errors="replace"), api_key).encode(
+                    "utf-8"
                 )
+            if secret and secret in data:
+                hits.append(rel)
             prepared.append((rel, data))
             continue
         if secret and secret in data:
-            data = redact(data.decode("utf-8", errors="replace"), api_key).encode(
-                "utf-8"
-            )
-        if secret and secret in data:
-            _key_hit(rel)
-            raise SmokeError(
-                f"VAST_API_KEY was found in {rel}. No artifacts were published."
-            )
+            hits.append(rel)
+            continue
         prepared.append((rel, data))
+    if hits:
+        for name in hits:
+            _key_hit(name)
+        raise SmokeError(
+            "VAST_API_KEY was found in "
+            + ", ".join(hits)
+            + ". No artifacts were published."
+        )
     artifact_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
     for rel, data in prepared:
