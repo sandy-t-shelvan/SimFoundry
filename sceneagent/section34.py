@@ -1,4 +1,4 @@
-"""Section 3.4 vote, audit prompt, part prompt, and two open tools.
+"""Section 3.4 vote, audit prompt, part prompt, and part tools.
 
 Equation (2) is a weighted vote of the physics prior, the VLM, and keyword
 priors. Unknown-class weights are scaled by 0.4. The paper says the other
@@ -6,17 +6,22 @@ weights are source confidence, or a fixed value for keyword priors, and it
 does not publish those numbers. The keyword fixed weight is
 ``taxonomy.DEFAULT_KEYWORD_WEIGHT``, which this tree labels as its own.
 
-CubePart's Quebec crash was a signature mismatch. This module only chooses
-the call shape. Articulate Anything is not downloaded here.
+CubePart's Quebec crash was a signature mismatch. ``call_qwen_embed_rope``
+calls ``forward`` with arguments that match the live signature. It does not
+replace that method. Articulate Anything is not downloaded or started here.
+A caller supplies the propose and review processes. A review exit of 139, or
+any negative signal code, is a ledger fail.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
-from sceneagent.agent_loop import parse_material_class
+from sceneagent.agent_loop import append_step, parse_material_class
 from sceneagent.gemini_client import PAPER_MODEL_ID
 from sceneagent.physics import UNKNOWN_WEIGHT_SCALE, vote_material
 from sceneagent.taxonomy import (
@@ -26,15 +31,20 @@ from sceneagent.taxonomy import (
     require_material,
 )
 
-# diffusers 0.39: QwenEmbedRope.forward(video_fhw, device)
+# diffusers 0.39: QwenEmbedRope.forward(video_fhw, device=None, max_txt_seq_len=None).
 # The CubePart repo calls pos_embed(img_shapes, txt_seq_lens, device=...).
-# Passing the repo arguments into the diffusers signature binds img_shapes to
-# video_fhw and then passes device twice, which is the TypeError seen on Quebec.
+# The second positional binds to device, and the keyword passes device again.
+# That is the TypeError. max_txt_seq_len has to travel as a keyword too: the
+# 0.39 body raises when it is missing, and a positional text length would
+# occupy the device slot.
 DIFFUSERS_039_FORWARD = "QwenEmbedRope.forward(video_fhw, device)"
 REPO_POS_EMBED_CALL = "pos_embed(img_shapes, txt_seq_lens, device=...)"
 ROPE_CRASH = (
     "TypeError: QwenEmbedRope.forward() got multiple values for argument 'device'"
 )
+# Shells report SIGSEGV as 128 + 11. subprocess reports that signal as a
+# negative code, for example -11. Either form is a crashed review.
+MOTION_REVIEW_SEGV_EXIT = 139
 
 # Listing from the Quebec zip. The download is not started by this module.
 ARTICULATE_UNCOMPRESSED_BYTES = 15_616_309_082
@@ -379,25 +389,107 @@ def partsam_summary_prompt(masks, parts_after_nms, parts):
 def choose_qwen_embed_rope_call(parameter_names):
     """Pick the call shape from the live ``forward`` parameter names.
 
-    ``('video_fhw', 'device')`` is diffusers 0.39.
-    ``('img_shapes', 'txt_seq_lens', 'device')`` is the CubePart repo call.
+    ``('video_fhw', 'device')`` is diffusers 0.39. ``max_txt_seq_len`` is
+    included when that parameter is on the same signature. A signature that
+    still takes ``txt_seq_lens`` keeps the text length positional and passes
+    ``device`` by keyword, which is the call that 0.39 rejects.
     """
-    names = tuple(parameter_names)
+    names = tuple(name for name in parameter_names if name != "self")
+    if "txt_seq_lens" in names and ("video_fhw" in names or "img_shapes" in names):
+        shape = "img_shapes" if "img_shapes" in names else "video_fhw"
+        keyword = ("device",) if "device" in names else ()
+        call = f"forward({shape}, txt_seq_lens"
+        if "device" in names:
+            call += ", device=device"
+        call += ")"
+        return {
+            "signature": REPO_POS_EMBED_CALL
+            if shape == "img_shapes"
+            else "QwenEmbedRope.forward(video_fhw, txt_seq_lens, device)",
+            "positional": (shape, "txt_seq_lens"),
+            "keyword": keyword,
+            "call": call,
+        }
     if names and names[0] == "video_fhw":
+        keyword_names = []
+        pieces = ["video_fhw"]
+        if "device" in names:
+            keyword_names.append("device")
+            pieces.append("device=device")
+        if "max_txt_seq_len" in names:
+            keyword_names.append("max_txt_seq_len")
+            pieces.append("max_txt_seq_len=max_txt_seq_len")
         return {
             "signature": DIFFUSERS_039_FORWARD,
             "positional": ("video_fhw",),
-            "keyword": ("device",),
-            "call": "forward(video_fhw, device=device)",
-        }
-    if "img_shapes" in names and "txt_seq_lens" in names:
-        return {
-            "signature": REPO_POS_EMBED_CALL,
-            "positional": ("img_shapes", "txt_seq_lens"),
-            "keyword": ("device",),
-            "call": "pos_embed(img_shapes, txt_seq_lens, device=device)",
+            "keyword": tuple(keyword_names),
+            "call": "forward(" + ", ".join(pieces) + ")",
         }
     raise ValueError(f"unrecognized QwenEmbedRope parameters: {names}")
+
+
+def call_qwen_embed_rope(pos_embed, img_shapes, txt_seq_lens, device):
+    """Call ``QwenEmbedRope.forward`` with the live signature's arguments.
+
+    Does not assign ``forward``. On diffusers 0.39 the text length is
+    ``max_txt_seq_len`` and it is passed by keyword, next to ``device``.
+    """
+    forward = getattr(pos_embed, "forward", None)
+    if not callable(forward):
+        forward = pos_embed
+    names = _forward_parameter_names(forward)
+    spec = choose_qwen_embed_rope_call(names)
+    positional = [
+        _rope_argument(name, img_shapes, txt_seq_lens, device)
+        for name in spec["positional"]
+    ]
+    keyword = {
+        name: _rope_argument(name, img_shapes, txt_seq_lens, device)
+        for name in spec["keyword"]
+    }
+    return forward(*positional, **keyword)
+
+
+def _forward_parameter_names(forward):
+    try:
+        signature = inspect.signature(forward)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("QwenEmbedRope.forward has no inspectable signature") from exc
+    names = []
+    for name, param in signature.parameters.items():
+        if name == "self":
+            continue
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+        names.append(name)
+    return tuple(names)
+
+
+def _rope_argument(name, img_shapes, txt_seq_lens, device):
+    if name in ("video_fhw", "img_shapes"):
+        return img_shapes
+    if name == "txt_seq_lens":
+        return txt_seq_lens
+    if name == "device":
+        return device
+    if name == "max_txt_seq_len":
+        return _max_txt_seq_len(txt_seq_lens)
+    raise ValueError(f"unrecognized QwenEmbedRope parameter: {name}")
+
+
+def _max_txt_seq_len(txt_seq_lens):
+    """The longest text sequence. 0.39 takes that integer, not the list."""
+    if isinstance(txt_seq_lens, int):
+        return txt_seq_lens
+    lengths = [int(item) for item in txt_seq_lens]
+    if not lengths:
+        raise ValueError(
+            "txt_seq_lens is empty; diffusers 0.39 requires max_txt_seq_len"
+        )
+    return max(lengths)
 
 
 def cubepart_status(part_mesh_path=None):
@@ -438,3 +530,362 @@ def articulate_row(gpu_up, free_bytes, urdf_path=None):
         if has_urdf
         else "No URDF. The Articulate Anything download was not started.",
     }
+
+
+def cubepart_mesh_result(part_mesh_path):
+    """Tool result for a CubePart mesh. A missing file is not a pass."""
+    mesh = cubepart_status(part_mesh_path)["part_mesh"]
+    return {
+        "ok": mesh is not None,
+        "artifact": mesh,
+        "reason": "" if mesh else "CubePart wrote no part mesh.",
+        "detail": {"part_mesh": mesh, "kind": "cubepart_mesh"},
+    }
+
+
+def partsam_link_names(parts):
+    """URDF link tokens for PartSAM parts. Empty input is refused."""
+    names = []
+    seen: dict[str, int] = {}
+    for index, part in enumerate(parts or []):
+        token = _link_token(_part_raw_name(part, index))
+        count = seen.get(token, 0)
+        seen[token] = count + 1
+        if count:
+            token = f"{token}_{count}"
+        names.append(token)
+    if not names:
+        raise ValueError(
+            "PartSAM parts are empty. Articulate Anything was not started."
+        )
+    return names
+
+
+def articulate_propose_command(spec_path, out_dir):
+    """Command the GPU step would run from an Articulate Anything checkout.
+
+    This string is recorded. It is not executed here.
+    """
+    return [
+        "python",
+        "articulate.py",
+        f"prompt={spec_path}",
+        "modality=text",
+        f"out_dir={out_dir}",
+    ]
+
+
+def motion_review_command(urdf_path, review_dir):
+    """Headless ``sapien_simulate`` of every joint. Not executed here."""
+    return [
+        "python",
+        "articulate_anything/physics/sapien_simulate.py",
+        f"urdf.file={urdf_path}",
+        f"output.dir={review_dir}",
+        "headless=true",
+        "simulation_params.stationary_or_move=move",
+        "simulation_params.joint_name=all",
+    ]
+
+
+def classify_motion_review(returncode, stdout="", stderr=""):
+    """Map a review process to accept, reject, or fail.
+
+    Exit 139 and any negative code mean the process was killed. Those are
+    fail even when the captured text says the motion was good. Exit 0 is
+    accept only when the text says so. Every other finished process is reject.
+    """
+    if returncode is None or returncode < 0 or returncode == MOTION_REVIEW_SEGV_EXIT:
+        return "fail"
+    if returncode == 0 and _motion_verdict(stdout, stderr) == "accept":
+        return "accept"
+    return "reject"
+
+
+def run_partsam_articulation(out_dir, parts, part_mesh=None, propose=None, review=None):
+    """Propose a URDF for these PartSAM parts, then review the motion.
+
+    ``propose`` and ``review`` are the processes that stand in for Articulate
+    Anything and ``sapien_simulate``. Omitting them does not start either
+    program, and that hold is not an accept. A review crash is fail.
+
+    ``propose`` and ``review`` each receive one dict and return an object
+    with ``returncode``, ``stdout``, and ``stderr``.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    names = partsam_link_names(parts)
+    spec_path = out / "partsam_parts.json"
+    urdf_path = out / "mobility.urdf"
+    review_dir = out / "motion_review"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "source": "partsam",
+                "parts": [{"name": name} for name in names],
+                "note": (
+                    "Propose joints for these PartSAM links. "
+                    "A retrieved PartNet table is not this object."
+                ),
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    propose_command = articulate_propose_command(spec_path, out)
+    review_command = motion_review_command(urdf_path, review_dir)
+    mesh = cubepart_status(part_mesh)["part_mesh"] if part_mesh else None
+    entries = []
+    if part_mesh is not None:
+        entries.append(append_step(out, "cubepart", cubepart_mesh_result(part_mesh)))
+    outcome = _articulation_outcome(
+        names,
+        urdf_path,
+        spec_path,
+        propose,
+        review,
+        propose_command,
+        review_command,
+        review_dir,
+    )
+    detail = {
+        "part_mesh": mesh,
+        "urdf": str(urdf_path) if urdf_path.is_file() else None,
+        "review": outcome["review"],
+        "returncode": outcome["returncode"],
+        "links_match": outcome["links_match"],
+        "propose_command": propose_command,
+        "review_command": review_command,
+        "kind": "partsam_motion_review",
+    }
+    result = {
+        "ok": outcome["ok"],
+        "artifact": detail["urdf"],
+        "reason": outcome["reason"],
+        "detail": detail,
+    }
+    entries.append(append_step(out, "articulate", result))
+    return {
+        "entries": entries,
+        "urdf": detail["urdf"],
+        "review": outcome["review"],
+        "part_mesh": mesh,
+    }
+
+
+def _articulation_outcome(
+    names,
+    urdf_path,
+    spec_path,
+    propose,
+    review,
+    propose_command,
+    review_command,
+    review_dir,
+):
+    if propose is None or review is None:
+        return {
+            "ok": False,
+            "review": "reject",
+            "returncode": None,
+            "links_match": False,
+            "reason": "Articulate Anything was not started. No motion review ran.",
+        }
+    proposed = _invoke(
+        propose,
+        {
+            "command": propose_command,
+            "spec_path": spec_path,
+            "urdf_path": urdf_path,
+            "parts": names,
+        },
+    )
+    propose_code, _stdout, stderr = _completed_io(proposed)
+    if _crashed(propose_code):
+        return {
+            "ok": False,
+            "review": "fail",
+            "returncode": propose_code,
+            "links_match": False,
+            "reason": (
+                f"Articulate Anything crashed with return code {propose_code} "
+                "before the motion review. A crash is fail, not a pass."
+            ),
+        }
+    if not urdf_path.is_file() or urdf_path.stat().st_size <= 0:
+        tail = (stderr or "").strip()
+        reason = "Articulate Anything wrote no URDF."
+        if tail:
+            reason = f"{reason} {tail}"
+        return {
+            "ok": False,
+            "review": "reject",
+            "returncode": propose_code,
+            "links_match": False,
+            "reason": reason,
+        }
+    reviewed = _invoke(
+        review,
+        {
+            "command": review_command,
+            "urdf_path": urdf_path,
+            "review_dir": review_dir,
+        },
+    )
+    code, stdout, review_err = _completed_io(reviewed)
+    verdict = classify_motion_review(code, stdout, review_err)
+    links_match = _links_match(urdf_path, names)
+    if verdict == "fail":
+        return {
+            "ok": False,
+            "review": "fail",
+            "returncode": code,
+            "links_match": links_match,
+            "reason": (
+                f"Motion review crashed with return code {code}. "
+                "Exit 139 or a signal is fail, not a pass."
+            ),
+        }
+    if verdict == "accept" and links_match:
+        return {
+            "ok": True,
+            "review": "accept",
+            "returncode": code,
+            "links_match": True,
+            "reason": "",
+        }
+    if not links_match:
+        return {
+            "ok": False,
+            "review": "reject",
+            "returncode": code,
+            "links_match": False,
+            "reason": (
+                "URDF links are not the PartSAM parts. "
+                f"The motion review said {verdict}. That URDF is not accepted."
+            ),
+        }
+    return {
+        "ok": False,
+        "review": "reject",
+        "returncode": code,
+        "links_match": True,
+        "reason": "Motion review rejected the URDF.",
+    }
+
+
+def _invoke(func, payload):
+    try:
+        return func(payload)
+    except Exception as exc:
+        return _FailedProcess(exc)
+
+
+def _crashed(returncode):
+    return classify_motion_review(returncode) == "fail"
+
+
+def _links_match(urdf_path, names):
+    try:
+        links = urdf_link_names(urdf_path)
+    except ET.ParseError:
+        return False
+    return set(names) <= set(links)
+
+
+def urdf_link_names(path):
+    """Link names from a URDF. Namespace tags count as links too."""
+    names = []
+    for node in ET.parse(path).getroot().iter():
+        tag = node.tag.rsplit("}", 1)[-1]
+        if tag != "link":
+            continue
+        name = node.get("name")
+        if name:
+            names.append(name)
+    return names
+
+
+def _completed_io(completed):
+    if completed is None:
+        return None, "", ""
+    code = getattr(completed, "returncode", None)
+    stdout = getattr(completed, "stdout", "") or ""
+    stderr = getattr(completed, "stderr", "") or ""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", "replace")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", "replace")
+    if code is not None:
+        code = int(code)
+    return code, stdout, stderr
+
+
+def _motion_verdict(stdout, stderr):
+    payload = _json_object(stdout) or _json_object(stderr)
+    if not isinstance(payload, dict):
+        return None
+    if "feedback_score" in payload:
+        try:
+            score = float(payload["feedback_score"])
+        except (TypeError, ValueError):
+            return "reject"
+        if score < 0:
+            return "reject"
+    decision = str(payload.get("decision") or "").strip().lower()
+    if decision in {"accept", "pass"}:
+        return "accept"
+    if decision in {"reject", "fail"}:
+        return "reject"
+    reason = str(payload.get("failure_reason") or "").strip().lower()
+    if reason == "success":
+        return "accept"
+    if reason:
+        return "reject"
+    return None
+
+
+def _json_object(text):
+    raw = text or ""
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        payload = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _part_raw_name(part, index):
+    if isinstance(part, dict):
+        raw = part.get("name") or part.get("id")
+        if raw:
+            return str(raw)
+    elif part:
+        return str(part)
+    return f"partsam_{index:02d}"
+
+
+def _link_token(raw):
+    chars = []
+    for char in str(raw).strip().lower():
+        if char.isalnum() or char == "_":
+            chars.append(char)
+        else:
+            chars.append("_")
+    token = "".join(chars).strip("_")
+    return token or "part"
+
+
+class _FailedProcess:
+    """A propose or review callable that raised. That is not a clean exit."""
+
+    def __init__(self, exc):
+        self.returncode = None
+        self.stdout = ""
+        self.stderr = f"{type(exc).__name__}: {exc}"
