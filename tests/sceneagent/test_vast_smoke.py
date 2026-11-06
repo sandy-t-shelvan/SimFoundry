@@ -143,7 +143,7 @@ def test_parse_instance_id_accepts_only_the_texas_instance():
     assert parse_instance_id("58301075") == 58301075
     assert parse_instance_id(" 58301075 ") == 58301075
     for value in (
-        58357498,
+        11111111,
         "58301075.0",
         "",
         None,
@@ -174,7 +174,7 @@ def test_endpoint_allowlist_is_show_start_stop_and_ssh_on_one_id():
         with pytest.raises(InstanceNotApproved):
             endpoint_for(kind, 58301075)
     with pytest.raises(InstanceNotApproved):
-        endpoint_for("show", 58357498)
+        endpoint_for("show", 11111111)
     with pytest.raises(InstanceNotApproved):
         endpoint_for(
             "attach_ssh",
@@ -224,7 +224,7 @@ def test_require_approved_instance_checks_id_and_texas():
             {"instances": _texas("running", geolocation="Estonia, EE")}
         )
     with pytest.raises(InstanceNotApproved, match="returned id"):
-        require_approved_instance({"instances": _texas("running", id=58357498)})
+        require_approved_instance({"instances": _texas("running", id=11111111)})
 
 
 def test_public_view_drops_tokens():
@@ -545,7 +545,7 @@ def test_run_smoke_refuses_the_wrong_instance_before_the_network(tmp_path):
     def boom(*_args, **_kwargs):
         raise AssertionError("network")
 
-    code = run_smoke(58357498, tmp_path, tmp_path / "out", "test-key", request=boom)
+    code = run_smoke(11111111, tmp_path, tmp_path / "out", "test-key", request=boom)
     assert code == 2
 
 
@@ -622,7 +622,7 @@ def test_other_instance_id_is_rejected_before_any_http_call(monkeypatch, tmp_pat
     monkeypatch.setattr("sceneagent.vast_smoke.urllib.request.urlopen", boom)
     monkeypatch.setenv("VAST_API_KEY", "sf4-not-a-real-key")
     checkout = _checkout(tmp_path)
-    for other in (58357498, "1", "58301076"):
+    for other in (11111111, "1", "58301076"):
         code = main(
             [
                 "--instance-id",
@@ -641,7 +641,7 @@ def test_other_instance_id_is_rejected_before_any_http_call(monkeypatch, tmp_pat
     with pytest.raises(InstanceNotApproved):
         request_json(
             "GET",
-            "https://console.vast.ai/api/v0/instances/58357498/?owner=me",
+            "https://console.vast.ai/api/v0/instances/11111111/?owner=me",
             "sf4-not-a-real-key",
         )
 

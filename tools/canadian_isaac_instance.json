@@ -30,6 +30,6 @@
   "smoke_result": "import isaaclab printed HOST_IMPORT_OK 0.54.2 with exit 0. Empty stage printed EMPTY_STAGE_OK anon:0x389f960:World1.usd and STAGE_FILE_RC 0. Kit log kit_20261101_191044.log records Simulation App Startup Complete, CUDA device ordinal 0, and a clean shutdown. A carb child reported signal 11 while reading nvidia-smi; the stage still opened.",
   "artifact": "/workspace/empty-stage-result.txt",
   "blocker": "python.sh on host glibc 2.31 still segfaults because it preloads libcarb.so. proot can import isaaclab but the empty-stage Kit process spun without advancing its log. The jammy loader path above is the one that opened the stage.",
-  "left_alone": [58357498, 58591955],
+  "left_alone": [58591955],
   "checked_at": "2026-11-01"
 }
