@@ -821,7 +821,7 @@ def test_warped_mask_iou_matches_mesh_reraster_within_0_05():
     size = 160
     vertices, faces, source = _square_pair(size, 36.0, 44.0, 22.0)
     scale = 1.4
-    rotation = rotation_matrix_from_vector([0.0, 0.0, 0.4])
+    rotation = rotation_matrix_from_vector([0.35, 0.2, 0.4])
     translation = np.array([6.0, 3.0, 0.0])
     warped = _warp_mask(source, scale, rotation, translation)
     reraster = _expected_raster(vertices, faces, size, scale, rotation, translation)

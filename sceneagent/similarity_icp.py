@@ -640,23 +640,26 @@ def _warp_mask(mask, scale, rotation, translation, origin=(0.0, 0.0), pixel_size
     cols = origin[0] + (np.arange(width, dtype=np.float64) + 0.5) * pixel
     rows = origin[1] + (np.arange(height, dtype=np.float64) + 0.5) * pixel
     grid_x, grid_y = np.meshgrid(cols, rows)
-    # p = R.T @ ((p' - t) / scale). Destination centers lie on z = 0.
+    # Source pixels lie on z = 0. The image keeps x and y after the similarity,
+    # so the inverse solves the top two rows of the rotation. Forcing the
+    # destination onto z = 0 reverses an out-of-plane rotation.
     delta_x = (grid_x - translation[0]) / scale
     delta_y = (grid_y - translation[1]) / scale
-    delta_z = (0.0 - translation[2]) / scale
-    inverse = rotation.T
-    source_x = (
-        inverse[0, 0] * delta_x + inverse[0, 1] * delta_y + inverse[0, 2] * delta_z
-    )
-    source_y = (
-        inverse[1, 0] * delta_x + inverse[1, 1] * delta_y + inverse[1, 2] * delta_z
-    )
+    a = float(rotation[0, 0])
+    b = float(rotation[0, 1])
+    c = float(rotation[1, 0])
+    d = float(rotation[1, 1])
+    det = a * d - b * c
+    warped = np.zeros((height, width), dtype=bool)
+    if abs(det) < 1e-8:
+        return warped
+    source_x = (d * delta_x - b * delta_y) / det
+    source_y = (-c * delta_x + a * delta_y) / det
     col_f = (source_x - origin[0]) / pixel - 0.5
     row_f = (source_y - origin[1]) / pixel - 0.5
     ic = np.rint(col_f).astype(np.int64)
     ir = np.rint(row_f).astype(np.int64)
     inside = (ir >= 0) & (ir < height) & (ic >= 0) & (ic < width)
-    warped = np.zeros((height, width), dtype=bool)
     warped[inside] = mask[ir[inside], ic[inside]]
     return warped
 
