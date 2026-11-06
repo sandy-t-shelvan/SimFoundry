@@ -1352,7 +1352,7 @@ export default function SceneAgentPaperGaps() {
           ["CUDA COLMAP 4.2.1", "15/15 images, 603 points, mean reprojection 0.867273 px. Runner still 1 fps and a 16-frame cap.", "3.2 partial"],
           ["splatfacto-big", "2000 steps, not 30000. step-000001999.ckpt. 13 train renders. Cameras from this COLMAP are not in the train.", "3.2 done"],
           ["SAM, OpenCLIP, DINOv2", "vit_h every 10th frame: 0001 has 33 masks, 0011 has 19. OpenCLIP ViT-B-16 512-d and DINOv2 ViT-S/14 crop vectors were produced. Evidence: /workspace/fruits-features/features.json. Not DINOv3. Per-Gaussian features are tracked in the separate feature-on-Gaussian conversion row (plan section 9.5 item 4).", "masks, meshes, crop features done; per-Gaussian features partial"],
-          ["Association", "Equation (1) kept 27548/84993 Gaussians.", "3.3 done"],
+          ["Association", "Equation (1) kept 27548/84993 Gaussians.", "association done (Eq. 1)"],
           ["SAM 3D + ICP", "0001.glb, overlay, gaussian ply. Trimmed ICP median 0.04999262711481225. Ours iteration-1 gate rejects: coverage 0.146 and silhouette None.", "mesh done, ICP partial"],
           ["Aligned USDA", "phase1_aligned_mesh.usda, 5,339,577 bytes, 8095 faces. Isaac opened=True, 4 prims.", "3.7 done"],
           ["MuJoCo 3.17", "30 steps. Hull MJCF 327 verts, 650 faces. Box ended (0, 0, 0.1817534) m. Not a place.", "3.7 done"],
