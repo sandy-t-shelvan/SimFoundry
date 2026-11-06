@@ -616,12 +616,13 @@ def load_stored_sam3d_pose(path, glb_path):
 
 
 def _warp_mask(mask, scale, rotation, translation, origin=(0.0, 0.0), pixel_size=1.0):
-    """Move a mask's pixel centers by the refined similarity, then splat them.
+    """Sample each destination pixel from the source mask through the inverse similarity.
 
-    The orthographic frame matches ``rasterize_orthographic_silhouette``:
-    pixel ``(row, col)`` is centered at ``origin + (col + 0.5, row + 0.5) *
-    pixel_size`` on z = 0. A raw mask is the export frame. The gate needs
-    that mask after the same scale, rotation, and translation as the mesh.
+    Forward splatting one source pixel onto one destination cell leaves holes
+    when the scale is not 1 or the rotation is not a quarter turn. The inverse
+    of ``scale * rotation @ point + translation`` is evaluated at every
+    destination center, and the nearest source pixel is read. A sample outside
+    the mask is empty. The frame matches ``rasterize_orthographic_silhouette``.
     """
     mask = np.asarray(mask, dtype=bool)
     if mask.ndim != 2:
@@ -629,24 +630,34 @@ def _warp_mask(mask, scale, rotation, translation, origin=(0.0, 0.0), pixel_size
     height, width = mask.shape
     origin = np.asarray(origin, dtype=np.float64).reshape(2)
     pixel = float(pixel_size)
-    rows, cols = np.nonzero(mask)
-    warped = np.zeros((height, width), dtype=bool)
-    if len(rows) == 0:
-        return warped
-    points = np.column_stack(
-        [
-            origin[0] + (cols.astype(np.float64) + 0.5) * pixel,
-            origin[1] + (rows.astype(np.float64) + 0.5) * pixel,
-            np.zeros(len(rows), dtype=np.float64),
-        ]
+    if not math.isfinite(pixel) or pixel <= 0.0:
+        raise ValueError("pixel_size must be positive")
+    scale = float(scale)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("scale must be a positive finite number")
+    rotation = np.asarray(rotation, dtype=np.float64)
+    translation = np.asarray(translation, dtype=np.float64).reshape(3)
+    cols = origin[0] + (np.arange(width, dtype=np.float64) + 0.5) * pixel
+    rows = origin[1] + (np.arange(height, dtype=np.float64) + 0.5) * pixel
+    grid_x, grid_y = np.meshgrid(cols, rows)
+    # p = R.T @ ((p' - t) / scale). Destination centers lie on z = 0.
+    delta_x = (grid_x - translation[0]) / scale
+    delta_y = (grid_y - translation[1]) / scale
+    delta_z = (0.0 - translation[2]) / scale
+    inverse = rotation.T
+    source_x = (
+        inverse[0, 0] * delta_x + inverse[0, 1] * delta_y + inverse[0, 2] * delta_z
     )
-    moved = apply_similarity(points, scale, rotation, translation)
-    col_f = (moved[:, 0] - origin[0]) / pixel - 0.5
-    row_f = (moved[:, 1] - origin[1]) / pixel - 0.5
+    source_y = (
+        inverse[1, 0] * delta_x + inverse[1, 1] * delta_y + inverse[1, 2] * delta_z
+    )
+    col_f = (source_x - origin[0]) / pixel - 0.5
+    row_f = (source_y - origin[1]) / pixel - 0.5
     ic = np.rint(col_f).astype(np.int64)
     ir = np.rint(row_f).astype(np.int64)
     inside = (ir >= 0) & (ir < height) & (ic >= 0) & (ic < width)
-    warped[ir[inside], ic[inside]] = True
+    warped = np.zeros((height, width), dtype=bool)
+    warped[inside] = mask[ir[inside], ic[inside]]
     return warped
 
 

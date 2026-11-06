@@ -22,6 +22,7 @@ from sceneagent.similarity_icp import (
     PoseSidecarHashMissingError,
     PoseSidecarMissingError,
     PoseSidecarRotationMissingError,
+    _warp_mask,
     apply_similarity,
     icp_step_exit_code,
     load_stored_sam3d_pose,
@@ -744,3 +745,90 @@ def test_rendered_mask_is_warped_by_the_refined_similarity(tmp_path):
     assert written["pose_initialization"]["scored_pose"] == "post_icp"
     transform = written["pose_initialization"]["silhouette_transform"]
     np.testing.assert_allclose(transform["translation"], [0.6, 0.0, 0.0], atol=1e-6)
+
+
+def _square_pair(size, x0, y0, side):
+    vertices = np.array(
+        [
+            [x0, y0, 0.0],
+            [x0 + side, y0, 0.0],
+            [x0 + side, y0 + side, 0.0],
+            [x0, y0 + side, 0.0],
+        ]
+    )
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    source = rasterize_orthographic_silhouette(vertices, faces, width=size, height=size)
+    return vertices, faces, source
+
+
+def _interior_hole_count(mask):
+    """False pixels whose four orthogonal neighbors are True."""
+    if mask.shape[0] < 3 or mask.shape[1] < 3:
+        return 0
+    enclosed = (
+        ~mask[1:-1, 1:-1]
+        & mask[:-2, 1:-1]
+        & mask[2:, 1:-1]
+        & mask[1:-1, :-2]
+        & mask[1:-1, 2:]
+    )
+    return int(enclosed.sum())
+
+
+def _expected_raster(vertices, faces, size, scale, rotation, translation):
+    moved = apply_similarity(vertices, scale, rotation, translation)
+    return rasterize_orthographic_silhouette(moved, faces, width=size, height=size)
+
+
+def test_inverse_warp_scale_two_fills_four_times_the_area_without_holes():
+    size = 160
+    vertices, faces, source = _square_pair(size, 24.0, 24.0, 20.0)
+    scale = 2.0
+    rotation = np.eye(3)
+    translation = np.zeros(3)
+    warped = _warp_mask(source, scale, rotation, translation)
+    expected = _expected_raster(vertices, faces, size, scale, rotation, translation)
+    assert int(source.sum()) > 0
+    assert int(warped.sum()) == pytest.approx(4 * int(source.sum()), rel=0.08)
+    assert _interior_hole_count(warped) == 0
+    assert silhouette_iou(warped, expected) >= 0.95
+
+
+def test_inverse_warp_forty_five_degrees_has_no_holes():
+    size = 180
+    vertices, faces, source = _square_pair(size, 70.0, 70.0, 24.0)
+    rotation = rotation_matrix_from_vector([0.0, 0.0, math.pi / 4.0])
+    translation = np.zeros(3)
+    warped = _warp_mask(source, 1.0, rotation, translation)
+    expected = _expected_raster(vertices, faces, size, 1.0, rotation, translation)
+    assert _interior_hole_count(warped) == 0
+    assert silhouette_iou(warped, expected) >= 0.95
+
+
+def test_inverse_warp_scale_half_thirty_degrees_and_translation():
+    size = 180
+    vertices, faces, source = _square_pair(size, 40.0, 50.0, 28.0)
+    scale = 0.5
+    rotation = rotation_matrix_from_vector([0.0, 0.0, math.pi / 6.0])
+    translation = np.array([12.0, -8.0, 0.0])
+    warped = _warp_mask(source, scale, rotation, translation)
+    expected = _expected_raster(vertices, faces, size, scale, rotation, translation)
+    assert _interior_hole_count(warped) == 0
+    assert silhouette_iou(warped, expected) >= 0.95
+
+
+def test_warped_mask_iou_matches_mesh_reraster_within_0_05():
+    size = 160
+    vertices, faces, source = _square_pair(size, 36.0, 44.0, 22.0)
+    scale = 1.4
+    rotation = rotation_matrix_from_vector([0.0, 0.0, 0.4])
+    translation = np.array([6.0, 3.0, 0.0])
+    warped = _warp_mask(source, scale, rotation, translation)
+    reraster = _expected_raster(vertices, faces, size, scale, rotation, translation)
+    # Both are compared with the same observed region, the re-raster itself,
+    # and with a shifted copy so neither IoU is forced to 1.
+    observed = np.roll(reraster, 2, axis=1)
+    warp_iou = silhouette_iou(warped, observed)
+    mesh_iou = silhouette_iou(reraster, observed)
+    assert warp_iou is not None and mesh_iou is not None
+    assert abs(warp_iou - mesh_iou) <= 0.05
