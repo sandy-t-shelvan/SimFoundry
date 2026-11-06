@@ -4,14 +4,22 @@ The PDF names COLMAP and does not publish extractor settings. The commands
 below are COLMAP 3.7's sequential pipeline for one video camera. A banner
 that says "without CUDA" forces SIFT onto the CPU. A missing binary is not
 a reconstruction, and this stage does not train a splat.
+
+The frame sample defaults to 1 fps and 16 frames. That cap is this runner's.
+``max_frames`` None or 0 omits it, and ``fps`` None or 0 omits the fps
+filter. Both together keep every decoded frame. Sampled frames are
+color-calibrated per image before matching.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
+from sceneagent.ingest_assets import apply_per_image_color_calibration
 
 
 def use_gpu_from_banner(banner):
@@ -116,18 +124,105 @@ def pose_commands(database, image_dir, sparse_dir, use_gpu, major=3):
     ]
 
 
-def run_poses(video_path, work_dir, fps=1, max_frames=16):
-    """Sample frames and run COLMAP. The frame cap is this runner's, not the paper's."""
+def _no_limit(value):
+    """True when the caller asked to keep every frame.
+
+    ``False`` compares equal to ``0``. A boolean has to be rejected before
+    that comparison, or ``fps=False`` would silently drop the fps filter.
+    """
+    if isinstance(value, bool):
+        raise ValueError(
+            "fps and max_frames must be numbers, or None or 0 for every frame"
+        )
+    return value is None or value == 0
+
+
+def _positive_rate(fps):
+    if isinstance(fps, bool) or not isinstance(fps, (int, float)) or fps <= 0:
+        raise ValueError("fps must be positive, or None or 0 for every decoded frame")
+    return fps
+
+
+def _frame_cap(max_frames):
+    if isinstance(max_frames, bool) or not isinstance(max_frames, (int, float)):
+        raise ValueError(
+            "max_frames must be a positive int, or None or 0 for every frame"
+        )
+    if isinstance(max_frames, float) and not max_frames.is_integer():
+        raise ValueError(
+            "max_frames must be a positive int, or None or 0 for every frame"
+        )
+    cap = int(max_frames)
+    if cap <= 0:
+        raise ValueError(
+            "max_frames must be a positive int, or None or 0 for every frame"
+        )
+    return cap
+
+
+def sample_frame_command(ffmpeg, video_path, image_pattern, fps=1, max_frames=16):
+    """ffmpeg argv for the frame sample.
+
+    Defaults are this runner's 1 fps and 16-frame cap. The paper does not
+    publish either number. ``None`` or ``0`` drops that limit. ffmpeg treats
+    ``-frames:v 0`` as an empty extract and ``fps=0`` as an invalid filter,
+    so those values omit the flag instead of being forwarded. Omitting both
+    keeps every decoded frame. Omitting only the cap still applies ``fps``.
+    """
+    command = [str(ffmpeg), "-y", "-i", str(video_path)]
+    if not _no_limit(fps):
+        command.extend(["-vf", f"fps={_positive_rate(fps)}"])
+    if not _no_limit(max_frames):
+        command.extend(["-frames:v", str(_frame_cap(max_frames))])
+    command.append(str(image_pattern))
+    return command
+
+
+def validate_frame_limits(fps=1, max_frames=16):
+    """Raise ValueError when ``fps`` or ``max_frames`` is not a supported limit."""
+    sample_frame_command("ffmpeg", "in", "out.jpg", fps=fps, max_frames=max_frames)
+
+
+def _request_is_full_rate(fps, max_frames):
+    """True only when both the fps filter and the frame cap are off."""
+    validate_frame_limits(fps, max_frames)
+    return _no_limit(fps) and _no_limit(max_frames)
+
+
+def run_poses(video_path, work_dir, fps=1, max_frames=16, color_calibrate=True):
+    """Sample frames, calibrate each image, and run COLMAP.
+
+    The 1 fps sample and the 16-frame cap are this runner's, not the paper's.
+    ``max_frames`` None or 0 omits ``-frames:v``. ``fps`` None or 0 omits the
+    fps filter. Setting both keeps every decoded frame.
+
+    ``color_calibrate`` scales each extracted image by its own gain before
+    ``feature_extractor``. Section 3.2 names per-image color calibration and
+    does not publish the correction, so the scale is ours. Pass false to
+    leave the sampled pixels unchanged.
+    """
+    full_rate = _request_is_full_rate(fps, max_frames)
+    calibrated: dict[str, object] = {}
+
+    def _result(**payload):
+        payload["fps"] = fps
+        payload["max_frames"] = max_frames
+        payload["color_calibrate"] = bool(color_calibrate)
+        payload["full_rate"] = full_rate
+        if "report" in calibrated:
+            payload["color_calibration"] = calibrated["report"]
+        return payload
+
     colmap = shutil.which("colmap")
     ffmpeg = shutil.which("ffmpeg")
     if not colmap or not ffmpeg:
-        return {
-            "ran": False,
-            "ok": False,
-            "reason": "colmap or ffmpeg is not on PATH",
-            "colmap": colmap,
-            "ffmpeg": ffmpeg,
-        }
+        return _result(
+            ran=False,
+            ok=False,
+            reason="colmap or ffmpeg is not on PATH",
+            colmap=colmap,
+            ffmpeg=ffmpeg,
+        )
     work = Path(work_dir)
     images = work / "images"
     sparse = work / "sparse"
@@ -140,29 +235,46 @@ def run_poses(video_path, work_dir, fps=1, max_frames=16):
     database = work / "database.db"
     if database.exists():
         database.unlink()
+    # A report from an earlier call would describe frames this call just deleted.
+    calibration_path = work / "color_calibration.json"
+    if calibration_path.exists():
+        calibration_path.unlink()
     extract = _run(
-        [
+        sample_frame_command(
             ffmpeg,
-            "-y",
-            "-i",
-            str(video_path),
-            "-vf",
-            f"fps={fps}",
-            "-frames:v",
-            str(max_frames),
-            str(images / "%04d.jpg"),
-        ],
+            video_path,
+            images / "%04d.jpg",
+            fps=fps,
+            max_frames=max_frames,
+        ),
         timeout_s=180,
     )
     frames = sorted(path.name for path in images.glob("*.jpg"))
     if extract["returncode"] != 0 or not frames:
-        return {
-            "ran": True,
-            "ok": False,
-            "failed_step": "ffmpeg",
-            "frames": frames,
-            "steps": {"ffmpeg": extract},
-        }
+        return _result(
+            ran=True,
+            ok=False,
+            failed_step="ffmpeg",
+            frames=frames,
+            steps={"ffmpeg": extract},
+        )
+    if color_calibrate:
+        try:
+            report = apply_per_image_color_calibration(images)
+            calibration_path.write_text(
+                json.dumps(report, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except (ValueError, OSError) as exc:
+            return _result(
+                ran=True,
+                ok=False,
+                failed_step="color_calibration",
+                frames=frames,
+                steps={"ffmpeg": extract},
+                reason=str(exc),
+            )
+        calibrated["report"] = report
     banner = subprocess.run([colmap, "-h"], check=False, capture_output=True, text=True)
     banner_text = (banner.stdout or "") + (banner.stderr or "")
     use_gpu = use_gpu_from_banner(banner_text)
@@ -172,43 +284,43 @@ def run_poses(video_path, work_dir, fps=1, max_frames=16):
         step_name = argv[1]
         steps[step_name] = _run(argv, timeout_s=900)
         if steps[step_name]["returncode"] != 0:
-            return {
-                "ran": True,
-                "ok": False,
-                "use_gpu": use_gpu,
-                "colmap_major": major,
-                "failed_step": step_name,
-                "frames": frames,
-                "steps": steps,
-            }
+            return _result(
+                ran=True,
+                ok=False,
+                use_gpu=use_gpu,
+                colmap_major=major,
+                failed_step=step_name,
+                frames=frames,
+                steps=steps,
+            )
     model_dir = sparse / "0"
     if not (model_dir / "cameras.bin").is_file():
-        return {
-            "ran": True,
-            "ok": False,
-            "use_gpu": use_gpu,
-            "colmap_major": major,
-            "failed_step": "mapper",
-            "frames": frames,
-            "reason": "mapper wrote no sparse/0/cameras.bin",
-            "steps": steps,
-        }
+        return _result(
+            ran=True,
+            ok=False,
+            use_gpu=use_gpu,
+            colmap_major=major,
+            failed_step="mapper",
+            frames=frames,
+            reason="mapper wrote no sparse/0/cameras.bin",
+            steps=steps,
+        )
     steps["model_analyzer"] = _run(
         [colmap, "model_analyzer", "--path", str(model_dir)],
         timeout_s=120,
     )
     analyzer_ok = steps["model_analyzer"]["returncode"] == 0
-    return {
-        "ran": True,
-        "ok": analyzer_ok,
-        "use_gpu": use_gpu,
-        "colmap_major": major,
-        "frames": frames,
-        "model_dir": str(model_dir),
-        "analyzer": steps["model_analyzer"],
-        "steps": steps,
-        "reason": "" if analyzer_ok else "model_analyzer failed",
-    }
+    return _result(
+        ran=True,
+        ok=analyzer_ok,
+        use_gpu=use_gpu,
+        colmap_major=major,
+        frames=frames,
+        model_dir=str(model_dir),
+        analyzer=steps["model_analyzer"],
+        steps=steps,
+        reason="" if analyzer_ok else "model_analyzer failed",
+    )
 
 
 def _run(command, timeout_s=600):

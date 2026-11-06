@@ -1,0 +1,372 @@
+"""CPU tests for the COLMAP frame cap and per-image color calibration.
+
+No COLMAP binary and no GPU. ffmpeg is not invoked; the sample argv is
+checked directly, and ``run_poses`` is stubbed at ``_run``.
+"""
+
+import json
+import subprocess
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from sceneagent.colmap_stage import run_poses, sample_frame_command
+from sceneagent.ingest_assets import (
+    OURS_COLOR_HEURISTIC,
+    apply_per_image_color_calibration,
+    mean_rgb_file,
+    per_image_color_gains,
+)
+from sceneagent.video import run_video
+
+ROOT = Path(__file__).resolve().parents[2]
+FRUITS = ROOT / "docs" / "assets" / "example_videos" / "Fruits.mp4"
+_PPM_HEADER = b"P6\n2 2\n255\n"
+
+
+def _ppm(path, rgb, size=2):
+    path.write_bytes(_PPM_HEADER + bytes(rgb) * (size * size))
+
+
+def _ppm_pixels(path):
+    data = path.read_bytes()
+    assert data.startswith(_PPM_HEADER)
+    return data[len(_PPM_HEADER) :]
+
+
+def _which_binaries(name):
+    if name in {"ffmpeg", "colmap"}:
+        return f"/usr/bin/{name}"
+    return None
+
+
+def _failed_run(command, timeout_s=600):
+    return {
+        "command": command,
+        "returncode": 1,
+        "timed_out": False,
+        "stdout_tail": "",
+        "stderr_tail": "",
+    }
+
+
+def _banner(*_args, **_kwargs):
+    return subprocess.CompletedProcess(
+        _args,
+        0,
+        stdout="COLMAP 3.7 -- Structure-from-Motion\n(Commit Unknown without CUDA)\n",
+        stderr="",
+    )
+
+
+def test_default_sample_command_keeps_the_16_frame_cap():
+    assert sample_frame_command("ffmpeg", "clip.mp4", "images/%04d.jpg") == [
+        "ffmpeg",
+        "-y",
+        "-i",
+        "clip.mp4",
+        "-vf",
+        "fps=1",
+        "-frames:v",
+        "16",
+        "images/%04d.jpg",
+    ]
+
+
+def test_none_and_zero_keep_every_decoded_frame():
+    expected = ["ffmpeg", "-y", "-i", "clip.mp4", "images/%04d.jpg"]
+    assert (
+        sample_frame_command(
+            "ffmpeg", "clip.mp4", "images/%04d.jpg", fps=None, max_frames=None
+        )
+        == expected
+    )
+    assert (
+        sample_frame_command(
+            "ffmpeg", "clip.mp4", "images/%04d.jpg", fps=0, max_frames=0
+        )
+        == expected
+    )
+    capped = sample_frame_command(
+        "ffmpeg", "clip.mp4", "images/%04d.jpg", fps=None, max_frames=16
+    )
+    assert "-vf" not in capped
+    assert capped[capped.index("-frames:v") + 1] == "16"
+    every_at_one_fps = sample_frame_command(
+        "ffmpeg", "clip.mp4", "images/%04d.jpg", fps=1, max_frames=0
+    )
+    assert "fps=1" in every_at_one_fps
+    assert "-frames:v" not in every_at_one_fps
+    custom = sample_frame_command(
+        "ffmpeg", "clip.mp4", "images/%04d.jpg", fps=29.97, max_frames=7
+    )
+    assert "fps=29.97" in custom
+    assert custom[custom.index("-frames:v") + 1] == "7"
+
+
+def test_bool_and_negative_limits_are_rejected():
+    with pytest.raises(ValueError):
+        sample_frame_command("ffmpeg", "clip.mp4", "images/%04d.jpg", max_frames=False)
+    with pytest.raises(ValueError):
+        sample_frame_command("ffmpeg", "clip.mp4", "images/%04d.jpg", fps=False)
+    with pytest.raises(ValueError):
+        sample_frame_command("ffmpeg", "clip.mp4", "images/%04d.jpg", max_frames=-1)
+    with pytest.raises(ValueError):
+        sample_frame_command("ffmpeg", "clip.mp4", "images/%04d.jpg", max_frames=2.5)
+
+
+def test_run_poses_records_a_full_rate_request_without_binaries(tmp_path, monkeypatch):
+    monkeypatch.setattr("sceneagent.colmap_stage.shutil.which", lambda _name: None)
+    result = run_poses("clip.mp4", tmp_path / "work", fps=None, max_frames=0)
+    assert result["ran"] is False
+    assert result["ok"] is False
+    assert "PATH" in result["reason"]
+    assert result["full_rate"] is True
+    assert result["fps"] is None
+    assert result["max_frames"] == 0
+    assert result["color_calibrate"] is True
+    assert "color_calibration" not in result
+    default = run_poses("clip.mp4", tmp_path / "default")
+    assert default["fps"] == 1
+    assert default["max_frames"] == 16
+    assert default["full_rate"] is False
+
+
+def test_run_poses_forwards_the_frame_limit_to_ffmpeg(tmp_path, monkeypatch):
+    monkeypatch.setattr("sceneagent.colmap_stage.shutil.which", _which_binaries)
+    seen = []
+
+    def fake_run(command, timeout_s=600):
+        seen.append(list(command))
+        return _failed_run(command, timeout_s)
+
+    monkeypatch.setattr("sceneagent.colmap_stage._run", fake_run)
+    result = run_poses(tmp_path / "clip.mp4", tmp_path / "work", fps=30, max_frames=None)
+    assert result["ran"] is True
+    assert result["failed_step"] == "ffmpeg"
+    assert result["full_rate"] is False
+    assert seen[0] == sample_frame_command(
+        "/usr/bin/ffmpeg",
+        tmp_path / "clip.mp4",
+        tmp_path / "work" / "images" / "%04d.jpg",
+        fps=30,
+        max_frames=None,
+    )
+    assert "-frames:v" not in seen[0]
+    assert "fps=30" in seen[0]
+
+
+def test_a_negative_frame_cap_is_rejected_before_the_manifest(tmp_path):
+    with pytest.raises(ValueError):
+        run_video(tmp_path / "missing.mp4", tmp_path / "out", max_frames=-1)
+    assert not (tmp_path / "out").exists()
+
+
+def test_run_video_forwards_full_rate(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "sceneagent.external_tools.shutil.which",
+        lambda name: "/usr/bin/colmap" if name == "colmap" else None,
+    )
+    seen = {}
+
+    def fake_poses(path, work_dir, fps=1, max_frames=16, color_calibrate=True):
+        seen["args"] = (fps, max_frames, color_calibrate)
+        return {"ran": False, "ok": False, "reason": "stub"}
+
+    monkeypatch.setattr("sceneagent.colmap_stage.run_poses", fake_poses)
+    summary = run_video(
+        FRUITS, tmp_path / "out", fps=0, max_frames=None, color_calibrate=True
+    )
+    assert seen["args"] == (0, None, True)
+    assert summary["colmap_decision"] == "deferred"
+
+
+def test_cli_keeps_the_default_cap_and_accepts_full_rate(tmp_path, monkeypatch):
+    seen = []
+
+    def fake_run_video(path, out, fps=1, max_frames=16, color_calibrate=True):
+        seen.append((fps, max_frames, color_calibrate))
+        return {
+            "video": {"name": "Fruits.mp4", "bytes": 1, "duration_s": 1.0},
+            "colmap_available": False,
+            "colmap_decision": "deferred",
+            "reconstruction": "not_run",
+            "out_dir": str(out),
+        }
+
+    monkeypatch.setattr("sceneagent.video.run_video", fake_run_video)
+    from sceneagent.__main__ import main
+
+    assert main([str(FRUITS), "--out", str(tmp_path / "default")]) == 0
+    assert seen[-1] == (1, 16, True)
+    assert (
+        main(
+            [
+                str(FRUITS),
+                "--out",
+                str(tmp_path / "full"),
+                "--fps",
+                "0",
+                "--max-frames",
+                "0",
+                "--no-color-calibration",
+            ]
+        )
+        == 0
+    )
+    assert seen[-1] == (0, 0, False)
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                str(tmp_path / "scene.json"),
+                "--out",
+                str(tmp_path / "json"),
+                "--max-frames",
+                "0",
+            ]
+        )
+    assert caught.value.code == 2
+
+
+def test_gains_are_per_image_and_a_zero_channel_stays_at_one():
+    matched = per_image_color_gains(
+        [("a", (40, 50, 60)), ("b", (40, 50, 60))]
+    )
+    assert matched["global_correction"] is False
+    assert matched["paper_method"] is False
+    assert [row["path"] for row in matched["gains"]] == ["a", "b"]
+    assert matched["gains"][0]["gain_rgb"] == pytest.approx([1, 1, 1])
+    assert matched["gains"][1]["gain_rgb"] == pytest.approx([1, 1, 1])
+    dark = per_image_color_gains(
+        [("dark", (0, 10, 10)), ("lit", (20, 10, 10))]
+    )
+    by_path = {row["path"]: row["gain_rgb"] for row in dark["gains"]}
+    assert by_path["dark"] == pytest.approx([1.0, 1.0, 1.0])
+    assert by_path["lit"][0] == pytest.approx(0.5)
+    assert by_path["dark"] != by_path["lit"]
+
+
+def test_color_calibration_scales_each_image_on_its_own(tmp_path):
+    folder = tmp_path / "frames"
+    folder.mkdir()
+    _ppm(folder / "red.ppm", (200, 10, 10))
+    _ppm(folder / "blue.ppm", (10, 10, 200))
+    _ppm(folder / "gray.ppm", (105, 10, 105))
+    before = {path.name: path.read_bytes() for path in folder.iterdir()}
+    out = tmp_path / "calibrated"
+    result = apply_per_image_color_calibration(folder, out)
+    assert {path.name: path.read_bytes() for path in folder.iterdir()} == before
+    assert result["applied"] is True
+    assert result["paper_method"] is False
+    assert result["global_correction"] is False
+    assert result["method"] == "per_image_diagonal_to_median"
+    assert "ours" in result["label"]
+    assert result["colmap_ran"] is False
+    assert result["median_rgb"] == pytest.approx([105, 10, 105])
+    assert result["median_rgb"] == pytest.approx(result["input_report"]["median_rgb"])
+    assert result["input_report"]["heuristic"] == OURS_COLOR_HEURISTIC
+    flagged = {Path(path).name for path in result["input_report"]["flagged_paths"]}
+    assert flagged == {"red.ppm", "blue.ppm"}
+    by_name = {Path(frame["source"]).name: frame for frame in result["frames"]}
+    assert by_name["red.ppm"]["gain_rgb"] == pytest.approx([105 / 200, 1, 105 / 10])
+    assert by_name["blue.ppm"]["gain_rgb"] == pytest.approx([105 / 10, 1, 105 / 200])
+    assert by_name["gray.ppm"]["gain_rgb"] == pytest.approx([1, 1, 1])
+    assert by_name["red.ppm"]["gain_rgb"] != by_name["blue.ppm"]["gain_rgb"]
+    target = bytes((105, 10, 105)) * 4
+    assert _ppm_pixels(out / "red.ppm") == target
+    assert _ppm_pixels(out / "blue.ppm") == target
+    assert (out / "gray.ppm").read_bytes() == before["gray.ppm"]
+    for name in ("red.ppm", "blue.ppm", "gray.ppm"):
+        assert by_name[name]["calibrated_mean_rgb"] == pytest.approx([105, 10, 105])
+
+
+def test_run_poses_calibrates_each_frame_before_feature_extraction(tmp_path, monkeypatch):
+    monkeypatch.setattr("sceneagent.colmap_stage.shutil.which", _which_binaries)
+    monkeypatch.setattr("sceneagent.colmap_stage.subprocess.run", _banner)
+    work = tmp_path / "colmap"
+    originals = {}
+    stages = []
+
+    def fake_run(command, timeout_s=600):
+        if Path(str(command[0])).name == "ffmpeg":
+            stages.append("ffmpeg")
+            folder = Path(command[-1]).parent
+            for frame_name, color in (
+                ("0001.jpg", (200, 10, 10)),
+                ("0002.jpg", (10, 10, 200)),
+            ):
+                path = folder / frame_name
+                Image.new("RGB", (2, 2), color).save(path, quality=95, subsampling=0)
+                originals[frame_name] = path.read_bytes()
+        else:
+            stages.append(command[1])
+            if command[1] == "feature_extractor":
+                assert (work / "color_calibration.json").is_file()
+                for frame_name, raw in originals.items():
+                    assert (work / "images" / frame_name).read_bytes() != raw
+        return {
+            "command": command,
+            "returncode": 0,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr("sceneagent.colmap_stage._run", fake_run)
+    result = run_poses(tmp_path / "clip.mp4", work, fps=1, max_frames=2)
+    assert result["ok"] is False
+    assert result["failed_step"] == "mapper"
+    assert stages[0] == "ffmpeg"
+    assert stages.index("feature_extractor") < stages.index("sequential_matcher")
+    report = result["color_calibration"]
+    assert report["global_correction"] is False
+    assert report["paper_method"] is False
+    by_name = {Path(frame["source"]).name: frame["gain_rgb"] for frame in report["frames"]}
+    assert by_name["0001.jpg"][0] < 1
+    assert by_name["0002.jpg"][0] > 1
+    assert by_name["0001.jpg"] != by_name["0002.jpg"]
+    on_disk = json.loads((work / "color_calibration.json").read_text(encoding="utf-8"))
+    assert on_disk["global_correction"] is False
+    red_mean = mean_rgb_file(work / "images" / "0001.jpg")
+    blue_mean = mean_rgb_file(work / "images" / "0002.jpg")
+    assert red_mean[0] < 150
+    assert blue_mean[0] > 50
+    assert abs(red_mean[0] - blue_mean[0]) < 40
+
+
+def test_run_poses_can_leave_sampled_frames_uncalibrated(tmp_path, monkeypatch):
+    monkeypatch.setattr("sceneagent.colmap_stage.shutil.which", _which_binaries)
+    monkeypatch.setattr("sceneagent.colmap_stage.subprocess.run", _banner)
+    work = tmp_path / "colmap"
+    (work / "color_calibration.json").parent.mkdir(parents=True)
+    (work / "color_calibration.json").write_text("{}\n", encoding="utf-8")
+    originals = {}
+
+    def fake_run(command, timeout_s=600):
+        if Path(str(command[0])).name == "ffmpeg":
+            folder = Path(command[-1]).parent
+            for frame_name, color in (
+                ("0001.jpg", (200, 10, 10)),
+                ("0002.jpg", (10, 10, 200)),
+            ):
+                path = folder / frame_name
+                Image.new("RGB", (2, 2), color).save(path, quality=95, subsampling=0)
+                originals[frame_name] = path.read_bytes()
+        return {
+            "command": command,
+            "returncode": 0,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr("sceneagent.colmap_stage._run", fake_run)
+    skipped = run_poses(
+        tmp_path / "clip.mp4", work, fps=1, max_frames=2, color_calibrate=False
+    )
+    assert skipped["color_calibrate"] is False
+    assert "color_calibration" not in skipped
+    assert not (work / "color_calibration.json").exists()
+    for frame_name, raw in originals.items():
+        assert (work / "images" / frame_name).read_bytes() == raw
