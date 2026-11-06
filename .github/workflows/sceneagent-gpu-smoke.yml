@@ -5,7 +5,9 @@
 # pull_request_target loads this file from the repository default branch
 # (main). A label on a pull request that targets Main_duplicate does not run
 # until main contains this file. The request-file push is a plain push, so it
-# uses the workflow committed on Main_duplicate.
+# uses the workflow committed on Main_duplicate. Once this file is on
+# Main_duplicate, that push starts a run with no workflow_dispatch and no
+# click from Sandeep.
 name: sceneagent-gpu-smoke
 
 on:

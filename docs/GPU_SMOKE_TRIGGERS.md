@@ -50,6 +50,8 @@ The job logs `gpu-smoke actor=<login>`.
 
 Push a commit to `Main_duplicate` that changes only `ci/gpu-run-request.json`.
 This is a plain `push`, so GitHub uses the workflow file on `Main_duplicate`.
+Once that file is on `Main_duplicate`, the push starts a run by itself. It does
+not need `workflow_dispatch`, and it does not need Sandeep to click anything.
 It does not wait for `main` to be updated.
 
 The file is only a run trigger. It is not a way to land code without the QA

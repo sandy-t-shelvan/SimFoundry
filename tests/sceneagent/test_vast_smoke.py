@@ -1140,7 +1140,8 @@ def test_attach_without_key_id_exhaustion_names_the_missing_id():
         )
     assert detached == []
     message = str(raised.value)
-    assert "not detached" in message
+    assert "exactly one match" in message
+    assert "not detached" not in message
     assert "sf4-planted-key" not in message
     assert "ssh-ed25519" not in message
 
@@ -1203,7 +1204,9 @@ def test_failure_upload_step_is_manifest_only():
         (
             index
             for index, line in enumerate(lines[start + 1 :], start + 1)
-            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":")
+            if line.startswith("  ")
+            and not line.startswith("   ")
+            and line.endswith(":")
         ),
         len(lines),
     )
@@ -1734,6 +1737,10 @@ def _listing_transport(mode):
     def request(method, url, api_key, body=None, timeout=60):
         calls.append((method, url))
         if method == "DELETE":
+            if mode == "http":
+                return 500, {"success": False}
+            if mode == "raise":
+                raise RuntimeError("transport down")
             return 200, {"success": True}
         if method == "POST" and url == PINNED_SSH_LIST:
             seen["key"] = body["ssh_key"]
@@ -1887,6 +1894,73 @@ def test_own_key_match_rstrip_boundary(tmp_path, monkeypatch):
     assert manifest["own_key"]["match_count"] == 1
     assert manifest["own_key"]["detached"] is True
     _assert_no_match(tmp_path, monkeypatch, "leading")
+
+
+def test_failed_own_key_delete_is_recorded_as_failed(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for mode in ("http", "raise"):
+        calls, request = _listing_transport(mode)
+        _install_remote_run(monkeypatch, fail=False)
+        artifacts = tmp_path / mode
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        assert code != 0
+        assert any(method == "DELETE" for method, _url in calls)
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["own_key"]["match_count"] == 1
+        assert manifest["own_key"]["detached"] is False
+        assert "fail" in manifest["own_key"]["reason"].lower()
+        assert manifest["ssh"]["detach"] == "failed"
+        assert manifest["ssh"]["detach"] != "detached"
+
+
+def test_exit_code_survives_failure_manifest_error(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise SmokeError("manifest publish failed")
+
+    monkeypatch.setattr("sceneagent.vast_smoke.publish_failure_manifest", boom)
+
+    def offline(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("offline")}
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "offline",
+        "test-key",
+        request=offline,
+        sleep=lambda _seconds: None,
+    )
+    assert code == 2
+
+    monkeypatch.setattr("sceneagent.vast_smoke.publish_artifacts", boom)
+
+    def running(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    for rc in (2, 139):
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / f"rc-{rc}",
+            "test-key",
+            request=running,
+            remote_factory=lambda _row, exit_code=rc: _Remote(write, rc=exit_code),
+            sleep=lambda _seconds: None,
+        )
+        assert code == rc
 
 
 def test_detach_guard_refuses_any_other_key_id(monkeypatch):
@@ -2147,3 +2221,64 @@ def test_run_context_cannot_change_the_instance_id():
     ):
         with pytest.raises(InstanceNotApproved):
             normalize_run_context(trigger, actor, sha)
+
+
+def _assert_detach_agreement(manifest):
+    own = manifest["own_key"]
+    detach = manifest["ssh"]["detach"]
+    if own["detached"]:
+        assert own["match_count"] == 1
+        assert detach == "detached"
+    elif own["match_count"] == 1:
+        assert detach == "failed"
+    else:
+        assert own["detached"] is False
+        assert detach == "skipped"
+    assert "not detached" not in json.dumps(manifest["ssh"])
+    assert "not detached" not in json.dumps(manifest["own_key"])
+
+
+def test_manifest_ssh_detach_agrees_with_own_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    cases = (
+        ("one", False),
+        ("one", True),
+        ("zero", False),
+        ("several", False),
+    )
+    for mode, fail in cases:
+        calls, request = _listing_transport(mode)
+        _install_remote_run(monkeypatch, fail)
+        artifacts = tmp_path / f"{mode}-{'fail' if fail else 'ok'}"
+        run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        _assert_detach_agreement(manifest)
+
+
+def test_remote_exit_code_propagates(tmp_path):
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    for rc in (2, 139):
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / f"rc-{rc}",
+            "test-key",
+            request=request,
+            remote_factory=lambda _row, exit_code=rc: _Remote(write, rc=exit_code),
+            sleep=lambda _seconds: None,
+        )
+        assert code == rc
