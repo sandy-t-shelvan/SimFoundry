@@ -206,11 +206,19 @@ def run_material_vote(
 
     The manifest records ``vlm_calls``, the number of ``classify_crops``
     calls made in this run. It does not record the API key.
+
+    An empty object list, and a present prior npz without features and a
+    mask, both fail before a client is built and before any VLM call. A
+    Gemini call is not spent on a vote that cannot be written.
     """
 
-    resolved = open_vlm_client(client=client, client_factory=client_factory)
     if not objects:
         raise ValueError("material vote needs at least one object")
+    prior_path = configured_prior_checkpoint(checkpoint)
+    if prior_path.is_file():
+        for obj in objects:
+            _require_prior_inputs(obj.get("features"), obj.get("mask"))
+    resolved = open_vlm_client(client=client, client_factory=client_factory)
     counted = _CountedVlm(resolved)
     votes = [
         _vote_one(
@@ -258,6 +266,11 @@ def run_material_vote(
 
 
 def _vote_one(name, crops, features, mask, checkpoint, client):
+    # The prior file is checked before the VLM. A missing feature row must
+    # not spend a Gemini call and then raise.
+    prior_path = configured_prior_checkpoint(checkpoint)
+    if prior_path.is_file():
+        _require_prior_inputs(features, mask)
     reply = client.classify_crops(crops)
     if (
         not isinstance(reply, Mapping)
@@ -274,12 +287,7 @@ def _vote_one(name, crops, features, mask, checkpoint, client):
         "class": keyword["class"],
         "weight": keyword["weight"],
     }
-    prior_path = configured_prior_checkpoint(checkpoint)
     if prior_path.is_file():
-        if features is None or mask is None:
-            raise ValueError(
-                "physics prior npz exists but features and mask were not provided"
-            )
         loaded = vote_loaded_prior(
             features,
             mask,
@@ -362,6 +370,18 @@ def _class_source(source, material, raw_confidence, weight_before_scale):
         "unknown_scale_applied": applied,
         "null": False,
     }
+
+
+def _require_prior_inputs(features, mask) -> None:
+    """Refuse a prior vote that has no Gaussian features or mask.
+
+    Called before the VLM. The message is the only output; no client is built.
+    """
+
+    if features is None or mask is None:
+        raise ValueError(
+            "physics prior npz exists but features and mask were not provided"
+        )
 
 
 def _null_source(source: str) -> dict[str, Any]:

@@ -431,6 +431,66 @@ def test_gemini_flash_client_sends_crops_to_gemini_3_8_flash(monkeypatch):
     assert direct == parsed
 
 
+def test_present_prior_without_features_does_not_call_the_vlm(tmp_path, monkeypatch):
+    path = tmp_path / "physics_prior.npz"
+    path.write_bytes(b"not-a-real-prior")
+    client = _RecordingVlm("plastic", 0.2)
+    factory = Mock(side_effect=AssertionError("client factory was called"))
+    prior_calls = []
+
+    def _boom(*_args, **_kwargs):
+        prior_calls.append("vote_loaded_prior")
+        raise AssertionError("vote_loaded_prior ran without features")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "out"
+    with pytest.raises(ValueError, match="features and mask were not provided"):
+        run_material_vote(
+            out,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": np.zeros((1, 912)),
+                    "mask": np.array([True]),
+                },
+                {"name": "cup", "crops": [b"other"]},
+            ],
+            client=client,
+            client_factory=factory,
+            checkpoint=path,
+        )
+    assert client.calls == 0
+    assert client.seen == []
+    assert factory.call_count == 0
+    assert prior_calls == []
+    assert not (out / "material_vote.json").exists()
+    assert not (out / "manifest.json").exists()
+    with pytest.raises(ValueError, match="features and mask were not provided"):
+        run_material_vote(
+            out,
+            [{"name": "cup", "crops": [b"other"]}],
+            client=None,
+            client_factory=factory,
+            checkpoint=path,
+        )
+    assert factory.call_count == 0
+
+
+def test_empty_object_list_raises_before_client_construction(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    factory = Mock(side_effect=AssertionError("client factory was called"))
+    client = _RecordingVlm("plastic", 0.2)
+    out = tmp_path / "empty"
+    with pytest.raises(ValueError, match="at least one object"):
+        run_material_vote(out, [], client=None, client_factory=factory)
+    assert factory.call_count == 0
+    with pytest.raises(ValueError, match="at least one object"):
+        run_material_vote(out, [], client=client)
+    assert client.calls == 0
+    assert not (out / "manifest.json").exists()
+
+
 def test_parse_vlm_vote_rejects_a_non_class_without_echoing_the_body():
     with pytest.raises(MaterialVlmError) as caught:
         parse_vlm_vote('{"material_class": "unobtanium", "confidence": 0.2}')
