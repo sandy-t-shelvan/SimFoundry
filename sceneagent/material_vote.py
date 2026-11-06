@@ -40,8 +40,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from sceneagent.gemini_client import GeminiClient, redact
 from sceneagent.mlp.apply import decode_mean, vote_loaded_prior
+from sceneagent.mlp.contract import PRIOR_DIM
 from sceneagent.mlp.prior import PhysicsPrior
 from sceneagent.physics import UNKNOWN_WEIGHT_SCALE, scaled_weight, vote_material
 from sceneagent.taxonomy import (
@@ -221,9 +224,10 @@ def run_material_vote(
     if prior_path.is_file():
         for obj in objects:
             _require_prior_inputs(obj.get("features"), obj.get("mask"))
+            _require_prior_tensors(obj.get("features"), obj.get("mask"))
         # Load only after every object has features and a mask. A missing
-        # row must keep the existing error, and a bad file must not call
-        # the VLM.
+        # row must keep the existing error, and a bad file or a bad tensor
+        # must not call the VLM.
         PhysicsPrior.load(prior_path)
         for obj in objects:
             if not _mask_selects_a_gaussian(obj.get("mask")):
@@ -242,14 +246,13 @@ def run_material_vote(
         for obj in objects
     ]
     out = Path(out_dir)
-    if len(votes) == 1:
-        vote_payload: Any = votes[0]
-    else:
-        vote_payload = {
-            "equation": "2",
-            "unknown_scale": UNKNOWN_WEIGHT_SCALE,
-            "votes": votes,
-        }
+    # One object and many objects share this file. The vote objects
+    # themselves are unchanged.
+    vote_payload = {
+        "equation": "2",
+        "unknown_scale": UNKNOWN_WEIGHT_SCALE,
+        "votes": votes,
+    }
     vote_path = out / "material_vote.json"
     manifest = {
         "section": "3.4",
@@ -281,6 +284,7 @@ def _vote_one(name, crops, features, mask, checkpoint, client):
     prior_path = configured_prior_checkpoint(checkpoint)
     if prior_path.is_file():
         _require_prior_inputs(features, mask)
+        _require_prior_tensors(features, mask)
         _require_usable_prior(prior_path, mask)
     reply = client.classify_crops(crops)
     if (
@@ -381,6 +385,35 @@ def _class_source(source, material, raw_confidence, weight_before_scale):
         "unknown_scale_applied": applied,
         "null": False,
     }
+
+
+def _require_prior_tensors(features: Any, mask: Any) -> None:
+    """Refuse a prior row whose shapes cannot be voted, before any VLM call.
+
+    ``vote_loaded_prior`` needs ``(N, 912)`` features and a mask of length
+    ``N``. Checking that here keeps a bad OpenCLIP or DINOv2 width from
+    spending a Gemini call.
+    """
+
+    shape = getattr(features, "shape", None)
+    if shape is None or len(tuple(shape)) != 2 or int(shape[1]) != PRIOR_DIM:
+        raise ValueError(
+            f"physics prior features must have shape (N, {PRIOR_DIM}), got {shape}"
+        )
+    count = int(shape[0])
+    mask_shape = getattr(mask, "shape", None)
+    if mask_shape is not None and len(tuple(mask_shape)) >= 1:
+        length = int(mask_shape[0])
+    else:
+        try:
+            length = len(mask)
+        except TypeError:
+            length = -1
+    if length != count:
+        raise ValueError("physics prior mask length must match the Gaussian count")
+    values = np.asarray(features, dtype=np.float64)
+    if values.shape != (count, PRIOR_DIM) or not np.isfinite(values).all():
+        raise ValueError("physics prior features must be finite")
 
 
 def _require_usable_prior(path: Path, mask: Any) -> None:

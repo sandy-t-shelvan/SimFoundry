@@ -218,7 +218,7 @@ def test_dc2_vote_json_records_sources_weights_and_unknown_scale(tmp_path, monke
     assert DEFAULT_KEYWORD_WEIGHT == 1.0
     client = _apple_unknown_vlm()
     body = _run(tmp_path / "dc2", client, checkpoint=tmp_path / "absent.npz")
-    vote = json.loads(Path(body["vote_path"]).read_text(encoding="utf-8"))
+    document = json.loads(Path(body["vote_path"]).read_text(encoding="utf-8"))
     expected = {
         "equation": "2",
         "object": "apple",
@@ -262,6 +262,8 @@ def test_dc2_vote_json_records_sources_weights_and_unknown_scale(tmp_path, monke
             },
         ],
     }
+    assert set(document) == {"equation", "unknown_scale", "votes"}
+    vote = document["votes"][0]
     assert vote == expected
     assert body["votes"][0] == expected
     vlm = _source(vote, "vlm")
@@ -551,6 +553,89 @@ def test_empty_mask_raises_before_any_vlm_call(tmp_path, monkeypatch):
     assert client.calls == 0
     assert not (out / "material_vote.json").exists()
     assert not (out / "manifest.json").exists()
+
+
+def test_wrong_feature_width_raises_before_any_vlm_call(tmp_path, monkeypatch):
+    path = _synthetic_prior(tmp_path / "physics_prior.npz")
+    client = _RecordingVlm("plastic", 0.4)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("vote_loaded_prior ran on a bad feature width")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "width"
+    with pytest.raises(ValueError, match=r"\(N, 912\)"):
+        run_material_vote(
+            out,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": np.zeros((2, 16)),
+                    "mask": np.array([True, False]),
+                }
+            ],
+            client=client,
+            checkpoint=path,
+        )
+    assert client.calls == 0
+    assert not (out / "material_vote.json").exists()
+
+
+def test_mask_length_mismatch_raises_before_any_vlm_call(tmp_path, monkeypatch):
+    path = _synthetic_prior(tmp_path / "physics_prior.npz")
+    client = _RecordingVlm("plastic", 0.4)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("vote_loaded_prior ran on a short mask")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "short-mask"
+    with pytest.raises(ValueError, match="mask length"):
+        run_material_vote(
+            out,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": np.zeros((2, 912)),
+                    "mask": np.array([True]),
+                }
+            ],
+            client=client,
+            checkpoint=path,
+        )
+    assert client.calls == 0
+    assert not (out / "material_vote.json").exists()
+
+
+def test_nan_features_raise_before_any_vlm_call(tmp_path, monkeypatch):
+    path = _synthetic_prior(tmp_path / "physics_prior.npz")
+    features = np.zeros((2, 912))
+    features[0, 0] = np.nan
+    client = _RecordingVlm("plastic", 0.4)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("vote_loaded_prior ran on NaN features")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "nan"
+    with pytest.raises(ValueError, match="finite"):
+        run_material_vote(
+            out,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": features,
+                    "mask": np.array([True, False]),
+                }
+            ],
+            client=client,
+            checkpoint=path,
+        )
+    assert client.calls == 0
+    assert not (out / "material_vote.json").exists()
 
 
 def test_confidence_endpoints_zero_and_one_are_votes(tmp_path):
