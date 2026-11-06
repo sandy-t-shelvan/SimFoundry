@@ -30,6 +30,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from sceneagent.ingest_assets import apply_per_image_color_calibration
@@ -138,6 +139,72 @@ def pose_commands(database, image_dir, sparse_dir, use_gpu, major=3):
     ]
 
 
+def _flag_value(argv, name):
+    try:
+        index = list(argv).index(name)
+    except ValueError:
+        return None
+    if index + 1 >= len(argv):
+        return None
+    return str(argv[index + 1])
+
+
+def command_uses_gpu(argv, *, cuda_build):
+    """Whether this argv is a GPU stage for a memory check.
+
+    Extractor and matcher follow the use_gpu flag they actually carry.
+    Mapper follows ``--Mapper.ba_use_gpu`` when the argv sets it. An
+    explicit 0 is CPU bundle adjustment. When the flag is absent and the
+    banner reported CUDA, the stage is still checked: this tree has not
+    verified the COLMAP 3.11.1 default, and current public docs are not
+    that pin.
+    """
+    step = argv[1] if len(argv) > 1 else ""
+    if step == "feature_extractor":
+        value = _flag_value(argv, "--SiftExtraction.use_gpu")
+        if value is None:
+            value = _flag_value(argv, "--FeatureExtraction.use_gpu")
+        return value == "1"
+    if step == "sequential_matcher":
+        value = _flag_value(argv, "--SiftMatching.use_gpu")
+        if value is None:
+            value = _flag_value(argv, "--FeatureMatching.use_gpu")
+        return value == "1"
+    if step == "mapper":
+        ba = _flag_value(argv, "--Mapper.ba_use_gpu")
+        if ba == "0":
+            return False
+        if ba == "1":
+            return True
+        return bool(cuda_build)
+    return False
+
+
+def poll_gpu_stage(poll, on_sample, *, interval_s, timeout_s, sleeper, monotonic):
+    """Poll a running stage. Call ``on_sample`` every ``interval_s``.
+
+    The stage is not retried. ``poll`` returns None while it is running.
+    """
+    start = monotonic()
+    waited = 0.0
+    while True:
+        state = poll()
+        if state is not None:
+            return {"status": "exited", "state": state}
+        elapsed = monotonic() - start
+        if elapsed >= timeout_s:
+            return {"status": "timeout", "state": None}
+        slice_s = min(0.25, interval_s - waited, timeout_s - elapsed)
+        if slice_s <= 0:
+            return {"status": "timeout", "state": None}
+        sleeper(slice_s)
+        waited += slice_s
+        if waited + 1e-9 >= interval_s:
+            waited = 0.0
+            if poll() is None:
+                on_sample()
+
+
 def _no_limit(value):
     """True when the caller asked to keep every frame.
 
@@ -238,6 +305,9 @@ def run_poses(
     *,
     analyzer=None,
     native_frames=False,
+    before_gpu_stage=None,
+    on_gpu_sample=None,
+    sample_interval_s=10,
 ):
     """Sample frames, calibrate each image, and run COLMAP.
 
@@ -363,7 +433,18 @@ def run_poses(
     steps = {"ffmpeg": extract}
     for argv in pose_commands(database, images, sparse, use_gpu, major=major):
         step_name = argv[1]
-        steps[step_name] = _run(argv, timeout_s=900)
+        gpu_stage = command_uses_gpu(argv, cuda_build=use_gpu)
+        if gpu_stage and before_gpu_stage is not None:
+            before_gpu_stage(step_name, list(argv))
+        if gpu_stage and on_gpu_sample is not None:
+            steps[step_name] = _run(
+                argv,
+                timeout_s=900,
+                on_gpu_sample=on_gpu_sample,
+                sample_interval_s=sample_interval_s,
+            )
+        else:
+            steps[step_name] = _run(argv, timeout_s=900)
         if steps[step_name]["returncode"] != 0:
             return _result(
                 ran=True,
@@ -404,32 +485,87 @@ def run_poses(
     )
 
 
-def _run(command, timeout_s=600):
+def _stage_env():
+    env = os.environ.copy()
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    return env
+
+
+def _stop_our_child(proc):
+    """Stop the stage this process started. No other process is signaled."""
+    if proc.poll() is not None:
+        return
+    proc.terminate()
     try:
-        env = os.environ.copy()
-        env.setdefault("QT_QPA_PLATFORM", "offscreen")
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            env=env,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
-        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+def _run(command, timeout_s=600, *, on_gpu_sample=None, sample_interval_s=10):
+    env = _stage_env()
+    if on_gpu_sample is None:
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+            stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+            return {
+                "command": command,
+                "returncode": None,
+                "timed_out": True,
+                "stdout_tail": (stdout or "")[-2000:],
+                "stderr_tail": (stderr or "")[-2000:],
+                "gpu_samples": [],
+            }
         return {
             "command": command,
-            "returncode": None,
-            "timed_out": True,
-            "stdout_tail": (stdout or "")[-2000:],
-            "stderr_tail": (stderr or "")[-2000:],
+            "returncode": completed.returncode,
+            "timed_out": False,
+            "stdout_tail": (completed.stdout or "")[-2000:],
+            "stderr_tail": (completed.stderr or "")[-2000:],
+            "gpu_samples": [],
         }
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    samples = []
+
+    def on_sample():
+        samples.append(on_gpu_sample())
+
+    try:
+        watched = poll_gpu_stage(
+            proc.poll,
+            on_sample,
+            interval_s=sample_interval_s,
+            timeout_s=timeout_s,
+            sleeper=time.sleep,
+            monotonic=time.monotonic,
+        )
+    except Exception:
+        _stop_our_child(proc)
+        raise
+    timed_out = watched["status"] == "timeout"
+    if timed_out:
+        _stop_our_child(proc)
+    stdout, stderr = proc.communicate()
     return {
         "command": command,
-        "returncode": completed.returncode,
-        "timed_out": False,
-        "stdout_tail": (completed.stdout or "")[-2000:],
-        "stderr_tail": (completed.stderr or "")[-2000:],
+        "returncode": None if timed_out else proc.returncode,
+        "timed_out": timed_out,
+        "stdout_tail": (stdout or "")[-2000:],
+        "stderr_tail": (stderr or "")[-2000:],
+        "gpu_samples": samples,
     }

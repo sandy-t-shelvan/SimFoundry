@@ -16,7 +16,13 @@ from pathlib import Path
 
 import pytest
 
-from sceneagent.colmap_stage import run_poses, sample_frame_command
+from sceneagent.colmap_stage import (
+    command_uses_gpu,
+    poll_gpu_stage,
+    pose_commands,
+    run_poses,
+    sample_frame_command,
+)
 from sceneagent.reconstruction_gate import (
     MAX_REPROJ_PX,
     MIN_OBS_PER_IMAGE,
@@ -31,14 +37,18 @@ from sceneagent.sf5_colmap_evidence import (
     APPROVED_RELATIVE,
     APPROVED_SHA256,
     APPROVED_WIDTH,
+    FAQ_PINNED_TO_COLMAP_3_11_1,
     GPU_FREE_ARGV,
+    GPU_SAMPLE_INTERVAL_S,
     INSTANCE_ID,
+    PROPOSED_MIN_FREE_MIB,
     LEGACY_MODEL_ROOT,
     PINNED_BASE_SHA,
     REQUIRED_COLMAP_VERSION,
     SCENEAGENT_ROOT,
     EvidenceError,
     ForbiddenPathError,
+    GpuBudgetError,
     assert_native_argv,
     assert_no_symlink,
     build_manifest,
@@ -47,15 +57,19 @@ from sceneagent.sf5_colmap_evidence import (
     execute,
     fruits_probe_matches,
     gate_accepted,
+    accepted_free_mib_budget,
     gpu_query_is_aggregate,
-    interpret_gpu_free,
+    memory_meets_budget,
+    parse_gpu_memory_csv,
     launch_ready,
     main,
     output_allowed,
     parse_colmap_banner,
     path_is_forbidden,
     pinned_file_bytes_match,
-    query_gpu_free,
+    query_gpu_memory,
+    sift_match_bytes,
+    summarize_free_samples,
     render_launch_command,
     required_output_prefix,
     reuse_refused,
@@ -97,7 +111,13 @@ if cmd == "model_analyzer":
         % (count, reprojection)
     )
     raise SystemExit(0)
-if cmd in {"feature_extractor", "sequential_matcher"}:
+if cmd == "feature_extractor":
+    log = os.environ.get("SF5_STUB_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write("feature_extractor\\n")
+    raise SystemExit(0)
+if cmd == "sequential_matcher":
     raise SystemExit(0)
 sys.stderr.write("unexpected %s\\n" % cmd)
 raise SystemExit(1)
@@ -157,6 +177,7 @@ def _dry_request(tmp_path: Path, video: Path, digest: str, **overrides) -> dict:
         "expect_code_sha": None,
         "instance_id": None,
         "dry_run": True,
+        "gpu_free_mib_min": 6144,
     }
     request.update(overrides)
     return request
@@ -296,8 +317,28 @@ def test_symlink_to_a_forbidden_root_is_rejected_before_open(tmp_path, monkeypat
         assert_no_symlink(benign)
 
 
-def test_gpu_query_is_aggregate_and_fails_closed_once():
+def test_gpu_budget_is_explicit_and_fail_closed():
+    assert GPU_FREE_ARGV == (
+        "nvidia-smi",
+        "--query-gpu=memory.total,memory.used,memory.free",
+        "--format=csv,noheader,nounits",
+    )
     assert gpu_query_is_aggregate(GPU_FREE_ARGV) is True
+    assert "pid" not in " ".join(GPU_FREE_ARGV)
+    assert "compute-apps" not in " ".join(GPU_FREE_ARGV)
+    assert PROPOSED_MIN_FREE_MIB == 6144
+    assert GPU_SAMPLE_INTERVAL_S == 10
+    assert FAQ_PINNED_TO_COLMAP_3_11_1 is False
+    assert accepted_free_mib_budget(6144) == 6144
+    assert accepted_free_mib_budget("6144") == 6144
+    for bad in (None, 0, -1, 1, 6143, 16384, True, 6144.0, "0"):
+        with pytest.raises(GpuBudgetError):
+            accepted_free_mib_budget(bad)
+    assert sift_match_bytes(32768) == 4328521728
+    assert sift_match_bytes(32768) // (1024 * 1024) == 4128
+    assert sift_match_bytes(8192) == 276824064
+    assert sift_match_bytes(8192) // (1024 * 1024) == 264
+    assert PROPOSED_MIN_FREE_MIB != 4128
     calls = []
 
     def fail(argv):
@@ -305,12 +346,26 @@ def test_gpu_query_is_aggregate_and_fails_closed_once():
         return {"returncode": 1, "stdout": "", "stderr": "unavailable"}
 
     with pytest.raises(EvidenceError):
-        query_gpu_free(fail)
+        query_gpu_memory(fail, 6144)
     assert calls == [list(GPU_FREE_ARGV)]
-    assert "pid" not in " ".join(GPU_FREE_ARGV)
     with pytest.raises(EvidenceError):
-        interpret_gpu_free("0\n", 0)
-    assert interpret_gpu_free("100\n40\n", 0)["aggregate_free_mib"] == 140
+        parse_gpu_memory_csv("100\n40\n", 0)
+    with pytest.raises(EvidenceError):
+        parse_gpu_memory_csv("", 0)
+    with pytest.raises(EvidenceError):
+        parse_gpu_memory_csv("8192, 100, 9000\n", 0)
+    short = parse_gpu_memory_csv("8192, 2048, 6143\n8192, 100, 8000\n", 0)
+    assert memory_meets_budget(short, 6144) is False
+    exact = parse_gpu_memory_csv("16384, 10240, 6144\n", 0)
+    assert memory_meets_budget(exact, 6144) is True
+    both = parse_gpu_memory_csv("16384, 10240, 6144\n16384, 10240, 6144\n", 0)
+    assert memory_meets_budget(both, 6144) is True
+    assert memory_meets_budget([], 6144) is False
+    summary = summarize_free_samples([7000, 6200, 6500])
+    assert summary["lowest_free_mib_observed"] == 6200
+    assert summary["exact_true_peak"] is False
+    assert summary["retries"] == 0
+    assert summary["sample_interval_s"] == 10
 
 
 def test_launch_command_is_exact_and_blocked():
@@ -322,6 +377,10 @@ def test_launch_command_is_exact_and_blocked():
     assert CODE_SHA in text
     assert str(required_output_prefix(CODE_SHA)) in text
     assert INSTANCE_ID in text
+    assert "--gpu-free-mib-min 6144" in text
+    assert "gpu_budget_approved: false" in text
+    assert "gpu_budget_status: provisional" in text
+    assert "6:47 PM ET" in text
     assert "--dry-run" not in text
     assert "--max-frames" not in text
     assert "fps=" not in text
@@ -477,6 +536,17 @@ def test_offline_dry_run_registers_every_native_frame(tmp_path, monkeypatch):
     assert ledger["exit_statuses"]["mapper"] == 0
     assert ledger["exit_statuses"]["reconstruction_gate_pass"] is True
     assert ledger["process_exit"] == 0
+    assert ledger["config"]["gpu_free_mib_min"] == 6144
+    assert ledger["config"]["gpu_budget_approved"] is False
+    before = [row for row in ledger["gpu_memory"] if row["when"] == "before"]
+    assert [row["stage"] for row in before] == [
+        "feature_extractor",
+        "sequential_matcher",
+        "mapper",
+    ]
+    assert all(row["source"] == "offline_fixture" for row in before)
+    assert all(row["min_free_mib"] >= 6144 for row in before)
+    assert all(row["exact_true_peak"] is False for row in before)
     assert ledger["code_sha"] == subprocess.check_output(
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
     ).strip()
@@ -530,6 +600,94 @@ def test_gate_failure_exits_nonzero(tmp_path, monkeypatch):
     assert (evidence / "reconstruction_gate.json").is_file()
     assert (evidence / "SHA256SUMS").is_file()
     assert gate_accepted({"ok": False, "reconstruction_gate": {"pass": False}}) is False
+
+
+def test_absent_budget_stops_before_the_video_probe(tmp_path, monkeypatch):
+    video, digest = _synthetic_video(tmp_path)
+
+    def boom(_path):
+        raise AssertionError("ffprobe")
+
+    monkeypatch.setattr("sceneagent.sf5_colmap_evidence._ffprobe", boom)
+    code = execute(_dry_request(tmp_path, video, digest, gpu_free_mib_min=None))
+    assert code == 4
+    ledger = json.loads((tmp_path / "out" / "run" / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["process_exit"] == 4
+    assert ledger["config"]["gpu_budget_approved"] is False
+    assert "6144" in ledger["reason"]
+
+
+def test_short_free_memory_stops_before_feature_extraction(tmp_path, monkeypatch):
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+    stage_log = tmp_path / "stages.log"
+    monkeypatch.setenv("SF5_STUB_LOG", str(stage_log))
+    output = tmp_path / "short" / "run"
+    code = execute(
+        _dry_request(
+            tmp_path,
+            video,
+            digest,
+            output_prefix=str(output),
+            memory_stdout="8192, 7000, 100\n8192, 100, 8000\n",
+        )
+    )
+    assert code == 4
+    assert not stage_log.exists()
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["process_exit"] == 4
+    assert ledger["gpu_memory"][0]["stage"] == "feature_extractor"
+    assert ledger["gpu_memory"][0]["when"] == "before"
+    assert ledger["gpu_memory"][0]["min_free_mib"] == 100
+    assert ledger["gpu_memory"][0]["meets_budget"] is False
+    assert "feature_extractor" not in ledger.get("exit_statuses", {})
+
+
+def test_mapper_gpu_check_follows_the_ba_flag():
+    commands = pose_commands("/tmp/db", "/tmp/images", "/tmp/sparse", True, major=3)
+    by_name = {argv[1]: argv for argv in commands}
+    assert command_uses_gpu(by_name["feature_extractor"], cuda_build=True) is True
+    assert command_uses_gpu(by_name["sequential_matcher"], cuda_build=True) is True
+    assert command_uses_gpu(by_name["mapper"], cuda_build=True) is True
+    assert command_uses_gpu(by_name["mapper"], cuda_build=False) is False
+    cpu_mapper = list(by_name["mapper"]) + ["--Mapper.ba_use_gpu", "0"]
+    assert command_uses_gpu(cpu_mapper, cuda_build=True) is False
+    gpu_mapper = list(by_name["mapper"]) + ["--Mapper.ba_use_gpu", "1"]
+    assert command_uses_gpu(gpu_mapper, cuda_build=False) is True
+    cpu_extract = pose_commands("/tmp/db", "/tmp/images", "/tmp/sparse", False, major=3)
+    assert command_uses_gpu(cpu_extract[0], cuda_build=False) is False
+
+
+def test_during_stage_samples_use_the_ten_second_interval():
+    clock = {"t": 0.0}
+
+    def monotonic():
+        return clock["t"]
+
+    def sleeper(seconds):
+        clock["t"] += seconds
+
+    def poll():
+        if clock["t"] >= 25:
+            return 0
+        return None
+
+    calls = []
+
+    def on_sample():
+        calls.append(clock["t"])
+
+    watched = poll_gpu_stage(
+        poll,
+        on_sample,
+        interval_s=10,
+        timeout_s=100,
+        sleeper=sleeper,
+        monotonic=monotonic,
+    )
+    assert watched["status"] == "exited"
+    assert calls == [10.0, 20.0]
 
 
 def test_package_source_does_not_control_other_processes():

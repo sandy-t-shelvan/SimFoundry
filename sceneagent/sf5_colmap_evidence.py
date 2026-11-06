@@ -40,9 +40,17 @@ LEGACY_MODEL_ROOT = "/workspace/fruits-fullrate-colmap"
 PRODUCTION_ROOT = "/workspace/cut1-gpu"
 FORBIDDEN_PREFIXES = (SCENEAGENT_ROOT, LEGACY_MODEL_ROOT)
 FORBIDDEN_COMPONENTS = frozenset({"fitted_splat", "sceneagent-simfoundry"})
+# EL engineering recommendation, 2026-11-06 6:47 PM ET. Provisional and
+# unmeasured. Not a measured fact and not launch authorization.
+PROPOSED_MIN_FREE_MIB = 6144
+GPU_SAMPLE_INTERVAL_S = 10
+FAQ_URL = "https://colmap.github.io/faq.html"
+FAQ_SECTION = "Feature matching fails due to illegal memory access"
+# The live page on 2026-11-06. It is not a snapshot of the COLMAP 3.11.1 docs.
+FAQ_PINNED_TO_COLMAP_3_11_1 = False
 GPU_FREE_ARGV = (
     "nvidia-smi",
-    "--query-gpu=memory.free",
+    "--query-gpu=memory.total,memory.used,memory.free",
     "--format=csv,noheader,nounits",
 )
 AUTHORIZATION_GATES = (
@@ -61,7 +69,8 @@ FAIL_CONDITIONS = (
     "output prefix is not the owned KAN-5 run directory, is non-empty, or is forbidden",
     "reconstruction_gate does not pass",
     "evidence SHA256SUMS do not match the raw analyzer files",
-    "GPU free-memory query fails or reports no positive free MiB",
+    "GPU free-memory budget is absent, invalid, or not the proposed 6144 MiB",
+    "a GPU stage starts while any reported GPU has free memory below 6144 MiB",
     "authorization gates are not recorded here and cannot clear a launch",
 )
 PURPOSE = (
@@ -76,6 +85,10 @@ class EvidenceError(Exception):
 
 class ForbiddenPathError(EvidenceError):
     """A path is forbidden, escapes, or is a symlink."""
+
+
+class GpuBudgetError(EvidenceError):
+    """The explicit free-memory budget is missing or the reading is short."""
 
 
 def evidence_kwargs() -> dict[str, Any]:
@@ -103,6 +116,7 @@ def exit_code(kind: str) -> int:
         "reuse": 2,
         "version": 2,
         "resource": 3,
+        "gpu_budget": 4,
         "reject": 1,
         "accept": 0,
     }
@@ -351,36 +365,85 @@ def fruits_probe_matches(probed: dict[str, Any]) -> bool:
     )
 
 
-def interpret_gpu_free(stdout: str, returncode: int | None) -> dict[str, Any]:
-    """Aggregate free MiB from the query. No process table is accepted."""
+def sift_match_bytes(num_matches: int) -> int:
+    """Bytes in the current public FAQ's SIFT estimate.
+
+    The expression is ``4 * num_matches * num_matches + 4 * num_matches * 256``.
+    It describes that page. It is not a COLMAP 3.11.1 pin, and it is not this
+    package's runtime budget.
+    """
+    return 4 * num_matches * num_matches + 4 * num_matches * 256
+
+
+def accepted_free_mib_budget(value: Any) -> int:
+    """Accept only the explicit proposed 6144 MiB budget. There is no default."""
+    proposed = value == PROPOSED_MIN_FREE_MIB or value == str(PROPOSED_MIN_FREE_MIB)
+    if isinstance(value, bool) or isinstance(value, float) or not proposed:
+        raise GpuBudgetError(
+            "GPU free-memory budget is absent or not the proposed 6144 MiB"
+        )
+    return PROPOSED_MIN_FREE_MIB
+
+
+def parse_gpu_memory_csv(stdout: str, returncode: int | None) -> list[dict[str, int]]:
+    """Parse total, used, free MiB. One row per GPU. No process fields."""
     if returncode != 0:
-        raise EvidenceError("GPU free-memory query failed")
-    values = []
+        raise EvidenceError("GPU memory query failed")
+    rows: list[dict[str, int]] = []
     for line in (stdout or "").splitlines():
         text = line.strip()
         if not text:
             continue
-        if not text.isdigit():
-            raise EvidenceError("GPU free-memory query was not an integer")
-        values.append(int(text))
-    if not values or max(values) <= 0:
-        raise EvidenceError("GPU free memory is not positive")
+        parts = [part.strip() for part in text.split(",")]
+        if len(parts) != 3 or any(not part.isdigit() for part in parts):
+            raise EvidenceError("GPU memory query is not total, used, free")
+        total, used, free = (int(part) for part in parts)
+        if used > total or free > total:
+            raise EvidenceError("GPU memory query is inconsistent")
+        rows.append({"total_mib": total, "used_mib": used, "free_mib": free})
+    if not rows:
+        raise EvidenceError("GPU memory query returned no GPU")
+    return rows
+
+
+def memory_meets_budget(rows: list[dict[str, Any]], budget: int) -> bool:
+    """Every reported GPU must have free memory at or above the budget.
+
+    Processes are not listed, so a short GPU cannot be skipped by picking
+    another device.
+    """
+    return bool(rows) and all(row["free_mib"] >= budget for row in rows)
+
+
+def summarize_free_samples(samples: list[int]) -> dict[str, Any]:
+    """Lowest free MiB among the samples taken. Not an exact true peak."""
+    lowest = min(samples) if samples else None
     return {
-        "per_gpu_free_mib": values,
-        "aggregate_free_mib": sum(values),
-        "max_free_mib": max(values),
+        "lowest_free_mib_observed": lowest,
+        "sample_count": len(samples),
+        "sample_interval_s": GPU_SAMPLE_INTERVAL_S,
+        "exact_true_peak": False,
+        "continuous_minimum": False,
+        "retries": 0,
     }
 
 
-def query_gpu_free(runner) -> dict[str, Any]:
+def query_gpu_memory(runner, budget: int) -> dict[str, Any]:
+    """One memory-only query. A failure is not retried."""
     if not gpu_query_is_aggregate(GPU_FREE_ARGV):
-        raise EvidenceError("GPU query is not the aggregate free-memory query")
+        raise EvidenceError("GPU query is not the memory-only query")
     last = None
     for _ in range(gpu_attempts()):
         last = runner(list(GPU_FREE_ARGV))
     if not isinstance(last, dict):
-        raise EvidenceError("GPU free-memory query failed")
-    return interpret_gpu_free(str(last.get("stdout") or ""), last.get("returncode"))
+        raise EvidenceError("GPU memory query failed")
+    rows = parse_gpu_memory_csv(str(last.get("stdout") or ""), last.get("returncode"))
+    return {
+        "rows": rows,
+        "min_free_mib": min(row["free_mib"] for row in rows),
+        "meets_budget": memory_meets_budget(rows, budget),
+        "budget_mib": budget,
+    }
 
 
 def evidence_dir_for(output_prefix: Path) -> Path:
@@ -564,6 +627,10 @@ def _finish(
         document["decision"] = "reject"
         document["counts_as_fruits_evidence"] = False
     if prefix is not None:
+        (prefix / "gpu_memory_log.json").write_text(
+            json.dumps(document.get("gpu_memory") or [], indent=2) + "\n",
+            encoding="utf-8",
+        )
         digest = _write_ledger(prefix, document)
         document_path = prefix / "ledger.sha256"
         if document_path.read_text(encoding="utf-8").split()[0] != digest:
@@ -596,11 +663,21 @@ def execute(request: dict[str, Any]) -> int:
             "sampling_ruling": "PM KAN-5 10314 every native frame, no subsampling, no cap",
             "separate_from": "SF-4 300-bin sampling",
             "thresholds": "sceneagent.reconstruction_gate",
+            "gpu_free_mib_min": PROPOSED_MIN_FREE_MIB,
+            "gpu_budget_approved": False,
+            "gpu_budget_status": "provisional",
+            "gpu_query": list(GPU_FREE_ARGV),
+            "gpu_sample_interval_s": GPU_SAMPLE_INTERVAL_S,
+            "gpu_retries": 0,
+            "faq_pinned_to_colmap_3_11_1": FAQ_PINNED_TO_COLMAP_3_11_1,
         },
         "input": {"declared_sha256": request.get("input_sha256")},
         "authorization_gates": list(AUTHORIZATION_GATES),
         "ready_for_execution": launch_ready(),
+        "gpu_budget_argument": request.get("gpu_free_mib_min"),
     }
+    gpu_log: list[dict[str, Any]] = []
+    document["gpu_memory"] = gpu_log
     prefix: Path | None = None
     try:
         if path_is_forbidden(repo):
@@ -634,6 +711,7 @@ def execute(request: dict[str, Any]) -> int:
             raise EvidenceError("refusing to reuse a non-empty output prefix")
         output.mkdir(parents=True, exist_ok=True)
         prefix = output
+        budget = accepted_free_mib_budget(request.get("gpu_free_mib_min"))
         if not video.is_file():
             raise EvidenceError("input file is missing")
         size = video.stat().st_size
@@ -662,13 +740,57 @@ def execute(request: dict[str, Any]) -> int:
             raise EvidenceError(
                 f"refusing COLMAP {version}; fresh {REQUIRED_COLMAP_VERSION} rerun required"
             )
-        gpu = None
-        if not dry_run:
-            gpu = query_gpu_free(_nvidia_smi)
-        document["gpu"] = gpu
+        source = "offline_fixture" if dry_run else "nvidia-smi"
+
+        def reader(argv):
+            if not gpu_query_is_aggregate(argv):
+                raise EvidenceError("GPU query is not the memory-only query")
+            if dry_run:
+                stdout = request.get("memory_stdout") or "24576, 1024, 23552\n"
+                return {"returncode": 0, "stdout": stdout, "stderr": ""}
+            return _nvidia_smi(argv)
+
+        def before_gpu_stage(stage, _argv):
+            reading = query_gpu_memory(reader, budget)
+            gpu_log.append(
+                {
+                    "stage": stage,
+                    "when": "before",
+                    "source": source,
+                    "exact_true_peak": False,
+                    "retries": gpu_attempts() - 1,
+                    **reading,
+                }
+            )
+            if not reading["meets_budget"]:
+                raise GpuBudgetError(
+                    f"GPU free memory before {stage} is below {budget} MiB"
+                )
+
+        def on_gpu_sample():
+            reading = query_gpu_memory(reader, budget)
+            frees = [row["free_mib"] for row in reading["rows"]]
+            gpu_log.append(
+                {
+                    "stage": "during",
+                    "when": "during",
+                    "source": source,
+                    **reading,
+                    **summarize_free_samples(frees),
+                }
+            )
+            if not reading["meets_budget"]:
+                raise GpuBudgetError(
+                    "GPU free memory during a stage is below the budget"
+                )
+            return reading
+
         poses = run_poses(
             video,
             output / "colmap",
+            before_gpu_stage=before_gpu_stage,
+            on_gpu_sample=on_gpu_sample,
+            sample_interval_s=GPU_SAMPLE_INTERVAL_S,
             **evidence_kwargs(),
         )
         document["exit_statuses"] = _step_statuses(poses)
@@ -718,7 +840,9 @@ def execute(request: dict[str, Any]) -> int:
     except (EvidenceError, FileNotFoundError) as exc:
         document["reason"] = str(exc)
         kind = "forbidden" if isinstance(exc, ForbiddenPathError) else "identity"
-        if "COLMAP" in str(exc):
+        if isinstance(exc, GpuBudgetError):
+            kind = "gpu_budget"
+        elif "COLMAP" in str(exc):
             kind = "version"
         elif "GPU" in str(exc):
             kind = "resource"
@@ -783,12 +907,20 @@ def render_launch_command(code_sha: str) -> str:
         str(prefix),
         "--instance-id",
         INSTANCE_ID,
+        "--gpu-free-mib-min",
+        str(PROPOSED_MIN_FREE_MIB),
     ]
     lines = [
         "STATUS: BLOCKED",
         "ready_for_execution: false",
+        "gpu_budget_approved: false",
+        "gpu_budget_status: provisional",
+        "gpu_free_mib_min: 6144",
         "This command is exact. It is not cleared to run.",
         "Blocked until: " + "; ".join(AUTHORIZATION_GATES) + ".",
+        "The 6144 MiB figure is an Engineering Lead estimate from "
+        "2026-11-06 6:47 PM ET. It is unmeasured and is not launch authorization.",
+        "Direct user authorization is also required.",
         "Do not execute this file.",
         "Input is the pinned relative path under the checkout of the code SHA.",
         "The output prefix must be a real directory chain on instance "
@@ -831,11 +963,19 @@ def build_manifest(
             "colmap": REQUIRED_COLMAP_VERSION,
             "instance_id": INSTANCE_ID,
             "gpu_query": list(GPU_FREE_ARGV),
-            "gpu_free_mib_min": None,
+            "gpu_free_mib_min": {
+                "parameter": "--gpu-free-mib-min",
+                "proposed_mib": PROPOSED_MIN_FREE_MIB,
+                "approved": False,
+                "status": "provisional_el_estimate",
+                "provenance": "Engineering Lead, 2026-11-06 6:47 PM ET",
+            },
             "gpu_policy": (
-                "fail closed when the aggregate free-memory query fails or "
-                "reports no positive free MiB; do not list processes; do not "
-                "kill or renice; do not retry"
+                "require the explicit proposed 6144 MiB free on every reported "
+                "GPU before each GPU stage; query memory.total,used,free only; "
+                "sample every 10s during a stage and log the lowest free, which "
+                "is not an exact true peak; do not list processes; do not kill "
+                "or renice another process; do not retry"
             ),
         },
         "fail_conditions": list(FAIL_CONDITIONS),
@@ -874,6 +1014,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expect-code-sha")
     parser.add_argument("--instance-id")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--gpu-free-mib-min",
+        default=None,
+        help="Explicit proposed free-memory budget in MiB. No default.",
+    )
     args = parser.parse_args(argv)
     return execute(
         {
@@ -884,6 +1029,7 @@ def main(argv: list[str] | None = None) -> int:
             "expect_code_sha": args.expect_code_sha,
             "instance_id": args.instance_id,
             "dry_run": args.dry_run,
+            "gpu_free_mib_min": args.gpu_free_mib_min,
         }
     )
 

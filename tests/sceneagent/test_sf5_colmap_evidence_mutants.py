@@ -177,6 +177,52 @@ MUTANTS = (
         "if False and os.path.islink(acc):",
     ),
     (
+        "short_gpu_hidden_by_another",
+        "package",
+        'return bool(rows) and all(row["free_mib"] >= budget for row in rows)',
+        'return bool(rows) and any(row["free_mib"] >= budget for row in rows)',
+    ),
+    (
+        "budget_not_pinned",
+        "package",
+        "or not proposed:",
+        "or False:",
+    ),
+    (
+        "sample_called_peak",
+        "package",
+        '        "sample_interval_s": GPU_SAMPLE_INTERVAL_S,\n'
+        '        "exact_true_peak": False,\n'
+        '        "continuous_minimum": False,',
+        '        "sample_interval_s": GPU_SAMPLE_INTERVAL_S,\n'
+        '        "exact_true_peak": True,\n'
+        '        "continuous_minimum": False,',
+    ),
+    (
+        "proposed_budget_lowered",
+        "package",
+        "PROPOSED_MIN_FREE_MIB = 6144",
+        "PROPOSED_MIN_FREE_MIB = 1",
+    ),
+    (
+        "sift_formula_short",
+        "package",
+        "return 4 * num_matches * num_matches + 4 * num_matches * 256",
+        "return 4 * num_matches * 24",
+    ),
+    (
+        "sample_interval_becomes_recheck",
+        "package",
+        "GPU_SAMPLE_INTERVAL_S = 10",
+        "GPU_SAMPLE_INTERVAL_S = 60",
+    ),
+    (
+        "sample_retry_enabled",
+        "package",
+        '"retries": 0,',
+        '"retries": 1,',
+    ),
+    (
         "native_extract_becomes_fps",
         "colmap",
         '"-fps_mode",\n            "passthrough",',
@@ -218,6 +264,7 @@ def _oracle_package(mod) -> None:
     assert mod.exit_code("identity") == 2
     assert mod.exit_code("resource") == 3
     assert mod.exit_code("accept") == 0
+    assert mod.exit_code("gpu_budget") == 4
     assert mod.launch_ready() is False
     assert mod.gpu_attempts() == 1
     assert mod.hashes_match("abc", "def") is False
@@ -228,8 +275,34 @@ def _oracle_package(mod) -> None:
     assert mod.counts_as_fruits_evidence(True, "accept") is False
     assert mod.counts_as_fruits_evidence(False, "reject") is False
     assert mod.counts_as_fruits_evidence(False, "accept") is True
+    assert mod.GPU_FREE_ARGV == (
+        "nvidia-smi",
+        "--query-gpu=memory.total,memory.used,memory.free",
+        "--format=csv,noheader,nounits",
+    )
     assert mod.gpu_query_is_aggregate(mod.GPU_FREE_ARGV) is True
     assert "pid" not in " ".join(mod.GPU_FREE_ARGV)
+    assert mod.PROPOSED_MIN_FREE_MIB == 6144
+    assert mod.GPU_SAMPLE_INTERVAL_S == 10
+    assert mod.FAQ_PINNED_TO_COLMAP_3_11_1 is False
+    assert mod.sift_match_bytes(32768) == 4328521728
+    assert mod.sift_match_bytes(8192) == 276824064
+    assert mod.accepted_free_mib_budget(6144) == 6144
+    for bad in (None, 1, 6143, 16384, True):
+        try:
+            mod.accepted_free_mib_budget(bad)
+        except mod.GpuBudgetError:
+            pass
+        else:
+            raise AssertionError(bad)
+    assert (
+        mod.memory_meets_budget([{"free_mib": 8000}, {"free_mib": 1000}], 6144) is False
+    )
+    assert mod.memory_meets_budget([{"free_mib": 6144}], 6144) is True
+    assert mod.memory_meets_budget([], 6144) is False
+    assert mod.summarize_free_samples([7000, 6100])["exact_true_peak"] is False
+    assert mod.summarize_free_samples([7000, 6100])["lowest_free_mib_observed"] == 6100
+    assert mod.summarize_free_samples([])["retries"] == 0
     assert mod.path_is_forbidden("/workspace/sceneagent-simfoundry/secret") is True
     assert mod.path_is_forbidden("/tmp/fitted_splat/a") is True
     assert mod.path_is_forbidden("/workspace/fruits-fullrate-colmap/sparse/0") is True
@@ -330,4 +403,4 @@ def test_every_mutant_is_killed():
                 continue
             survived.append(name)
     assert survived == []
-    assert len(MUTANTS) == 29
+    assert len(MUTANTS) == 36
