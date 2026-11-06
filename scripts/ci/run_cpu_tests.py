@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run the lightweight CPU tests outside tests/sceneagent.
 
-The skip list is ci/cpu-test-skips.txt. Entries marked gpu are stamped with
-the existing ``gpu`` marker and dropped. ``-m "not gpu"`` is the same filter
-the sceneagent job uses. A skip result fails the process: a skip is not a pass.
+The skip list is ci/cpu-test-skips.txt. Entries are deselected. This runner
+does not apply the ``gpu`` marker. ``-m "not gpu"`` still drops a test that
+already carries that marker. A skip result fails the process: a skip is not
+a pass.
 """
 
 from __future__ import annotations
@@ -26,16 +27,25 @@ def _matches(nodeid: str, spec: str) -> bool:
     return nodeid == spec or nodeid.startswith(spec + "[") or nodeid.startswith(spec + "::")
 
 
+_KINDS = {"network", "torch", "open3d", "skip"}
+
+
 def load_skip_list(path: Path) -> list[tuple[str, str, str]]:
-    """Return (kind, node, reason) rows. kind is ``gpu`` or ``skip``."""
+    """Return (kind, node, reason) rows.
+
+    Kinds are ``network``, ``torch``, ``open3d``, and ``skip``. None of them
+    is the ``gpu`` marker.
+    """
     entries: list[tuple[str, str, str]] = []
     for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         parts = [part.strip() for part in line.split("|")]
-        if len(parts) != 3 or parts[0] not in {"gpu", "skip"} or not parts[1] or not parts[2]:
-            raise SystemExit(f"{path}:{lineno}: expected 'gpu|skip | node | reason'")
+        if len(parts) != 3 or parts[0] not in _KINDS or not parts[1] or not parts[2]:
+            raise SystemExit(
+                f"{path}:{lineno}: expected 'network|torch|open3d|skip | node | reason'"
+            )
         entries.append((parts[0], parts[1], parts[2]))
     if not entries:
         raise SystemExit(f"{path} has no entries")
@@ -57,13 +67,11 @@ class _CpuGate:
         dropped: list[pytest.Item] = []
         for item in items:
             hit = False
-            for kind, spec, _reason in self._node_entries:
+            for _kind, spec, _reason in self._node_entries:
                 if not _matches(item.nodeid, spec):
                     continue
                 self._matched[spec] += 1
                 hit = True
-                if kind == "gpu":
-                    item.add_marker(pytest.mark.gpu)
                 dropped.append(item)
                 break
             if not hit:
@@ -116,18 +124,15 @@ def main() -> int:
         print(f"  {path}")
     print(f"{len(files)} files")
     print()
-    print("Not run (gpu marker, or omitted because collection cannot mark them):")
-    for kind, node, reason in entries:
-        if kind == "gpu":
+    for kind in ("network", "torch", "open3d", "skip"):
+        rows = [entry for entry in entries if entry[0] == kind]
+        if not rows:
+            continue
+        print(f"Not run ({kind}):")
+        for _kind, node, reason in rows:
             print(f"  {node}")
             print(f"    {reason}")
-    print()
-    print("Not run (other):")
-    for kind, node, reason in entries:
-        if kind == "skip":
-            print(f"  {node}")
-            print(f"    {reason}")
-    print()
+        print()
     print("tests/sceneagent stays on the pytest-unit job.")
     print()
 
