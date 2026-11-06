@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from sceneagent.vast_smoke import (
-    APPROVED_INSTANCE_ID,
+    ALLOWED_INSTANCE_ID,
     FRUITS_RELATIVE,
     REMOTE_OUT,
     REMOTE_REPO,
@@ -22,6 +22,7 @@ from sceneagent.vast_smoke import (
     classify_status,
     collect_artifact_manifest,
     endpoint_for,
+    publish_artifacts,
     main,
     mask_secret,
     parse_instance_id,
@@ -47,7 +48,7 @@ def _command():
 
 def _texas(status, **extra):
     row = {
-        "id": APPROVED_INSTANCE_ID,
+        "id": ALLOWED_INSTANCE_ID,
         "actual_status": status,
         "intended_status": "running" if status in {"running", "loading"} else "stopped",
         "geolocation": "Texas, US",
@@ -251,10 +252,14 @@ def test_redact_removes_every_copy_of_the_key():
     assert redact("plain", "") == "plain"
 
 
-def test_mask_secret_is_silent_outside_actions(capsys, monkeypatch):
+def test_mask_secret_never_prints_the_key(capsys, monkeypatch):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     mask_secret("sf4-test-key")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    mask_secret("sf4-test-key")
     captured = capsys.readouterr()
+    assert "sf4-test-key" not in captured.out
+    assert "sf4-test-key" not in captured.err
     assert captured.out == ""
     assert captured.err == ""
 
@@ -319,14 +324,14 @@ def test_deferred_ledger_is_not_a_pass_and_is_not_rewritten(tmp_path):
     ledger = json.loads(before.decode("utf-8"))
     assert ledger["entries"][1]["decision"] == "deferred"
     assert manifest["passed"] is False
-    assert manifest["complete"] is True
+    assert manifest["complete"] is False
     assert "not a pass" in manifest["failure_reason"]
+    assert "plan.json was not written by the pipeline" in manifest["failure_reason"]
+    assert not (run / "plan.json").exists()
+    assert not (run / "plan.derived.json").exists()
     stage = manifest["stages"][1]
     assert stage["reported"] == "skipped"
     assert stage["counts_as_pass"] is False
-    plan = json.loads((run / "plan.json").read_text(encoding="utf-8"))
-    assert plan["steps"][1] == {"item": "COLMAP camera poses", "decision": "deferred"}
-    assert plan["instance_id"] == 58301075
 
 
 def test_reject_is_reported_failed_without_editing_the_ledger(tmp_path):
@@ -346,6 +351,33 @@ def test_cpu_accept_is_not_a_gpu_pass(tmp_path):
     manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
     assert manifest["passed"] is False
     assert manifest["stages"][1]["reported"] == "accept_without_gpu"
+
+
+def test_collector_copies_pipeline_plan_unchanged_and_fails_when_missing(tmp_path):
+    run = tmp_path / "run"
+    _write_run(run, decision="accept", use_gpu=True)
+    original = b'{"scene_name":"Fruits","from":"pipeline"}\n'
+    (run / "plan.json").write_bytes(original)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    assert manifest["passed"] is True
+    assert (run / "plan.json").read_bytes() == original
+    assert not (run / "plan.derived.json").exists()
+    artifact_dir = tmp_path / "artifacts"
+    copied = publish_artifacts(run, artifact_dir)
+    assert copied[0] == "plan.json"
+    assert (artifact_dir / "plan.json").read_bytes() == original
+
+    bare = tmp_path / "bare"
+    _write_run(bare, decision="accept", use_gpu=True)
+    missing = collect_artifact_manifest(bare, command=_command(), instance_id=58301075)
+    assert missing["passed"] is False
+    assert missing["plan"] is None
+    assert "plan" in missing["missing"]
+    assert "plan.json was not written by the pipeline" in missing["failure_reason"]
+    assert not (bare / "plan.json").exists()
+    assert not (bare / "plan.derived.json").exists()
+    published = publish_artifacts(bare, tmp_path / "bare-artifacts")
+    assert "plan.json" not in published
 
 
 def test_gpu_accept_passes_and_keeps_an_existing_plan(tmp_path):
@@ -401,7 +433,8 @@ def test_fruits_video_deferral_is_not_a_pass(tmp_path, monkeypatch):
     assert decisions["video"] == "accept"
     assert decisions["COLMAP camera poses"] == "deferred"
     assert manifest["passed"] is False
-    assert (run / "plan.json").is_file()
+    assert not (run / "plan.json").exists()
+    assert "plan.json was not written by the pipeline" in manifest["failure_reason"]
     assert (run / "manifest.json").is_file()
 
 
@@ -415,7 +448,11 @@ def test_run_smoke_on_a_running_instance_does_not_stop(tmp_path):
         assert method == "GET"
         return 200, {"instances": _texas("running")}
 
-    remote = _Remote(lambda run: _write_run(run, decision="accept", use_gpu=True))
+    def write_passing_run(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    remote = _Remote(write_passing_run)
     code = run_smoke(
         58301075,
         _checkout(tmp_path),
@@ -551,6 +588,140 @@ def test_main_has_no_api_key_flag_and_rejects_a_bad_id(monkeypatch, tmp_path):
         ]
     )
     assert code == 2
+
+
+def test_other_instance_id_is_rejected_before_any_http_call(monkeypatch, tmp_path):
+    def boom(*_args, **_kwargs):
+        raise AssertionError("HTTP was called")
+
+    monkeypatch.setattr("sceneagent.vast_smoke.urllib.request.urlopen", boom)
+    monkeypatch.setenv("VAST_API_KEY", "sf4-not-a-real-key")
+    checkout = _checkout(tmp_path)
+    for other in (58357498, "1", "58301076"):
+        code = main(
+            [
+                "--instance-id",
+                str(other),
+                "--checkout",
+                str(checkout),
+                "--artifacts",
+                str(tmp_path / "out"),
+            ]
+        )
+        assert code != 0
+        code = run_smoke(
+            other, checkout, tmp_path / "out", "sf4-not-a-real-key", request=boom
+        )
+        assert code != 0
+    with pytest.raises(InstanceNotApproved):
+        request_json(
+            "GET",
+            "https://console.vast.ai/api/v0/instances/58357498/?owner=me",
+            "sf4-not-a-real-key",
+        )
+
+
+def test_api_key_is_absent_from_logs_and_artifacts(tmp_path, capsys, monkeypatch):
+    secret = "sf4-not-a-real-key"
+    monkeypatch.setenv("VAST_API_KEY", secret)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert api_key == secret
+        assert secret not in url
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write_passing_run(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    remote = _Remote(write_passing_run)
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        secret,
+        request=request,
+        remote_factory=lambda _row: remote,
+        sleep=lambda _seconds: None,
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    for name in ("plan.json", "ledger.json", "manifest.json"):
+        text = (tmp_path / "artifacts" / name).read_text(encoding="utf-8")
+        assert secret not in text
+    source = (ROOT / "sceneagent" / "vast_smoke.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("VAST_API_KEY"' in source
+    assert "--api-key" not in source
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "VAST_API_KEY: ${{ secrets.VAST_API_KEY }}" in workflow
+    assert workflow.count("secrets.VAST_API_KEY") == 1
+
+
+def _run_blocks(text):
+    lines = text.splitlines()
+    blocks = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.lstrip(" ")
+        if not stripped.startswith("run:"):
+            index += 1
+            continue
+        indent = len(line) - len(stripped)
+        rest = stripped[len("run:") :]
+        chunk = [rest]
+        index += 1
+        while index < len(lines):
+            nxt = lines[index]
+            if nxt.strip() == "":
+                chunk.append(nxt)
+                index += 1
+                continue
+            leading = len(nxt) - len(nxt.lstrip(" "))
+            if leading <= indent:
+                break
+            chunk.append(nxt)
+            index += 1
+        blocks.append("\n".join(chunk))
+    return blocks
+
+
+def test_run_steps_do_not_interpolate_expressions():
+    blocks = _run_blocks(WORKFLOW.read_text(encoding="utf-8"))
+    assert blocks
+    for block in blocks:
+        assert "${{" not in block
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "--instance-id 58301075" in text
+    assert '"$GITHUB_WORKSPACE"' in text
+
+
+def test_workflow_has_no_inputs_and_only_workflow_dispatch():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    start = next(index for index, line in enumerate(lines) if line == "on:")
+    block = []
+    for line in lines[start + 1 :]:
+        if line and not line.startswith(" ") and not line.startswith("#"):
+            break
+        block.append(line)
+    trigger = "\n".join(block)
+    assert trigger.strip() == "workflow_dispatch:"
+    assert "inputs:" not in text
+    assert "inputs." not in text
+    assert "--instance-id 58301075" in text
+    for line in lines:
+        stripped = line.strip()
+        assert stripped not in {
+            "push:",
+            "pull_request:",
+            "pull_request_target:",
+            "schedule:",
+        }
 
 
 def test_workflow_is_manual_dispatch_only():

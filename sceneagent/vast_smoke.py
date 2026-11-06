@@ -13,10 +13,10 @@ command is only the SceneAgent video entry point. That path does not call
 Meshy or Gemini. The API key is read from the environment and is not written
 into the remote command, the URL, or the artifact files.
 
-``python -m sceneagent`` on an mp4 writes ``ledger.json`` and does not write
-``plan.json`` or a manifest. ``collect_artifact_manifest`` adds those two
-from the ledger that is already on disk. It does not rewrite the ledger, and
-a ``deferred`` or ``reject`` entry stays a failed smoke.
+``python -m sceneagent`` on an mp4 writes ``ledger.json``. It does not write
+``plan.json``. ``collect_artifact_manifest`` does not build one. A missing
+plan fails the smoke. The manifest is this module's record of that fact.
+A ``deferred`` or ``reject`` ledger entry stays a failed smoke.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 API_ORIGIN = "https://console.vast.ai"
-APPROVED_INSTANCE_ID = 58301075
+ALLOWED_INSTANCE_ID = 58301075
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
@@ -100,7 +100,7 @@ def parse_instance_id(value: object) -> int:
         parsed = int(value.strip())
     else:
         parsed = None
-    if parsed != APPROVED_INSTANCE_ID:
+    if parsed != ALLOWED_INSTANCE_ID:
         if isinstance(value, str) or (
             isinstance(value, int) and not isinstance(value, bool)
         ):
@@ -109,9 +109,9 @@ def parse_instance_id(value: object) -> int:
             shown = type(value).__name__
         raise InstanceNotApproved(
             f"Refusing instance {shown!r}. "
-            f"SF-4 may use only the existing Texas instance {APPROVED_INSTANCE_ID}."
+            f"SF-4 may use only the existing Texas instance {ALLOWED_INSTANCE_ID}."
         )
-    return APPROVED_INSTANCE_ID
+    return ALLOWED_INSTANCE_ID
 
 
 def require_api_key(value: object) -> str:
@@ -129,9 +129,9 @@ def redact(text: str, secret: str) -> str:
 
 
 def mask_secret(value: str) -> None:
-    """Register the key with GitHub's log masker. No-op outside Actions."""
-    if os.environ.get("GITHUB_ACTIONS") == "true" and value:
-        print(f"::add-mask::{value}", flush=True)
+    """Do not print the key. Actions already masks ``secrets.VAST_API_KEY``."""
+    if not isinstance(value, str):
+        return
 
 
 def child_env() -> dict[str, str]:
@@ -153,9 +153,9 @@ def _same_id(value: object) -> bool:
     if isinstance(value, bool) or value is None:
         return False
     if isinstance(value, int):
-        return value == APPROVED_INSTANCE_ID
+        return value == ALLOWED_INSTANCE_ID
     if isinstance(value, str) and value.strip().isdigit():
-        return int(value.strip()) == APPROVED_INSTANCE_ID
+        return int(value.strip()) == ALLOWED_INSTANCE_ID
     return False
 
 
@@ -185,12 +185,12 @@ def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
     row = unwrap_instance(payload)
     if row is None:
         raise InstanceNotApproved(
-            f"instance {APPROVED_INSTANCE_ID} is missing. Not creating a replacement."
+            f"instance {ALLOWED_INSTANCE_ID} is missing. Not creating a replacement."
         )
     found = row.get("id")
     if not _same_id(found):
         raise InstanceNotApproved(
-            f"show instance returned id {found!r}, not {APPROVED_INSTANCE_ID}."
+            f"show instance returned id {found!r}, not {ALLOWED_INSTANCE_ID}."
         )
     geo = row.get("geolocation")
     if geo is None:
@@ -198,7 +198,7 @@ def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
     geo_text = "" if geo is None else str(geo)
     if "texas" not in geo_text.lower():
         raise InstanceNotApproved(
-            f"instance {APPROVED_INSTANCE_ID} geolocation is {geo_text!r}, not Texas."
+            f"instance {ALLOWED_INSTANCE_ID} geolocation is {geo_text!r}, not Texas."
         )
     return row
 
@@ -281,7 +281,7 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
         if name.lower() in {"api_key", "token", "bearer", "authorization"}:
             raise InstanceNotApproved("refusing to put a credential in the URL")
     match = _INSTANCE_PATH_RE.fullmatch(parsed.path)
-    if match is None or int(match.group("id")) != APPROVED_INSTANCE_ID:
+    if match is None or int(match.group("id")) != ALLOWED_INSTANCE_ID:
         raise InstanceNotApproved(f"refusing Vast path {parsed.path}")
     key_id = match.group("key")
     is_ssh = "/ssh/" in parsed.path
@@ -532,11 +532,11 @@ def ssh_endpoint(record: dict[str, Any]) -> tuple[str, int]:
     host = record.get("ssh_host")
     port = record.get("ssh_port")
     if not isinstance(host, str) or _HOST_RE.fullmatch(host) is None:
-        raise SmokeError(f"instance {APPROVED_INSTANCE_ID} has no ssh_host")
+        raise SmokeError(f"instance {ALLOWED_INSTANCE_ID} has no ssh_host")
     if isinstance(port, str) and port.isdigit():
         port = int(port)
     if isinstance(port, bool) or not isinstance(port, int) or port <= 0:
-        raise SmokeError(f"instance {APPROVED_INSTANCE_ID} has no ssh_port")
+        raise SmokeError(f"instance {ALLOWED_INSTANCE_ID} has no ssh_port")
     return host, port
 
 
@@ -625,6 +625,10 @@ def _failure_reason(
     reasons: list[str] = []
     if "ledger" in missing_files:
         reasons.append("ledger.json is missing. Not inventing one.")
+    if "plan" in missing_files:
+        reasons.append(
+            "plan.json was not written by the pipeline. Not synthesizing one."
+        )
     for name in missing_items:
         reasons.append(f"ledger is missing {name}.")
     for stage in stages:
@@ -683,11 +687,12 @@ def collect_artifact_manifest(
     command: list[str],
     instance_id: object,
 ) -> dict[str, Any]:
-    """Write plan and manifest from the ledger. Never rewrite ``ledger.json``.
+    """Record the run. Never rewrite ``ledger.json`` or invent ``plan.json``.
 
-    A missing ledger stays missing. ``deferred`` stays ``deferred``. ``reject``
-    stays ``reject``. Neither decision is a pass. ``use_gpu`` must be true on
-    the COLMAP accept, because a CPU pose run is not this GPU smoke.
+    ``plan.json`` is copied only when the pipeline already wrote that file.
+    A missing plan fails the smoke. ``deferred`` stays ``deferred`` and
+    ``reject`` stays ``reject``. ``use_gpu`` must be true on the COLMAP
+    accept, because a CPU pose run is not this GPU smoke.
     """
     approved = parse_instance_id(instance_id)
     if any(not isinstance(part, str) for part in command):
@@ -703,20 +708,6 @@ def collect_artifact_manifest(
         if isinstance(parsed, dict):
             ledger = parsed
     plan_path = run_dir / "plan.json"
-    if ledger is not None and not plan_path.is_file():
-        plan = {
-            "scene_name": ledger.get("scene_name") or "Fruits",
-            "source": ledger.get("source") or "simfoundry_example_video",
-            "instance_id": approved,
-            "video": FRUITS_RELATIVE,
-            "command": command,
-            "steps": [
-                {"item": entry.get("item"), "decision": entry.get("decision")}
-                for entry in _ledger_entries(ledger)
-                if isinstance(entry, dict)
-            ],
-        }
-        plan_path.write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
     stages: list[dict[str, Any]] = []
     if ledger is not None:
         stages = [
@@ -878,7 +869,7 @@ class SshRemote:
         return code
 
     def _call(self, kind: str, **kwargs: Any) -> tuple[int, dict[str, Any]]:
-        method, url, body = endpoint_for(kind, APPROVED_INSTANCE_ID, **kwargs)
+        method, url, body = endpoint_for(kind, ALLOWED_INSTANCE_ID, **kwargs)
         return call_json(
             self.request,
             method,
@@ -899,7 +890,7 @@ class SshRemote:
             _log(
                 {
                     "action": "attach_ssh",
-                    "instance_id": APPROVED_INSTANCE_ID,
+                    "instance_id": ALLOWED_INSTANCE_ID,
                     "key_id_returned": False,
                 },
                 self.api_key,
@@ -1017,7 +1008,7 @@ def _show_instance(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    method, url, body = endpoint_for("show", APPROVED_INSTANCE_ID)
+    method, url, body = endpoint_for("show", ALLOWED_INSTANCE_ID)
     status, payload = call_json(request, method, url, api_key, body, sleep=sleep)
     if status == 401:
         raise InstanceNotApproved(
@@ -1025,12 +1016,10 @@ def _show_instance(
         )
     if status == 404:
         raise InstanceNotApproved(
-            f"instance {APPROVED_INSTANCE_ID} is missing (HTTP 404). Not creating a replacement."
+            f"instance {ALLOWED_INSTANCE_ID} is missing (HTTP 404). Not creating a replacement."
         )
     if status != 200:
-        raise SmokeError(
-            f"show instance {APPROVED_INSTANCE_ID} failed (HTTP {status})."
-        )
+        raise SmokeError(f"show instance {ALLOWED_INSTANCE_ID} failed (HTTP {status}).")
     return require_approved_instance(payload)
 
 
@@ -1040,11 +1029,11 @@ def _change_state(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> None:
-    method, url, body = endpoint_for(kind, APPROVED_INSTANCE_ID)
+    method, url, body = endpoint_for(kind, ALLOWED_INSTANCE_ID)
     status, payload = call_json(request, method, url, api_key, body, sleep=sleep)
     if status != 200 or payload.get("success") is False:
         raise SmokeError(
-            f"{kind} instance {APPROVED_INSTANCE_ID} failed (HTTP {status})."
+            f"{kind} instance {ALLOWED_INSTANCE_ID} failed (HTTP {status})."
         )
 
 
@@ -1071,17 +1060,17 @@ def wait_until_running(
             saw_loading = True
         if kind == "unknown":
             raise SmokeError(
-                f"instance {APPROVED_INSTANCE_ID} status {last_status!r} will not be started. "
+                f"instance {ALLOWED_INSTANCE_ID} status {last_status!r} will not be started. "
                 "Not destroying it."
             )
         if kind == "stopped" and saw_loading:
             raise SmokeError(
-                f"instance {APPROVED_INSTANCE_ID} returned to {last_status!r} after starting. "
+                f"instance {ALLOWED_INSTANCE_ID} returned to {last_status!r} after starting. "
                 "Not destroying it."
             )
         if now() >= deadline:
             raise SmokeError(
-                f"instance {APPROVED_INSTANCE_ID} did not reach running "
+                f"instance {ALLOWED_INSTANCE_ID} did not reach running "
                 f"(last actual_status {last_status!r}). Not destroying it."
             )
         sleep(POLL_SECONDS)

@@ -1,17 +1,11 @@
 # Manual GPU smoke for SceneAgent on Fruits.mp4.
-# Dispatch only. This file has no push or pull_request trigger.
-# The only Vast instance is 58301075 in Texas. The job never creates,
-# rents, resizes, or destroys an instance, and it never calls a paid API.
+# Dispatch only. The instance id is the literal 58301075.
+# The job never creates, rents, resizes, or destroys an instance,
+# and it never calls a paid API.
 name: sceneagent-gpu-smoke
 
 on:
   workflow_dispatch:
-    inputs:
-      instance_id:
-        description: "Existing Vast instance id. Only 58301075 is accepted."
-        required: true
-        default: "58301075"
-        type: string
 
 permissions:
   contents: read
@@ -28,7 +22,7 @@ jobs:
       - name: Vast GPU smoke on Fruits.mp4
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-        run: python -m sceneagent.vast_smoke --instance-id "${{ inputs.instance_id }}" --checkout "$GITHUB_WORKSPACE" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts"
+        run: python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts"
       - name: Upload plan, ledger, and manifest
         if: always()
         uses: actions/upload-artifact@v4
