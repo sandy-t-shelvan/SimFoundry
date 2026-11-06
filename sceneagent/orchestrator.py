@@ -27,10 +27,12 @@ from sceneagent.agent_loop import (
 from sceneagent.gemini_client import redact
 from sceneagent.harness import GEMINI_MODEL_ID, PlanHarness, request_plan
 
-# Predecessors this tree already refuses to skip. PartSAM and ICP both need
-# the SAM 3D mesh. The aligned-mesh inspector follows ICP, and the hull
-# rollout follows that inspector. CubePart and Articulate Anything both
-# consume the PartSAM labels. The other stages have no predecessor here.
+# Our inference, not a list the paper prints. The edges are the predecessors
+# this tree already refuses to skip: PartSAM rejects a run with no SAM 3D
+# mesh (``fruits_agent``), ICP aligns that mesh, the aligned-mesh inspector
+# follows ICP, the hull rollout follows that inspector, and CubePart and
+# Articulate Anything consume the PartSAM labels. The other stages have no
+# predecessor here. See ``docs/sf24-harness-finding.md``.
 STAGE_REQUIRES: dict[str, tuple[str, ...]] = {
     "material_vote": (),
     "mujoco_load": (),
@@ -63,6 +65,65 @@ class InvalidPlanError(ValueError):
     There is no fallback to ``default_plan()``. Callers see this error
     instead of a silently forced order.
     """
+
+
+# ``harness`` means the steps came from a model reply. ``default_fallback``
+# means ``order_plan`` substituted ``default_plan()`` for an empty parse.
+# The second is allowed to exist. It is not allowed to count as dc2.
+PLAN_SOURCE_HARNESS = "harness"
+PLAN_SOURCE_DEFAULT_FALLBACK = "default_fallback"
+
+
+def plan_source_name(used_fallback: bool) -> str:
+    """Name the source. A fallback is never labeled ``harness``."""
+
+    if used_fallback:
+        return PLAN_SOURCE_DEFAULT_FALLBACK
+    return PLAN_SOURCE_HARNESS
+
+
+def counts_toward_dc2(plan: dict[str, Any]) -> dict[str, Any]:
+    """Reject a recorded fallback as dc2 evidence.
+
+    dc2 needs an order the model chose. ``default_fallback`` is recorded so
+    the substitution is visible, and ``counts`` stays false. A ``harness``
+    source is the right kind of order. This function does not claim the live
+    dc2 artifact exists.
+    """
+
+    source = plan.get("plan_source") if isinstance(plan, dict) else None
+    if source == PLAN_SOURCE_DEFAULT_FALLBACK:
+        return {
+            "counts": False,
+            "plan_source": source,
+            "reason": (
+                "default_plan() was substituted. dc2 needs an order the model "
+                "chose, so a fallback plan cannot count."
+            ),
+        }
+    if source != PLAN_SOURCE_HARNESS:
+        return {
+            "counts": False,
+            "plan_source": source,
+            "reason": "plan_source is not harness, so the plan cannot count toward dc2.",
+        }
+    return {
+        "counts": True,
+        "plan_source": source,
+        "reason": ("plan_source is harness. This record is not the live dc2 artifact."),
+    }
+
+
+def stamp_plan_source(out_dir: Path | str, plan_source: str) -> dict[str, Any]:
+    """Record ``plan_source`` on an existing ``plan.json`` without replacing steps."""
+
+    path = Path(out_dir) / "plan.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise InvalidPlanError("plan.json is not an object")
+    payload["plan_source"] = plan_source
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return payload
 
 
 def validate_plan(steps: list[Any]) -> list[str]:
@@ -238,7 +299,8 @@ def run_harness_plan(
     out.mkdir(parents=True, exist_ok=True)
     plan_body = {
         "section": "3.1",
-        "order_source": "harness",
+        "order_source": PLAN_SOURCE_HARNESS,
+        "plan_source": PLAN_SOURCE_HARNESS,
         "harness": GEMINI_MODEL_ID,
         "model_id": getattr(impl, "model_id", GEMINI_MODEL_ID)
         if impl is not None
@@ -267,6 +329,7 @@ def run_harness_plan(
             "section": "3.1",
             "harness": GEMINI_MODEL_ID,
             "model_id": plan_body["model_id"],
+            "plan_source": PLAN_SOURCE_HARNESS,
             "call_count": call_count,
             "steps": steps,
         },
@@ -291,7 +354,8 @@ def run_harness_plan(
             "section": "3.1",
             "decision": "accept",
             "path": "plan.json",
-            "order_source": "harness",
+            "order_source": PLAN_SOURCE_HARNESS,
+            "plan_source": PLAN_SOURCE_HARNESS,
             "forced": False,
         },
         {

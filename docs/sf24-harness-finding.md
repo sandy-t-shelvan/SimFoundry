@@ -111,4 +111,14 @@ Because those pages do not establish the no-new-paid-subscription path, the adap
 
 ## Adapter that follows this choice
 
-`sceneagent.harness` checks `agent_loop.harness_status` before a call. That status still lists Codex, Claude Code, Antigravity, Muse, Stirrup, and Grok CLI, with `called` empty. The one callable adapter is Gemini `gemini-3.8-flash`. `GEMINI_API_KEY` is the only credential read. A missing value raises `MissingGeminiApiKeyError` before any HTTP call. This part does not perform a live call. The live transcript and `plan.json` for dc2 and dc3 wait on the evidence run, which waits on PR #17 (SF-14 / KAN-14).
+`sceneagent.harness` checks `agent_loop.harness_status` before a call. That status still lists Codex, Claude Code, Antigravity, Muse, Stirrup, and Grok CLI, with `called` empty. The one callable adapter is Gemini `gemini-3.8-flash`. `GEMINI_API_KEY` is the only credential read. A missing value raises `MissingGeminiApiKeyError` before any HTTP call. This part does not perform a live call.
+
+## Stage dependencies are our inference
+
+`sceneagent.orchestrator.STAGE_REQUIRES` is not a list printed in the paper. It is this tree's inference from the predecessors the code already refuses to skip. The comment on that dict is the source. One concrete refusal is `fruits_agent` `partsam`: it returns "PartSAM was not run: no SAM 3D mesh file" when the SAM 3D mesh is absent, so `partsam` is checked only after `sam3d`. The other edges are the same kind of predecessor: ICP aligns that mesh, the aligned-mesh inspector follows ICP, the hull rollout follows that inspector, and CubePart and Articulate Anything consume the PartSAM labels. A plan that breaks one of those edges raises `InvalidPlanError`. Nothing in that check was copied from a paper table.
+
+## What part 1 covers
+
+Part 1 covers dc1 (this finding, with the vendor sources above) and dc4 (the CPU tests of the adapter, the plan validation, the recorded `plan_source`, and the dc2 rejection of a `default_fallback` plan). dc2, dc3, and dc5 are the live evidence. They wait on PR #17 (SF-14 / KAN-14) and are part 2. KAN-25 is not accepted until every dc is done. CI in this part makes no paid call.
+
+`fruits_agent.order_plan` still substitutes `default_plan()` when the text prompt parses empty. That substitution stays. `plan_source` on the plan is `default_fallback` in that case and `harness` when the reply named steps. `counts_toward_dc2` records the fallback and rejects it: a fallback plan cannot count toward dc2, because dc2 needs an order the model chose. The CPU redaction tests do not close dc5.

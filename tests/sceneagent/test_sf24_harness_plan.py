@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from sceneagent.agent_loop import ALLOWED_STEPS, default_plan, harness_status
+from sceneagent.fruits_agent import plan_with_client
 from sceneagent.harness import (
     GEMINI_MODEL_ID,
     GeminiHarness,
@@ -18,10 +19,14 @@ from sceneagent.harness import (
     MissingGeminiApiKeyError,
 )
 from sceneagent.orchestrator import (
+    PLAN_SOURCE_DEFAULT_FALLBACK,
+    PLAN_SOURCE_HARNESS,
     STAGE_REQUIRES,
     InvalidPlanError,
+    counts_toward_dc2,
     later_conversion,
     run_harness_plan,
+    stamp_plan_source,
 )
 
 SECRET = "AQ.FAKE-TEST-KEY-123"
@@ -102,7 +107,11 @@ def test_model_chosen_order_is_written_to_plan_json(tmp_path):
     assert written != list(default_plan())
     assert summary["forced_order"] == list(default_plan())
     assert plan["order_source"] == "harness"
+    assert plan["plan_source"] == PLAN_SOURCE_HARNESS
     assert plan["forced"] is False
+    eligible = counts_toward_dc2(plan)
+    assert eligible["counts"] is True
+    assert "not the live" in eligible["reason"]
     assert plan["harness"] == GEMINI_MODEL_ID
     assert calls == MODEL_ORDER
     assert harness.call_count == 1
@@ -157,6 +166,56 @@ def test_invalid_plan_raises_and_does_not_fall_back(tmp_path, steps):
     assert not (tmp_path / "plan.json").exists()
     assert not (tmp_path / "procedures").exists()
     assert list(default_plan()) != steps
+
+
+def test_dependency_violation_raises_invalid_plan(tmp_path):
+    """A plan that runs PartSAM before SAM 3D is invalid. No forced order is written."""
+
+    harness = _Harness(_reply(["partsam", "sam3d"]))
+    with pytest.raises(InvalidPlanError, match="partsam requires sam3d"):
+        run_harness_plan(tmp_path, harness=harness)
+    assert harness.call_count == 1
+    assert not (tmp_path / "plan.json").exists()
+
+
+class _Flash:
+    def __init__(self, text):
+        self.text = text
+
+    def generate_flash(self, prompt, image_bytes=None):
+        return {
+            "text": self.text,
+            "model_id": "fake",
+            "http_status": 200,
+            "used_paper_model": False,
+            "paper_model_id": "gemini-2.5-flash",
+        }
+
+
+def test_fallback_plan_is_recorded_and_rejected_as_dc2(tmp_path):
+    empty = plan_with_client(_Flash(""))
+    assert empty["used_fallback"] is True
+    assert empty["fallback"] == "default_plan"
+    assert empty["plan_source"] == PLAN_SOURCE_DEFAULT_FALLBACK
+    assert empty["steps"] == list(default_plan())
+    rejected = counts_toward_dc2(empty)
+    assert rejected["counts"] is False
+    assert rejected["plan_source"] == PLAN_SOURCE_DEFAULT_FALLBACK
+    folder = tmp_path / "fallback"
+    folder.mkdir()
+    (folder / "plan.json").write_text(
+        json.dumps({"section": "3.1", "steps": empty["steps"]}) + "\n",
+        encoding="utf-8",
+    )
+    stamped = stamp_plan_source(folder, empty["plan_source"])
+    assert stamped["plan_source"] == PLAN_SOURCE_DEFAULT_FALLBACK
+    on_disk = json.loads(_read(folder / "plan.json"))
+    assert counts_toward_dc2(on_disk)["counts"] is False
+    chosen = plan_with_client(_Flash('{"steps": ["sam3d", "icp"]}'))
+    assert chosen["used_fallback"] is False
+    assert chosen["plan_source"] == PLAN_SOURCE_HARNESS
+    assert counts_toward_dc2(chosen)["counts"] is True
+    assert counts_toward_dc2({})["counts"] is False
 
 
 def test_procedures_are_readable_by_a_later_run(tmp_path):
