@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `_sdf_meshes` again records only the problem string from `_resolve_mesh_uri`, and `_palette_has_color` again uses the original `any(...)` color test. The 16-bit LA rejection is unchanged.
 - The MLP photo check rejects a 16-bit grayscale+alpha PNG. Pillow has no 16-bit LA mode, so that file (PNG color type 4, bit depth 16, raw mode `LA;16B`) opens as mode `RGBA` and used to pass. The rejection is the same sentence as 8-bit LA: `image mode LA is not RGB`. 8-bit RGB, RGBA, and color-palette photos are unchanged.
 - The sceneagent ruff job also runs `ruff format --check sceneagent`. `sceneagent/` was reformatted with `ruff format` only. The pull request template now has `goal`, a `done_criteria` section, and `proof links`, alongside the existing review fields.
 - Sceneagent CI (`.github/workflows/sceneagent-ci.yml`) is three CPU jobs: ruff 0.17.4, mypy 2.4.1 on `sceneagent`, and `pytest tests/sceneagent -m "not gpu"`. `pytest.ini` registers the `gpu` marker and errors on unknown markers. No current test under `tests/sceneagent` needs a GPU, so none is marked. Pins are in `requirements-sceneagent-ci.txt`. numpy is 2.4.6 because 2.5 requires Python 3.12 and this job stays on 3.11.
