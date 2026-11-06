@@ -942,6 +942,22 @@ def run_icp_step(
     return icp_step_exit_code(written["residuals"], written["ledger_entry"])
 
 
+def _finite_silhouette_grid(origin, pixel_size):
+    """Origin and pixel size of the orthographic silhouette, or an error.
+
+    A non-finite origin used to warp to an empty mask and exit 0. A non-finite
+    or non-positive pixel size is the same class of bad grid. Both are a
+    failed step, not a gate reject.
+    """
+    origin = np.asarray(origin, dtype=np.float64).reshape(-1)
+    if origin.shape != (2,) or not np.isfinite(origin).all():
+        raise ValueError("origin must be two finite numbers")
+    pixel = float(pixel_size)
+    if not math.isfinite(pixel) or pixel <= 0.0:
+        raise ValueError("pixel_size must be a positive finite number")
+    return (float(origin[0]), float(origin[1])), pixel
+
+
 def main(argv=None):
     """``python -m sceneagent.similarity_icp``. Same exit codes as ``run_icp_step``."""
     parser = argparse.ArgumentParser(prog="python -m sceneagent.similarity_icp")
@@ -957,10 +973,23 @@ def main(argv=None):
     parser.add_argument("--mesh-faces")
     parser.add_argument("--mesh-width", type=int)
     parser.add_argument("--mesh-height", type=int)
-    parser.add_argument("--origin", type=float, nargs=2, default=(0.0, 0.0))
-    parser.add_argument("--pixel-size", type=float, default=1.0)
+    parser.add_argument(
+        "--origin",
+        type=float,
+        nargs=2,
+        default=(0.0, 0.0),
+        metavar=("X", "Y"),
+        help="World x and y of the corner of silhouette pixel (0, 0). Default: 0 0.",
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=1.0,
+        help="World length of one silhouette pixel. Default: 1.",
+    )
     try:
         args = parser.parse_args(argv)
+        origin, pixel_size = _finite_silhouette_grid(args.origin, args.pixel_size)
         source = np.load(args.source)
         target = np.load(args.target)
         rendered = np.load(args.rendered_mask)
@@ -977,13 +1006,16 @@ def main(argv=None):
                 mesh["width"] = args.mesh_width
             if args.mesh_height is not None:
                 mesh["height"] = args.mesh_height
-            mesh["origin"] = (float(args.origin[0]), float(args.origin[1]))
-            mesh["pixel_size"] = float(args.pixel_size)
+            mesh["origin"] = origin
+            mesh["pixel_size"] = pixel_size
     except SystemExit as exc:
         code = exc.code
         if code in (None, 0):
             return 1
         return code if isinstance(code, int) else 1
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
     except Exception:
         return 1
     return run_icp_step(
@@ -996,8 +1028,8 @@ def main(argv=None):
         observed_masks=[observed],
         mesh=mesh,
         ledger_dir=args.ledger,
-        origin=(float(args.origin[0]), float(args.origin[1])),
-        pixel_size=float(args.pixel_size),
+        origin=origin,
+        pixel_size=pixel_size,
     )
 
 

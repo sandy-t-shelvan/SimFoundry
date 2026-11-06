@@ -7,6 +7,7 @@ import math
 import numpy as np
 import pytest
 
+import sceneagent.similarity_icp as icp_module
 from sceneagent.alignment import (
     FRUITS_ICP_RESIDUAL,
     OURS_COVERAGE_MIN,
@@ -911,6 +912,226 @@ def test_score_silhouette_warps_on_the_mesh_grid():
     assert mask_score["silhouette"] >= 0.95
     assert mesh_score["silhouette"] >= 0.95
     assert abs(mask_score["silhouette"] - mesh_score["silhouette"]) <= 0.05
+
+
+def test_rotated_scaled_grid_pins_an_asymmetric_origin():
+    """Scale and rotation keep the origin in the inverse. Identity cancels it."""
+    size = 96
+    origin = (1.0, 2.0)
+    pixel_size = 0.05
+    x0, y0, side = 1.8, 2.4, 0.45
+    vertices = np.array(
+        [
+            [x0, y0, 0.0],
+            [x0 + side, y0, 0.0],
+            [x0 + side, y0 + side, 0.0],
+            [x0, y0 + side, 0.0],
+        ]
+    )
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    scale = 1.1
+    rotation = rotation_matrix_from_vector([0.0, 0.0, 0.3])
+    translation = np.array([0.1, 0.0, 0.0])
+    source = rasterize_orthographic_silhouette(
+        vertices, faces, size, size, origin=origin, pixel_size=pixel_size
+    )
+    moved = apply_similarity(vertices, scale, rotation, translation)
+    expected = rasterize_orthographic_silhouette(
+        moved, faces, size, size, origin=origin, pixel_size=pixel_size
+    )
+    result = {"scale": scale, "rotation": rotation, "translation": translation}
+    mask_score = _score_silhouette(
+        result, [source], [expected], None, origin=origin, pixel_size=pixel_size
+    )
+    # No origin or pixel_size on the mesh: the score must copy the arguments.
+    mesh = {"vertices": vertices, "faces": faces, "width": size, "height": size}
+    mesh_score = _score_silhouette(
+        result, None, [expected], mesh, origin=origin, pixel_size=pixel_size
+    )
+    assert int(source.sum()) == 81
+    assert int(expected.sum()) == 99
+    assert mask_score["silhouette"] == 1.0
+    assert mesh_score["silhouette"] == 1.0
+    assert mask_score["views"] == 1
+    assert mesh_score["views"] == 1
+
+
+def _square_samples(x0, y0, side):
+    samples = np.linspace(0.0, side, 6)
+    return np.array([[x0 + u, y0 + v, 0.0] for u in samples for v in samples])
+
+
+def _write_grid_cli(tmp_path, origin, pixel_size, size, x0, y0, side, translation):
+    scale = 1.1
+    rotation_vector = [0.0, 0.0, 0.3]
+    rotation = rotation_matrix_from_vector(rotation_vector)
+    vertices = np.array(
+        [
+            [x0, y0, 0.0],
+            [x0 + side, y0, 0.0],
+            [x0 + side, y0 + side, 0.0],
+            [x0, y0 + side, 0.0],
+        ]
+    )
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    points = _square_samples(x0, y0, side)
+    target = apply_similarity(points, scale, rotation, translation)
+    rendered = rasterize_orthographic_silhouette(
+        vertices, faces, size, size, origin=origin, pixel_size=pixel_size
+    )
+    observed = rasterize_orthographic_silhouette(
+        apply_similarity(vertices, scale, rotation, translation),
+        faces,
+        size,
+        size,
+        origin=origin,
+        pixel_size=pixel_size,
+    )
+    pose_path, glb = _sidecar(
+        tmp_path,
+        rotation=rotation_vector,
+        translation=translation.tolist(),
+        scale=scale,
+    )
+    np.save(tmp_path / "source.npy", points)
+    np.save(tmp_path / "target.npy", target)
+    np.save(tmp_path / "rendered.npy", rendered)
+    np.save(tmp_path / "observed.npy", observed)
+    return pose_path, glb, rendered, observed
+
+
+def _watch_grid(monkeypatch):
+    seen = {}
+    real_score = icp_module._score_silhouette
+    real_warp = icp_module._warp_mask
+
+    def score(*args, **kwargs):
+        seen["score_origin"] = kwargs["origin"]
+        seen["score_pixel"] = kwargs["pixel_size"]
+        return real_score(*args, **kwargs)
+
+    def warp(*args, **kwargs):
+        seen["warp_origin"] = kwargs["origin"]
+        seen["warp_pixel"] = kwargs["pixel_size"]
+        return real_warp(*args, **kwargs)
+
+    monkeypatch.setattr(icp_module, "_score_silhouette", score)
+    monkeypatch.setattr(icp_module, "_warp_mask", warp)
+    return seen
+
+
+def _cli_argv(tmp_path, pose_path, glb, extra):
+    return [
+        "--pose",
+        str(pose_path),
+        "--glb",
+        str(glb),
+        "--out",
+        str(tmp_path / "residual.json"),
+        "--ledger",
+        str(tmp_path / "ledger"),
+        "--source",
+        str(tmp_path / "source.npy"),
+        "--target",
+        str(tmp_path / "target.npy"),
+        "--rendered-mask",
+        str(tmp_path / "rendered.npy"),
+        "--observed-mask",
+        str(tmp_path / "observed.npy"),
+        *extra,
+    ]
+
+
+def test_cli_silhouette_grid_defaults_and_forwarding(tmp_path, monkeypatch, capsys):
+    assert main(["--help"]) == 1
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "World x and y of the corner of silhouette pixel (0, 0). Default: 0 0." in help_text
+    assert "World length of one silhouette pixel. Default: 1." in help_text
+
+    pose_path, glb, rendered, observed = _write_grid_cli(
+        tmp_path,
+        (0.0, 0.0),
+        1.0,
+        80,
+        20.0,
+        18.0,
+        12.0,
+        np.array([3.0, -2.0, 0.0]),
+    )
+    assert int(rendered.sum()) == 144
+    assert int(observed.sum()) == 174
+    seen = _watch_grid(monkeypatch)
+    assert main(_cli_argv(tmp_path, pose_path, glb, [])) == 0
+    written = json.loads((tmp_path / "residual.json").read_text(encoding="utf-8"))
+    assert written["silhouette"] == 1.0
+    assert seen["score_origin"] == (0.0, 0.0)
+    assert seen["score_pixel"] == 1.0
+    assert seen["warp_origin"] == (0.0, 0.0)
+    assert seen["warp_pixel"] == 1.0
+
+    flagged = tmp_path / "flagged"
+    flagged.mkdir()
+    pose_path, glb, rendered, observed = _write_grid_cli(
+        flagged,
+        (1.0, 2.0),
+        0.05,
+        96,
+        1.8,
+        2.4,
+        0.45,
+        np.array([0.1, 0.0, 0.0]),
+    )
+    assert int(rendered.sum()) == 81
+    assert int(observed.sum()) == 99
+    seen = _watch_grid(monkeypatch)
+    assert (
+        main(
+            _cli_argv(
+                flagged,
+                pose_path,
+                glb,
+                ["--origin", "1", "2", "--pixel-size", "0.05"],
+            )
+        )
+        == 0
+    )
+    written = json.loads((flagged / "residual.json").read_text(encoding="utf-8"))
+    assert written["silhouette"] == 1.0
+    assert seen["score_origin"] == (1.0, 2.0)
+    assert seen["score_pixel"] == 0.05
+    assert seen["warp_origin"] == (1.0, 2.0)
+    assert seen["warp_pixel"] == 0.05
+
+
+def test_cli_rejects_a_non_finite_silhouette_grid(capsys):
+    base = [
+        "--pose",
+        "pose.json",
+        "--glb",
+        "object.glb",
+        "--out",
+        "residual.json",
+        "--ledger",
+        "ledger",
+        "--source",
+        "source.npy",
+        "--target",
+        "target.npy",
+        "--rendered-mask",
+        "rendered.npy",
+        "--observed-mask",
+        "observed.npy",
+    ]
+    assert main(base + ["--origin", "nan", "2"]) == 1
+    assert capsys.readouterr().err.strip() == "origin must be two finite numbers"
+    assert main(base + ["--origin", "1", "inf"]) == 1
+    assert capsys.readouterr().err.strip() == "origin must be two finite numbers"
+    assert main(base + ["--pixel-size", "nan"]) == 1
+    assert capsys.readouterr().err.strip() == "pixel_size must be a positive finite number"
+    assert main(base + ["--pixel-size", "0"]) == 1
+    assert capsys.readouterr().err.strip() == "pixel_size must be a positive finite number"
+    assert main(base + ["--pixel-size", "-0.2"]) == 1
+    assert capsys.readouterr().err.strip() == "pixel_size must be a positive finite number"
 
 
 def test_warped_mask_iou_matches_mesh_reraster_within_0_05():
