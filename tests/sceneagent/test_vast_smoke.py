@@ -3,19 +3,31 @@
 
 """CPU tests for the Vast Fruits smoke. No network and no API key."""
 
+import base64
+import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from sceneagent.vast_smoke import (
     ALLOWED_INSTANCE_ID,
+    DETACH_LEFTOVER_KEYS,
     FRUITS_RELATIVE,
     REMOTE_OUT,
     REMOTE_REPO,
+    SSH_READY_MAX_ATTEMPTS,
+    SSH_READY_TIMEOUT_S,
     InstanceNotApproved,
     SmokeError,
+    SshRemote,
+    arm_own_key_delete,
     assert_request_allowed,
+    call_json,
+    guard_own_key_delete,
+    attached_ssh_keys_from_show,
+    await_ssh_after_attach,
     build_fetch_script,
     build_remote_command,
     build_remote_shell,
@@ -23,11 +35,15 @@ from sceneagent.vast_smoke import (
     classify_status,
     collect_artifact_manifest,
     endpoint_for,
-    publish_artifacts,
+    ephemeral_key_record,
+    list_attached_ssh_keys,
+    load_ssh_key_fingerprints,
     main,
     mask_secret,
     parse_instance_id,
     public_instance_view,
+    publish_artifacts,
+    publish_failure_manifest,
     redact,
     request_json,
     require_approved_instance,
@@ -35,6 +51,7 @@ from sceneagent.vast_smoke import (
     run_smoke,
     ssh_base_argv,
     ssh_key_id_from_attach,
+    wait_until_ssh_accepts,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -920,3 +937,1134 @@ def test_upload_step_runs_only_after_success():
     assert "if: success()" in step
     assert "always()" not in step
     assert "failure()" not in step
+
+
+def _ssh_clock():
+    clock = {"t": 0.0}
+    sleeps = []
+
+    def now():
+        return clock["t"]
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) > SSH_READY_MAX_ATTEMPTS:
+            raise AssertionError("ssh readiness slept without a bound")
+        clock["t"] += seconds
+
+    return clock, sleeps, now, sleep
+
+
+def test_ssh_ready_succeeds_after_n_failures(capsys):
+    _clock, sleeps, now, sleep = _ssh_clock()
+    codes = [255, 255, 0]
+    probes = {"n": 0}
+
+    def probe():
+        probes["n"] += 1
+        if probes["n"] > 6:
+            raise AssertionError("ssh readiness probe was not bounded")
+        code = codes.pop(0)
+        detail = "Permission denied (publickey)" if code != 0 else ""
+        return code, detail
+
+    ready = wait_until_ssh_accepts(
+        probe,
+        sleep=sleep,
+        now=now,
+        api_key="sf4-planted-key",
+        max_attempts=6,
+        timeout_s=45,
+        backoff_s=2,
+    )
+    assert ready["accepted"] is True
+    assert ready["attempts"] == 3
+    assert codes == []
+    assert len(sleeps) == 2
+    captured = capsys.readouterr()
+    assert "sf4-planted-key" not in captured.out
+    assert "sf4-planted-key" not in captured.err
+
+
+def _bounded_calls(counter, key, limit):
+    def _tick():
+        counter[key] += 1
+        if counter[key] > limit:
+            raise AssertionError(f"ssh readiness {key} was not bounded")
+
+    return _tick
+
+
+def test_ssh_ready_exhaustion_raises():
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 3)
+    sleep_tick = _bounded_calls(counter, "sleeps", 3)
+
+    def probe():
+        probe_tick()
+        return 255, "Permission denied (publickey)"
+
+    def sleep(_seconds):
+        sleep_tick()
+
+    with pytest.raises(SmokeError, match="did not accept the ephemeral key"):
+        wait_until_ssh_accepts(
+            probe,
+            sleep=sleep,
+            now=lambda: 0.0,
+            max_attempts=3,
+            timeout_s=45,
+            backoff_s=2,
+        )
+    assert counter["probes"] == 3
+
+
+def test_ssh_ready_attempt_cap_is_not_an_unbounded_loop():
+    probes = {"n": 0}
+
+    def probe():
+        probes["n"] += 1
+        if probes["n"] > SSH_READY_MAX_ATTEMPTS:
+            raise AssertionError("ssh readiness loop was not bounded")
+        return 255, "Permission denied (publickey)"
+
+    _clock, sleeps, now, sleep = _ssh_clock()
+    with pytest.raises(SmokeError, match="did not accept"):
+        wait_until_ssh_accepts(
+            probe,
+            sleep=sleep,
+            now=lambda: 0.0,
+            max_attempts=SSH_READY_MAX_ATTEMPTS,
+            timeout_s=45,
+            backoff_s=2,
+        )
+    assert probes["n"] == SSH_READY_MAX_ATTEMPTS
+    assert len(sleeps) == SSH_READY_MAX_ATTEMPTS - 1
+
+
+def test_ssh_ready_timeout_stops_before_max_attempts():
+    probes = {"n": 0}
+    _clock, sleeps, now, sleep = _ssh_clock()
+
+    def probe():
+        probes["n"] += 1
+        if probes["n"] > 8:
+            raise AssertionError("ssh readiness probe was not bounded")
+        return 255, "Permission denied (publickey)"
+
+    with pytest.raises(SmokeError, match="did not accept"):
+        wait_until_ssh_accepts(
+            probe,
+            sleep=sleep,
+            now=now,
+            max_attempts=50,
+            timeout_s=5,
+            backoff_s=2,
+        )
+    assert probes["n"] < 50
+    assert probes["n"] >= 1
+    assert len(sleeps) < 50
+
+
+def test_ssh_ready_log_omits_the_probe_text(capsys):
+    secret = "sf4-planted-key"
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 1)
+    sleep_tick = _bounded_calls(counter, "sleeps", 1)
+
+    def probe():
+        probe_tick()
+        return 255, f"Permission denied (publickey) {secret}"
+
+    def sleep(_seconds):
+        sleep_tick()
+
+    with pytest.raises(SmokeError):
+        wait_until_ssh_accepts(
+            probe,
+            sleep=sleep,
+            now=lambda: 0.0,
+            api_key=secret,
+            max_attempts=1,
+            timeout_s=45,
+            backoff_s=2,
+        )
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "publickey" in captured.out
+
+
+def test_attach_without_key_id_is_explicit_and_does_not_detach(capsys):
+    codes = [255, 0]
+    detached = []
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 4)
+    sleep_tick = _bounded_calls(counter, "sleeps", 4)
+
+    def probe():
+        probe_tick()
+        code = codes.pop(0)
+        return code, "Permission denied (publickey)" if code else ""
+
+    def sleep(_seconds):
+        sleep_tick()
+
+    ready = await_ssh_after_attach(
+        {"success": True, "msg": "SSH key attached successfully"},
+        probe,
+        api_key="sf4-planted-key",
+        sleep=sleep,
+        now=lambda: 0.0,
+        detach=lambda key_id: detached.append(key_id),
+        max_attempts=4,
+        timeout_s=45,
+        backoff_s=2,
+    )
+    assert ready["key_id_returned"] is False
+    assert ready["key_id"] is None
+    assert ready["accepted"] is True
+    assert ready["detach"] == "skipped"
+    assert ready["detached"] is False
+    assert detached == []
+    assert DETACH_LEFTOVER_KEYS is False
+    captured = capsys.readouterr()
+    assert '"key_id_returned": false' in captured.out
+    assert '"detach": "skipped"' in captured.out
+    assert "sf4-planted-key" not in captured.out
+    assert "sf4-planted-key" not in captured.err
+    assert PUBLIC_KEY not in captured.out
+
+
+def test_attach_without_key_id_exhaustion_names_the_missing_id():
+    detached = []
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 2)
+    sleep_tick = _bounded_calls(counter, "sleeps", 2)
+
+    def probe():
+        probe_tick()
+        return 255, "Permission denied (publickey)"
+
+    def sleep(_seconds):
+        sleep_tick()
+
+    with pytest.raises(SmokeError, match="no key id") as raised:
+        await_ssh_after_attach(
+            {"success": True},
+            probe,
+            api_key="sf4-planted-key",
+            sleep=sleep,
+            now=lambda: 0.0,
+            detach=detached.append,
+            max_attempts=2,
+            timeout_s=45,
+            backoff_s=2,
+        )
+    assert detached == []
+    message = str(raised.value)
+    assert "exactly one match" in message
+    assert "not detached" not in message
+    assert "sf4-planted-key" not in message
+    assert "ssh-ed25519" not in message
+
+
+def _written(directory):
+    if not directory.exists():
+        return []
+    return [path for path in directory.rglob("*") if path.is_file()]
+
+
+def test_failure_path_publishes_a_scanned_manifest_only(tmp_path):
+    secret = "sf4-planted-key"
+    artifacts = tmp_path / "sf4-artifacts"
+    published = publish_failure_manifest(
+        artifacts,
+        api_key=secret,
+        instance_id=ALLOWED_INSTANCE_ID,
+        failure_reason="rsync failed and the log mentioned sf4-planted-key",
+        attached_ssh_keys={"source": "show", "keys": [{"id": "9", "comment": "old"}]},
+    )
+    names = sorted(path.name for path in _written(artifacts))
+    assert names == ["manifest.json"]
+    text = (artifacts / "manifest.json").read_text(encoding="utf-8")
+    assert secret not in text
+    assert "[redacted]" in text
+    assert published["passed"] is False
+    assert published["plan"] is None
+    assert published["ledger"] is None
+    assert published["published_on_failure"] == "manifest.json"
+    assert "plan.json" not in names
+    assert "ledger.json" not in names
+
+
+def test_failure_path_with_key_in_manifest_publishes_nothing(
+    tmp_path, capsys, monkeypatch
+):
+    secret = "sf4-planted-key"
+    monkeypatch.setattr("sceneagent.vast_smoke.redact", lambda text, _secret: text)
+    artifacts = tmp_path / "sf4-artifacts"
+    with pytest.raises(SmokeError):
+        publish_failure_manifest(
+            artifacts,
+            api_key=secret,
+            instance_id=ALLOWED_INSTANCE_ID,
+            failure_reason="saw sf4-planted-key",
+        )
+    assert _written(artifacts) == []
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "manifest.json" in captured.err
+
+
+def test_failure_upload_step_is_manifest_only():
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = next(
+        index for index, line in enumerate(lines) if "Upload redacted failure" in line
+    )
+    step = "\n".join(lines[start:])
+    assert "if: failure()" in step
+    assert "sf4-artifacts/manifest.json" in step
+    assert "plan.json" not in step
+    assert "ledger.json" not in step
+    assert "if-no-files-found: error" in step
+    assert "always()" not in step
+    success = "\n".join(lines[:start])
+    assert "if: success()" in success
+    assert "sf4-artifacts/plan.json" in success
+    assert "sf4-artifacts/ledger.json" in success
+
+
+def test_run_smoke_ssh_failure_publishes_only_the_failure_manifest(
+    tmp_path, capsys, monkeypatch
+):
+    calls = []
+    secret = "sf4-planted-key"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append(method)
+        assert method != "DELETE"
+        assert method == "GET"
+        return 200, {"instances": _texas("running", ssh_keys=[_sample_ssh_key()])}
+
+    class _Boom:
+        ssh_report = {
+            "key_id_returned": False,
+            "detach": "skipped",
+            "accepted": False,
+        }
+
+        def run(self, checkout, local_run):
+            raise SmokeError("rsync failed (255): Permission denied (publickey)")
+
+        def close(self):
+            self.closed = True
+
+    remote = _Boom()
+    artifacts = tmp_path / "sf4-artifacts"
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        artifacts,
+        secret,
+        request=request,
+        remote_factory=lambda _row: remote,
+        sleep=lambda _seconds: None,
+    )
+    assert code == 1
+    assert calls == ["GET"]
+    names = sorted(path.name for path in _written(artifacts))
+    assert names == ["manifest.json"]
+    text = (artifacts / "manifest.json").read_text(encoding="utf-8")
+    assert secret not in text
+    assert PUBLIC_KEY.split()[1] not in text
+    manifest = json.loads(text)
+    assert manifest["passed"] is False
+    assert manifest["plan"] is None
+    assert manifest["ledger"] is None
+    assert "publickey" in manifest["failure_reason"]
+    assert manifest["ssh"]["key_id_returned"] is False
+    assert manifest["ssh"]["detach"] == "skipped"
+    assert manifest["detach_leftover_keys"] is False
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+def _sample_ssh_key():
+    return {
+        "id": 77,
+        "public_key": PUBLIC_KEY,
+        "created_at": "2026-11-01T00:00:00Z",
+    }
+
+
+def _fingerprint(public_key):
+    blob = public_key.split()[1]
+    pad = "=" * ((4 - len(blob) % 4) % 4)
+    raw = base64.b64decode(blob + pad)
+    digest = base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii")
+    return "SHA256:" + digest.rstrip("=")
+
+
+def test_listing_attached_ssh_keys_uses_pinned_get_and_fingerprints():
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append((method, url, body))
+        if method == "DELETE":
+            raise AssertionError("detach")
+        assert method == "GET"
+        assert url == "https://console.vast.ai/api/v0/instances/58301075/ssh/"
+        assert body is None
+        return 200, {"success": True, "ssh_keys": json.dumps([_sample_ssh_key()])}
+
+    report = list_attached_ssh_keys(request, "test-key", sleep=lambda _seconds: None)
+    assert calls and all(method == "GET" for method, _url, _body in calls)
+    assert report["count"] == 1
+    assert report["fingerprints"] == [_fingerprint(PUBLIC_KEY)]
+    assert "keys" not in report
+    assert DETACH_LEFTOVER_KEYS is False
+    blob = json.dumps(report)
+    assert PUBLIC_KEY.split()[1] not in blob
+    assert "PRIVATE" not in blob
+    assert "77" not in blob
+    assert "sf4-smoke" not in blob
+    assert "2026-11-01" not in blob
+
+
+def test_show_body_json_string_keeps_id_and_drops_the_public_key():
+    payload = _texas("running", ssh_keys=json.dumps([_sample_ssh_key()]))
+    report = attached_ssh_keys_from_show(payload)
+    assert report["present_in_show"] is True
+    assert report["keys"][0]["id"] == "77"
+    assert report["keys"][0]["comment"] == "sf4-smoke"
+    assert PUBLIC_KEY.split()[1] not in json.dumps(report)
+
+
+def test_show_body_without_keys_records_absence_and_makes_no_detach():
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append(method)
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    report = list_attached_ssh_keys(request, "test-key", sleep=lambda _seconds: None)
+    assert calls == ["GET"]
+    assert report == {"count": 0, "fingerprints": []}
+    assert "detach_leftover_keys" not in report
+    assert DETACH_LEFTOVER_KEYS is False
+    direct = attached_ssh_keys_from_show(_texas("running"))
+    assert direct["keys"] == []
+
+
+def test_allowlist_still_rejects_ssh_list_and_instance_mutations():
+    for kind in ("create", "rent", "resize", "destroy", "search"):
+        with pytest.raises(InstanceNotApproved):
+            endpoint_for(kind, 58301075)
+    with pytest.raises(InstanceNotApproved):
+        assert_request_allowed(
+            "DELETE",
+            "https://console.vast.ai/api/v0/instances/58301075/",
+            None,
+        )
+
+
+def test_run_smoke_does_not_publish_show_body_key_material(tmp_path):
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append(method)
+        assert method == "GET"
+        assert "/ssh/" not in url
+        return 200, {"instances": _texas("running", ssh_keys=[_sample_ssh_key()])}
+
+    def write_passing_run(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        "test-key",
+        request=request,
+        remote_factory=lambda _row: _Remote(write_passing_run),
+        sleep=lambda _seconds: None,
+    )
+    assert code == 0
+    assert calls == ["GET"]
+    assert "DELETE" not in calls
+    manifest = json.loads(
+        (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert "attached_ssh_keys" not in manifest
+    assert PUBLIC_KEY.split()[1] not in json.dumps(manifest)
+
+    def list_request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        assert url.endswith("/58301075/ssh/")
+        assert body is None
+        return 200, {"success": True, "ssh_keys": json.dumps([_sample_ssh_key()])}
+
+    summary = list_attached_ssh_keys(
+        list_request, "test-key", sleep=lambda _seconds: None
+    )
+    assert summary == {"count": 1, "fingerprints": [_fingerprint(PUBLIC_KEY)]}
+    recorded = json.dumps(summary)
+    assert "77" not in recorded
+    assert "sf4-smoke" not in recorded
+
+
+PINNED_SSH_LIST = "https://console.vast.ai/api/v0/instances/58301075/ssh/"
+
+
+def test_pinned_ssh_list_get_is_allowed():
+    method, url, body = endpoint_for("show_ssh_keys", 58301075)
+    assert method == "GET"
+    assert url == PINNED_SSH_LIST
+    assert body is None
+    assert_request_allowed(method, url, body)
+    with pytest.raises(InstanceNotApproved):
+        endpoint_for("show_ssh_keys", 58357498)
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "body"),
+    [
+        ("POST", PINNED_SSH_LIST, None),
+        ("POST", PINNED_SSH_LIST, {}),
+        ("POST", PINNED_SSH_LIST, {"ssh_key": PUBLIC_KEY, "extra": True}),
+        ("PUT", PINNED_SSH_LIST, None),
+        ("PUT", PINNED_SSH_LIST, {"ssh_key": PUBLIC_KEY}),
+        ("DELETE", PINNED_SSH_LIST, None),
+        ("GET", PINNED_SSH_LIST + "?owner=me", None),
+        ("GET", "https://console.vast.ai/api/v0/ssh/", None),
+        ("GET", "https://console.vast.ai/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/1/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58357498/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/extra/", None),
+        (
+            "POST",
+            "https://console.vast.ai/api/v0/instances/58301075/ssh/1/",
+            {"ssh_key": PUBLIC_KEY},
+        ),
+        ("PUT", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/", None),
+        (
+            "DELETE",
+            "https://console.vast.ai/api/v0/instances/58301075/ssh/1/extra/",
+            None,
+        ),
+    ],
+)
+def test_other_ssh_paths_and_methods_are_refused(method, url, body):
+    with pytest.raises(InstanceNotApproved):
+        assert_request_allowed(method, url, body)
+
+
+def test_ssh_list_manifest_has_count_and_fingerprints_only(tmp_path):
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        assert url == PINNED_SSH_LIST
+        assert body is None
+        listed = {
+            "id": 77,
+            "name": "sf4-smoke",
+            "public_key": PUBLIC_KEY,
+            "fingerprint": "SHA256:from-the-server",
+            "created_at": "2026-11-01T00:00:00Z",
+        }
+        return 200, {"success": True, "ssh_keys": json.dumps([listed])}
+
+    summary = load_ssh_key_fingerprints(request, "test-key", lambda _seconds: None)
+    assert summary == {"count": 1, "fingerprints": [_fingerprint(PUBLIC_KEY)]}
+    published = publish_failure_manifest(
+        tmp_path / "sf4-artifacts",
+        api_key="test-key",
+        instance_id=ALLOWED_INSTANCE_ID,
+        failure_reason="ssh list",
+        ssh_keys=summary,
+    )
+    assert published["ssh_keys"] == summary
+    text = json.dumps(published)
+    assert PUBLIC_KEY.split()[1] not in text
+    assert "from-the-server" not in text
+    assert "sf4-smoke" not in text
+    assert "77" not in text
+    assert "2026-11-01" not in text
+
+
+def test_ssh_list_response_key_does_not_leak_into_artifacts(tmp_path, capsys):
+    secret = "sf4-planted-key"
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        assert url == PINNED_SSH_LIST
+        poisoned = {
+            "note": secret,
+            "ssh_keys": json.dumps(
+                [
+                    {
+                        "id": 9,
+                        "name": secret,
+                        "public_key": PUBLIC_KEY,
+                        "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n" + secret,
+                        "fingerprint": "SHA256:from-the-server",
+                    },
+                    {"public_key": f"ssh-ed25519 {secret} leaked"},
+                ]
+            ),
+        }
+        return 200, poisoned
+
+    summary = list_attached_ssh_keys(request, secret, sleep=lambda _seconds: None)
+    dirty = {
+        "count": 99,
+        "fingerprints": summary["fingerprints"],
+        "public_key": PUBLIC_KEY,
+        "private_key": secret,
+        "note": secret,
+    }
+    artifacts = tmp_path / "sf4-artifacts"
+    publish_failure_manifest(
+        artifacts,
+        api_key=secret,
+        instance_id=ALLOWED_INSTANCE_ID,
+        failure_reason="ssh list",
+        ssh_keys=dirty,
+    )
+    files = [path for path in artifacts.rglob("*") if path.is_file()]
+    assert [path.name for path in files] == ["manifest.json"]
+    text = files[0].read_text(encoding="utf-8")
+    assert secret not in text
+    assert PUBLIC_KEY.split()[1] not in text
+    assert "BEGIN" not in text
+    assert "from-the-server" not in text
+    assert summary["fingerprints"][0] in text
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+def test_ephemeral_fingerprint_is_checked_against_the_post_attach_list():
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append((method, url, body))
+        assert method == "GET"
+        assert url == PINNED_SSH_LIST
+        assert body is None
+        if len(calls) == 1:
+            return 200, {"success": True, "ssh_keys": "[]"}
+        listed = {"id": 3, "public_key": PUBLIC_KEY, "name": "sf4-smoke"}
+        return 200, {"success": True, "ssh_keys": json.dumps([listed])}
+
+    before = load_ssh_key_fingerprints(request, "test-key", lambda _seconds: None)
+    after = load_ssh_key_fingerprints(request, "test-key", lambda _seconds: None)
+    record = ephemeral_key_record(PUBLIC_KEY, after)
+    missing = ephemeral_key_record(PUBLIC_KEY, before)
+    assert before == {"count": 0, "fingerprints": []}
+    assert after["count"] == 1
+    assert record["fingerprint"] == _fingerprint(PUBLIC_KEY)
+    assert record["listed_after_attach"] is True
+    assert missing["listed_after_attach"] is False
+    assert len(calls) == 2
+    assert all(method == "GET" and body is None for method, _url, body in calls)
+    blob = json.dumps({"ssh_keys": after, "ephemeral_ssh_key": record})
+    assert PUBLIC_KEY.split()[1] not in blob
+    assert "BEGIN" not in blob
+    assert DETACH_LEFTOVER_KEYS is False
+
+
+def _bound_sleep(counter, limit=8):
+    def sleep(_seconds):
+        counter["sleeps"] += 1
+        if counter["sleeps"] > limit:
+            raise AssertionError("ssh readiness slept without a bound")
+
+    return sleep
+
+
+def test_ssh_ready_defaults_are_six_probes_and_forty_five_seconds():
+    assert SSH_READY_MAX_ATTEMPTS == 6
+    assert SSH_READY_TIMEOUT_S == 45.0
+    defaults = wait_until_ssh_accepts.__kwdefaults__
+    assert defaults is not None
+    assert defaults["max_attempts"] == 6
+    assert defaults["timeout_s"] == 45.0
+    counter = {"probes": 0, "sleeps": 0}
+
+    def probe():
+        counter["probes"] += 1
+        if counter["probes"] > 6:
+            raise AssertionError("default cap did not stop the loop")
+        return 255, "Permission denied (publickey)"
+
+    with pytest.raises(SmokeError, match=r"cap 6, timeout 45s"):
+        wait_until_ssh_accepts(probe, sleep=_bound_sleep(counter), now=lambda: 0.0)
+    assert counter["probes"] == 6
+    assert counter["sleeps"] == 5
+
+
+def test_ssh_ready_default_timeout_stops_at_forty_five_seconds():
+    seen = {"n": 0}
+
+    def now():
+        seen["n"] += 1
+        return 0.0 if seen["n"] == 1 else 45.0
+
+    counter = {"probes": 0, "sleeps": 0}
+
+    def probe():
+        counter["probes"] += 1
+        if counter["probes"] > 2:
+            raise AssertionError("default timeout did not stop the loop")
+        return 255, "Permission denied (publickey)"
+
+    with pytest.raises(SmokeError, match="timeout 45s"):
+        wait_until_ssh_accepts(probe, sleep=_bound_sleep(counter), now=now)
+    assert counter["probes"] == 1
+    assert counter["sleeps"] == 0
+
+
+def _bare_remote(sleep):
+    remote = SshRemote.__new__(SshRemote)
+    remote.api_key = "test-key"
+    remote.sleep = sleep
+    remote.key_id_returned = False
+    remote.ssh_report = {"accepted": None}
+    remote.host = "ssh6.vast.ai"
+    remote.port = 22
+    remote.private = Path("/tmp/sf4_ed25519")
+    remote.known_hosts = "/tmp/known_hosts"
+    remote.public = PUBLIC_KEY
+    return remote
+
+
+def test_ssh_remote_sync_retries_the_probe_then_rsyncs(tmp_path, monkeypatch):
+    counter = {"probes": 0, "sleeps": 0, "rsync": 0}
+    codes = [255, 255, 0]
+
+    def probe():
+        counter["probes"] += 1
+        if counter["probes"] > 8:
+            raise AssertionError("sync probe loop was not bounded")
+        code = codes.pop(0)
+        detail = "Permission denied (publickey)" if code else ""
+        return code, detail
+
+    def run_rsync(*_args, **_kwargs):
+        counter["rsync"] += 1
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stderr=b"")
+        return completed
+
+    monkeypatch.setattr("sceneagent.vast_smoke.subprocess.run", run_rsync)
+    remote = _bare_remote(_bound_sleep(counter))
+    remote._probe_ssh = probe
+    remote._sync(_checkout(tmp_path))
+    assert counter["probes"] == 3
+    assert counter["rsync"] == 2
+    assert remote.ssh_report["accepted"] is True
+    assert codes == []
+
+
+def test_ssh_remote_sync_fails_cleanly_when_the_probe_bound_runs_out(
+    tmp_path, monkeypatch
+):
+    counter = {"probes": 0, "sleeps": 0}
+
+    def probe():
+        counter["probes"] += 1
+        if counter["probes"] > 8:
+            raise AssertionError("sync probe loop was not bounded")
+        return 255, "Permission denied (publickey)"
+
+    def run_rsync(*_args, **_kwargs):
+        raise AssertionError("rsync ran after the probe bound")
+
+    monkeypatch.setattr("sceneagent.vast_smoke.subprocess.run", run_rsync)
+    remote = _bare_remote(_bound_sleep(counter))
+    remote._probe_ssh = probe
+    with pytest.raises(SmokeError, match="did not accept the ephemeral key"):
+        remote._sync(_checkout(tmp_path))
+    assert counter["probes"] == 6
+    assert remote.ssh_report["accepted"] is False
+
+
+def test_put_state_body_on_the_ssh_path_is_refused():
+    for state in ("running", "stopped"):
+        with pytest.raises(InstanceNotApproved):
+            assert_request_allowed(
+                "PUT",
+                PINNED_SSH_LIST,
+                {"state": state},
+            )
+    with pytest.raises(InstanceNotApproved):
+        assert_request_allowed(
+            "PUT",
+            "https://console.vast.ai/api/v0/instances/58301075/",
+            {"state": "paused"},
+        )
+    method, url, body = endpoint_for("start", 58301075)
+    assert method == "PUT"
+    assert url == "https://console.vast.ai/api/v0/instances/58301075/"
+    assert body == {"state": "running"}
+
+
+def test_patch_and_put_on_the_pinned_ssh_path_are_refused():
+    for method in ("PATCH", "PUT"):
+        with pytest.raises(InstanceNotApproved):
+            assert_request_allowed(method, PINNED_SSH_LIST, None)
+        with pytest.raises(InstanceNotApproved):
+            assert_request_allowed(method, PINNED_SSH_LIST, {"ssh_key": PUBLIC_KEY})
+
+
+def test_pinned_ssh_get_guard_accepts_only_that_path():
+    assert_request_allowed("GET", PINNED_SSH_LIST, None)
+    refused = [
+        ("GET", PINNED_SSH_LIST + "?owner=me", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/1/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/77/", None),
+        ("GET", "https://console.vast.ai/api/v0/ssh/", None),
+        ("POST", PINNED_SSH_LIST, None),
+        ("PATCH", PINNED_SSH_LIST, None),
+        ("PUT", PINNED_SSH_LIST, None),
+        ("DELETE", PINNED_SSH_LIST, None),
+    ]
+    for method, url, body in refused:
+        with pytest.raises(InstanceNotApproved):
+            assert_request_allowed(method, url, body)
+
+
+def _listing_transport(mode):
+    """Mock Vast. ``mode`` is one, zero, or several matches for the posted key."""
+    calls = []
+    seen = {"key": None, "gets": 0}
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append((method, url))
+        if method == "DELETE":
+            if mode == "http":
+                return 500, {"success": False}
+            if mode == "raise":
+                raise RuntimeError("transport down")
+            return 200, {"success": True}
+        if method == "POST" and url == PINNED_SSH_LIST:
+            seen["key"] = body["ssh_key"]
+            return 200, {"success": True}
+        if method == "GET" and url == PINNED_SSH_LIST:
+            seen["gets"] += 1
+            if seen["gets"] == 1 or seen["key"] is None:
+                return 200, {"success": True, "ssh_keys": []}
+            listed = seen["key"] + "\n"
+            key = seen["key"]
+            if mode == "zero":
+                rows = [{"id": 9, "public_key": PUBLIC_KEY + " other"}]
+            elif mode == "several":
+                rows = [
+                    {"id": 77, "public_key": listed},
+                    {"id": 78, "public_key": key + " "},
+                ]
+            elif mode == "trailing":
+                rows = [{"id": 77, "public_key": key + "\n  "}]
+            elif mode == "leading":
+                rows = [{"id": 77, "public_key": " " + key}]
+            elif mode == "substring":
+                rows = [{"id": 77, "public_key": key + " extra"}]
+            elif mode == "reverse":
+                rows = [{"id": 77, "public_key": key[::-1]}]
+            elif mode == "case":
+                kind, blob, *rest = key.split(" ")
+                cased = kind + " " + blob.swapcase()
+                if rest:
+                    cased += " " + " ".join(rest)
+                rows = [{"id": 77, "public_key": cased}]
+            else:
+                rows = [{"id": 77, "public_key": listed}]
+            return 200, {"success": True, "ssh_keys": json.dumps(rows)}
+        if method == "GET":
+            return 200, {"instances": _texas("running")}
+        raise AssertionError((method, url, body))
+
+    return calls, request
+
+
+def _install_remote_run(monkeypatch, fail):
+    def fake_run(self, checkout, local_run):
+        if fail:
+            raise SmokeError("remote failed before rsync")
+        local_run.mkdir(parents=True, exist_ok=True)
+        _write_run(local_run, decision="accept", use_gpu=True)
+        (local_run / "plan.json").write_bytes(
+            b'{"scene_name":"Fruits","from":"pipeline"}\n'
+        )
+        return 0
+
+    monkeypatch.setattr(SshRemote, "run", fake_run)
+
+
+def test_own_key_is_detached_on_success_and_on_failure(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for fail, expected in ((False, 0), (True, 1)):
+        calls, request = _listing_transport("one")
+        _install_remote_run(monkeypatch, fail)
+        artifacts = tmp_path / ("fail" if fail else "ok")
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        assert code == expected
+        deletes = [url for method, url in calls if method == "DELETE"]
+        assert deletes == ["https://console.vast.ai/api/v0/instances/58301075/ssh/77/"]
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["own_key"]["match_count"] == 1
+        assert manifest["own_key"]["detached"] is True
+        assert "exactly one" in manifest["own_key"]["reason"]
+        assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
+
+
+def test_no_delete_when_zero_or_several_keys_match(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    _install_remote_run(monkeypatch, fail=False)
+    expectations = {
+        "zero": (0, "no listed key"),
+        "several": (2, "more than one"),
+    }
+    for mode, (count, reason) in expectations.items():
+        calls, request = _listing_transport(mode)
+        artifacts = tmp_path / mode
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        assert code == 0
+        assert [url for method, url in calls if method == "DELETE"] == []
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["own_key"]["match_count"] == count
+        assert manifest["own_key"]["detached"] is False
+        assert reason in manifest["own_key"]["reason"]
+        assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
+
+
+def _assert_no_match(tmp_path, monkeypatch, mode):
+    calls, request = _listing_transport(mode)
+    _install_remote_run(monkeypatch, fail=False)
+    artifacts = tmp_path / mode
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        artifacts,
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+    )
+    manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+    assert code == 0
+    assert [url for method, url in calls if method == "DELETE"] == []
+    assert manifest["own_key"]["match_count"] == 0
+    assert manifest["own_key"]["detached"] is False
+    assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
+
+
+def test_near_miss_listed_keys_do_not_match(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for mode in ("substring", "reverse", "case"):
+        _assert_no_match(tmp_path, monkeypatch, mode)
+
+
+def test_own_key_match_rstrip_boundary(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    calls, request = _listing_transport("trailing")
+    _install_remote_run(monkeypatch, fail=False)
+    artifacts = tmp_path / "trailing"
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        artifacts,
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+    )
+    manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+    assert code == 0
+    assert [url for method, url in calls if method == "DELETE"] == [
+        "https://console.vast.ai/api/v0/instances/58301075/ssh/77/"
+    ]
+    assert manifest["own_key"]["match_count"] == 1
+    assert manifest["own_key"]["detached"] is True
+    _assert_no_match(tmp_path, monkeypatch, "leading")
+
+
+def test_failed_own_key_delete_is_recorded_as_failed(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for mode in ("http", "raise"):
+        calls, request = _listing_transport(mode)
+        _install_remote_run(monkeypatch, fail=False)
+        artifacts = tmp_path / mode
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        assert code != 0
+        assert any(method == "DELETE" for method, _url in calls)
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["own_key"]["match_count"] == 1
+        assert manifest["own_key"]["detached"] is False
+        assert "fail" in manifest["own_key"]["reason"].lower()
+        assert manifest["ssh"]["detach"] == "failed"
+        assert manifest["ssh"]["detach"] != "detached"
+
+
+def test_exit_code_survives_failure_manifest_error(tmp_path, monkeypatch):
+    def boom(*_args, **_kwargs):
+        raise SmokeError("manifest publish failed")
+
+    monkeypatch.setattr("sceneagent.vast_smoke.publish_failure_manifest", boom)
+
+    def offline(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("offline")}
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "offline",
+        "test-key",
+        request=offline,
+        sleep=lambda _seconds: None,
+    )
+    assert code == 2
+
+    monkeypatch.setattr("sceneagent.vast_smoke.publish_artifacts", boom)
+
+    def running(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    for rc in (2, 139):
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / f"rc-{rc}",
+            "test-key",
+            request=running,
+            remote_factory=lambda _row, exit_code=rc: _Remote(write, rc=exit_code),
+            sleep=lambda _seconds: None,
+        )
+        assert code == rc
+
+
+def test_detach_guard_refuses_any_other_key_id(monkeypatch):
+    monkeypatch.setattr("sceneagent.vast_smoke.DETACH_LEFTOVER_KEYS", True)
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append((method, url))
+        return 200, {"success": True}
+
+    own = "https://console.vast.ai/api/v0/instances/58301075/ssh/77/"
+    other = "https://console.vast.ai/api/v0/instances/58301075/ssh/78/"
+    elsewhere = "https://console.vast.ai/api/v0/instances/1/ssh/77/"
+    arm_own_key_delete(None)
+    for url in (own, other, elsewhere):
+        with pytest.raises(InstanceNotApproved):
+            guard_own_key_delete("DELETE", url)
+        with pytest.raises(InstanceNotApproved):
+            call_json(request, "DELETE", url, "test-key", None, sleep=lambda _s: None)
+    assert calls == []
+    arm_own_key_delete("77")
+    try:
+        with pytest.raises(InstanceNotApproved):
+            guard_own_key_delete("DELETE", other)
+        with pytest.raises(InstanceNotApproved):
+            call_json(request, "DELETE", other, "test-key", None, sleep=lambda _s: None)
+        with pytest.raises(InstanceNotApproved):
+            guard_own_key_delete("DELETE", elsewhere)
+        guard_own_key_delete("DELETE", own)
+        call_json(request, "DELETE", own, "test-key", None, sleep=lambda _s: None)
+        assert calls == [("DELETE", own)]
+    finally:
+        arm_own_key_delete(None)
+
+
+def _assert_detach_agreement(manifest):
+    own = manifest["own_key"]
+    detach = manifest["ssh"]["detach"]
+    if own["detached"]:
+        assert own["match_count"] == 1
+        assert detach == "detached"
+    elif own["match_count"] == 1:
+        assert detach == "failed"
+    else:
+        assert own["detached"] is False
+        assert detach == "skipped"
+    assert "not detached" not in json.dumps(manifest["ssh"])
+    assert "not detached" not in json.dumps(manifest["own_key"])
+
+
+def test_manifest_ssh_detach_agrees_with_own_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    cases = (
+        ("one", False),
+        ("one", True),
+        ("zero", False),
+        ("several", False),
+    )
+    for mode, fail in cases:
+        calls, request = _listing_transport(mode)
+        _install_remote_run(monkeypatch, fail)
+        artifacts = tmp_path / f"{mode}-{'fail' if fail else 'ok'}"
+        run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            artifacts,
+            "test-key",
+            request=request,
+            sleep=lambda _seconds: None,
+        )
+        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+        _assert_detach_agreement(manifest)
+
+
+def test_remote_exit_code_propagates(tmp_path):
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    def write(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    for rc in (2, 139):
+        code = run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / f"rc-{rc}",
+            "test-key",
+            request=request,
+            remote_factory=lambda _row, exit_code=rc: _Remote(write, rc=exit_code),
+            sleep=lambda _seconds: None,
+        )
+        assert code == rc
