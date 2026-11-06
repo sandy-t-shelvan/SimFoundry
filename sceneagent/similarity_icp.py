@@ -13,8 +13,12 @@ A residual file records the measured distances. It does not accept the pose.
 
 from __future__ import annotations
 
+import argparse
+import hashlib
 import json
 import math
+import numbers
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +35,30 @@ SILHOUETTE_DEFINITION = (
     "mean Jaccard index of the rendered silhouette and the observed mask "
     "over views whose raster union is non-empty; null when every union is empty"
 )
+
+# Ledger reason for a null silhouette. A measured 0 keeps the below-minimum
+# reason from the iteration-1 gate. KAN-8 comment 10152, ruling 2.
+SILHOUETTE_UNDEFINED_REASON = "silhouette_undefined"
+
+
+class PoseSidecarError(Exception):
+    """The stored SAM 3D pose cannot start ICP."""
+
+
+class PoseSidecarMissingError(PoseSidecarError):
+    """The pose sidecar file is not there. Identity is not a substitute."""
+
+
+class PoseSidecarHashMissingError(PoseSidecarError):
+    """The sidecar does not record the GLB SHA-256."""
+
+
+class PoseSidecarHashMismatchError(PoseSidecarError):
+    """The sidecar SHA-256 is not the hash of the GLB on disk."""
+
+
+class PoseSidecarRotationMissingError(PoseSidecarError):
+    """The sidecar matches the GLB and stores no rotation."""
 
 
 def umeyama(source, target):
@@ -85,7 +113,8 @@ def rotation_seeds():
 
     These seeds are the search only when the caller did not pass a stored
     SAM 3D pose. They are not that pose, and they are not acceptance
-    thresholds. ``write_alignment_residual`` does not use them.
+    thresholds. ``write_alignment_residual`` does not use them, and it does
+    not fill a missing rotation with identity.
     """
     seeds = [np.eye(3)]
     for axis in np.eye(3):
@@ -469,33 +498,61 @@ def _vector3(value, label):
 
 
 def resolve_sam3d_rotation(payload):
-    """Rotation ICP should start from, and whether the vector must be stored.
+    """Rotation ICP should start from.
 
     ``rotation`` is a Rodrigues vector. ``rotation_matrix`` and
     ``quaternion_xyzw`` are converted into that vector. The scene frame stores
-    quaternions XYZW. When the export stored none of these, the vector is the
-    export-frame identity ``[0, 0, 0]``. That identity is not a quarter-turn
-    seed and is not labeled as a rotation the export contained.
+    quaternions XYZW. None of those fields is filled with identity: a sidecar
+    that matches its GLB and still has no rotation raises
+    ``PoseSidecarRotationMissingError``.
     """
     if not isinstance(payload, dict):
         raise ValueError("SAM 3D pose must be a JSON object")
     if payload.get("rotation") is not None:
         vector = _vector3(payload["rotation"], "SAM 3D rotation vector")
-        return vector, rotation_matrix_from_vector(vector), "rotation", False
+        return vector, rotation_matrix_from_vector(vector), "rotation"
     if payload.get("rotation_matrix") is not None:
         matrix = np.asarray(payload["rotation_matrix"], dtype=np.float64)
         vector = rotation_vector_from_matrix(matrix)
-        return vector, rotation_matrix_from_vector(vector), "rotation_matrix", True
+        return vector, rotation_matrix_from_vector(vector), "rotation_matrix"
     if payload.get("quaternion_xyzw") is not None:
         matrix = quaternion_xyzw_to_matrix(payload["quaternion_xyzw"])
         vector = rotation_vector_from_matrix(matrix)
-        return vector, rotation_matrix_from_vector(vector), "quaternion_xyzw", True
-    return (
-        np.zeros(3, dtype=np.float64),
-        np.eye(3),
-        "export_frame_identity",
-        True,
+        return vector, rotation_matrix_from_vector(vector), "quaternion_xyzw"
+    raise PoseSidecarRotationMissingError(
+        "SAM 3D pose sidecar has no rotation, rotation_matrix, or quaternion_xyzw"
     )
+
+
+def file_sha256(path):
+    """SHA-256 hex digest of a file. Used to bind a pose sidecar to its GLB."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _recorded_glb_sha256(payload):
+    if "glb_sha256" not in payload or payload.get("glb_sha256") is None:
+        raise PoseSidecarHashMissingError("pose sidecar is missing glb_sha256")
+    recorded = payload["glb_sha256"]
+    if not isinstance(recorded, str) or not recorded.strip():
+        raise PoseSidecarHashMissingError("pose sidecar glb_sha256 is empty")
+    return recorded.strip().lower()
+
+
+def _require_matching_glb(payload, glb_path):
+    recorded = _recorded_glb_sha256(payload)
+    glb = Path(glb_path)
+    if not glb.is_file():
+        raise PoseSidecarHashMismatchError(f"GLB is not at {glb}")
+    actual = file_sha256(glb)
+    if actual != recorded:
+        raise PoseSidecarHashMismatchError(
+            f"pose sidecar glb_sha256 {recorded} does not match {actual}"
+        )
+    return actual
 
 
 def _optional_scale(payload):
@@ -513,20 +570,28 @@ def _optional_translation(payload):
     return _vector3(payload["translation"], "SAM 3D translation"), "stored_sam3d"
 
 
-def load_stored_sam3d_pose(path):
-    """Read a SAM 3D pose JSON and store a rotation vector when it is missing.
+def load_stored_sam3d_pose(path, glb_path):
+    """Read a SAM 3D pose sidecar bound to ``glb_path`` by SHA-256.
 
-    The file has to exist. A missing file is not a stored pose, and this
-    function does not invent one. A missing rotation vector is written back
-    so the next run starts from the file instead of from ``rotation_seeds``.
+    A missing sidecar, a missing ``glb_sha256``, or a hash that is not the
+    GLB's digest raises a named error. A matching sidecar with no rotation,
+    matrix, or quaternion raises ``PoseSidecarRotationMissingError``. None of
+    those paths writes an identity rotation. A matrix or XYZW quaternion is
+    converted to a Rodrigues vector and stored, because that vector was
+    derived from a rotation the sidecar already held.
     """
     pose_path = Path(path)
     if not pose_path.is_file():
-        raise FileNotFoundError(f"SAM 3D pose is not stored at {pose_path}")
+        raise PoseSidecarMissingError(
+            f"SAM 3D pose sidecar is not stored at {pose_path}"
+        )
     payload = json.loads(pose_path.read_text(encoding="utf-8"))
-    vector, matrix, source, vector_absent = resolve_sam3d_rotation(payload)
+    if not isinstance(payload, dict):
+        raise ValueError("SAM 3D pose must be a JSON object")
+    digest = _require_matching_glb(payload, glb_path)
+    vector, matrix, source = resolve_sam3d_rotation(payload)
     stored = False
-    if vector_absent:
+    if "rotation" not in payload or payload.get("rotation") is None:
         payload["rotation"] = [float(item) for item in vector]
         payload["rotation_source"] = source
         pose_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -543,9 +608,10 @@ def load_stored_sam3d_pose(path):
         "scale_source": scale_source,
         "translation_source": translation_source,
         "rotation_source": source,
-        "rotation_was_absent": vector_absent,
         "rotation_stored": stored,
         "path": str(pose_path),
+        "glb_path": str(Path(glb_path)),
+        "glb_sha256": digest,
     }
 
 
@@ -578,10 +644,12 @@ def _rendered_masks(rendered_masks, observed_masks, mesh):
 def _pose_initialization(pose, result):
     translation = pose["translation"]
     return {
-        "source": "stored_sam3d",
+        "source": "sidecar",
+        "sidecar_path": pose["path"],
+        "glb_path": pose["glb_path"],
+        "glb_sha256": pose["glb_sha256"],
         "rotation": [float(item) for item in pose["rotation_vector"]],
         "rotation_source": pose["rotation_source"],
-        "rotation_was_absent": bool(pose["rotation_was_absent"]),
         "rotation_stored": bool(pose["rotation_stored"]),
         "seeds_searched": int(result["seeds_searched"]),
         "scale": None if pose["scale"] is None else float(pose["scale"]),
@@ -593,11 +661,51 @@ def _pose_initialization(pose, result):
     }
 
 
-def _gate_reason(decision):
+def _gate_reason(decision, residuals):
+    """Accept, ``silhouette_undefined``, or the below-minimum residual names.
+
+    A null silhouette is the empty-raster case. A numeric silhouette that
+    misses the minimum stays on the ordinary reject line.
+    """
     if decision["decision"] == "accept":
         return "ours_iteration_1 accept"
+    if residuals.get("silhouette") is None:
+        return SILHOUETTE_UNDEFINED_REASON
     failed = ", ".join(decision.get("failed") or [])
     return f"ours_iteration_1 reject: {failed}"
+
+
+def _is_finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return False
+    return math.isfinite(float(value))
+
+
+def icp_step_exit_code(residuals, ledger_entry):
+    """Exit code for the separate ICP step.
+
+    0 when the ledger accepted or rejected and normalized median, p90, and
+    coverage are finite numbers. Silhouette must be a finite number, except
+    the ruled null whose ledger reason is ``silhouette_undefined``. Anything
+    else, including a missing ledger line, is 1.
+    """
+    if not isinstance(ledger_entry, dict):
+        return 1
+    if ledger_entry.get("decision") not in {"accept", "reject"}:
+        return 1
+    if not isinstance(residuals, dict):
+        return 1
+    for name in ("normalized_median", "p90", "coverage"):
+        if not _is_finite_number(residuals.get(name)):
+            return 1
+    silhouette = residuals.get("silhouette")
+    if silhouette is None:
+        if ledger_entry.get("reason") != SILHOUETTE_UNDEFINED_REASON:
+            return 1
+        return 0
+    if not _is_finite_number(silhouette):
+        return 1
+    return 0
 
 
 def write_alignment_residual(
@@ -609,19 +717,25 @@ def write_alignment_residual(
     observed_masks=None,
     mesh=None,
     ledger_dir=None,
+    glb_path=None,
 ):
     """Align from the stored SAM 3D pose and write the residual JSON.
 
-    The residual carries numeric normalized median, p90, and coverage, and a
-    numeric silhouette when at least one view has a non-empty raster union.
-    An empty union on every view leaves silhouette null. The ledger line, when
-    ``ledger_dir`` is set, is the ``ours_iteration_1`` accept or reject. This
-    function does not change that gate's cutoffs, and a reject is the decision
-    the gate returned.
+    The pose sidecar has to exist and its ``glb_sha256`` has to be the SHA-256
+    of ``glb_path`` before ICP runs. The residual carries numeric normalized
+    median, p90, and coverage, and a numeric silhouette when at least one view
+    has a non-empty raster union. An empty union leaves silhouette null and
+    the ledger reason is ``silhouette_undefined``. A measured 0 rejects on the
+    ordinary below-minimum line. This function does not change the gate's
+    cutoffs.
     """
+    if glb_path is None:
+        raise PoseSidecarHashMissingError(
+            "ICP needs the GLB whose hash the sidecar records"
+        )
+    pose = load_stored_sam3d_pose(pose_path, glb_path)
     if observed_masks is None:
         raise ValueError("silhouette needs observed masks")
-    pose = load_stored_sam3d_pose(pose_path)
     rendered = _rendered_masks(rendered_masks, observed_masks, mesh)
     agreement = silhouette_agreement(rendered, observed_masks)
     result = trimmed_similarity_icp(
@@ -654,6 +768,7 @@ def write_alignment_residual(
     constants = decision.get("constants")
     if decision.get("gate") != "ours_iteration_1" or not isinstance(constants, dict):
         raise RuntimeError("ours_iteration_1 did not report its constants")
+    reason = _gate_reason(decision, residuals)
     entry = None
     if ledger_dir is not None:
         entry = append_step(
@@ -662,7 +777,7 @@ def write_alignment_residual(
             {
                 "ok": decision["accepted"],
                 "artifact": str(destination),
-                "reason": _gate_reason(decision),
+                "reason": reason,
                 "detail": {
                     "gate": decision["gate"],
                     "pose_initialization": pose_info,
@@ -676,5 +791,80 @@ def write_alignment_residual(
         "residuals": residuals,
         "pose_initialization": pose_info,
         "decision": decision,
+        "reason": reason,
         "ledger_entry": entry,
     }
+
+
+def run_icp_step(
+    source,
+    target,
+    pose_path,
+    glb_path,
+    out_path,
+    rendered_masks=None,
+    observed_masks=None,
+    mesh=None,
+    ledger_dir=None,
+):
+    """Entry point for the separate ICP step. Returns a process exit code.
+
+    A gate accept or reject, including ``silhouette_undefined``, is 0 and the
+    ledger records that decision. A crash, a pose-sidecar error, or a missing
+    or non-numeric measure is 1. This step is not the Fruits smoke.
+    """
+    try:
+        written = write_alignment_residual(
+            source,
+            target,
+            pose_path,
+            out_path,
+            rendered_masks=rendered_masks,
+            observed_masks=observed_masks,
+            mesh=mesh,
+            ledger_dir=ledger_dir,
+            glb_path=glb_path,
+        )
+    except Exception:
+        return 1
+    return icp_step_exit_code(written["residuals"], written["ledger_entry"])
+
+
+def main(argv=None):
+    """``python -m sceneagent.similarity_icp``. Same exit codes as ``run_icp_step``."""
+    parser = argparse.ArgumentParser(prog="python -m sceneagent.similarity_icp")
+    parser.add_argument("--pose", required=True)
+    parser.add_argument("--glb", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--ledger", required=True)
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--rendered-mask", required=True)
+    parser.add_argument("--observed-mask", required=True)
+    try:
+        args = parser.parse_args(argv)
+        source = np.load(args.source)
+        target = np.load(args.target)
+        rendered = np.load(args.rendered_mask)
+        observed = np.load(args.observed_mask)
+    except SystemExit as exc:
+        code = exc.code
+        if code in (None, 0):
+            return 1
+        return code if isinstance(code, int) else 1
+    except Exception:
+        return 1
+    return run_icp_step(
+        source,
+        target,
+        args.pose,
+        args.glb,
+        args.out,
+        rendered_masks=[rendered],
+        observed_masks=[observed],
+        ledger_dir=args.ledger,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())
