@@ -1182,9 +1182,12 @@ def test_failure_upload_step_is_manifest_only():
     assert "sf4-artifacts/ledger.json" in success
 
 
-def test_run_smoke_ssh_failure_publishes_only_the_failure_manifest(tmp_path, capsys):
+def test_run_smoke_ssh_failure_publishes_only_the_failure_manifest(
+    tmp_path, capsys, monkeypatch
+):
     calls = []
     secret = "sf4-planted-key"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
 
     def request(method, url, api_key, body=None, timeout=60):
         calls.append(method)
