@@ -2,6 +2,51 @@
 
 Design of the `sceneagent` package as it exists on `sandy-t-shelvan/SimFoundry` at commit `caf16b7` (`Train the physics prior in chunks so large meshes fit in memory.`). Sections 1–8 describe that package. Section 9 is the plan for reproducing Harvard SceneAgent section 4 on top of it, driven by the canvas "SceneAgent paper versus the SimFoundry upgrade". Section 10 is the build sequence for that plan. The living status of each paper block is `docs/GAP_MATRIX.md`, generated from `sceneagent/catalog.py`. The block-by-block build notes are `docs/EXPANSION_PLAN.md`. Product phases are `docs/DESIGN.md`. Landing rules are `docs/SDLC.md`.
 
+
+## Status as of 2026-11-06 2:20 AM ET
+
+Living Cut 1 / Cut 2 progress against Jira project KAN and merges into `Main_duplicate` (tip `d99c3b6`, checked 2026-11-06 2:20 AM ET). Every status in this section is as of 2026-11-06 2:20 AM ET. Catalog row status words in sections 9–10 stay the canvas / `catalog.py` words; this section only records ticket and merge state. A paper gap is not closed here unless its ticket is Accepted in Jira.
+
+Branch note: `docs/expansion-and-harvard-results.md` and `docs/canvases/sceneagent-paper-gaps.canvas.tsx` are byte-identical on `main` and `Main_duplicate` at this check. Cut 2 epic KAN-15 is on hold. Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into `Main_duplicate`.
+
+### Cut 1 ticket board
+
+| Ticket | Jira | True status | Evidence |
+|---|---|---|---|
+| SF-1 Fix red CI | KAN-1 | Accepted | Comment 10009; PR #5 merge `8f6756c` |
+| SF-2 CI stages | KAN-2 | Accepted | Comment 10082; PRs #8/`6b70479`, #9/`4fa621d` |
+| SF-3 Broader CPU tests | KAN-3 | Accepted | Comments 10114 (PM accepted) + 10121; PR #11 merge `1e41c38` |
+| SF-4 Vast GPU smoke | KAN-4 | as of 2026-11-06 2:20 AM ET: Merged (part 1 into Main_duplicate; dc1 and dc2 not met) | PR #13 merged `2a9a05c` (head `6725740`); QA 10171 + PM 10172. Comment 10209 amends the run so SSH counts instead of the workflow. v4 SSH run rejected in 10215/10219: dc3 and dc4 met, dc1 and dc2 not met. CUDA COLMAP install plan approved in 10205. |
+| SF-5 Full-rate COLMAP + color calibration | KAN-5 | as of 2026-11-06 2:20 AM ET: In review: PR #10, head `37889c4` (replaced `53f87c6` after PM 10217 rulings) | PR #10, head `37889c4` (replaced `53f87c6` after PM 10217 rulings) |
+| SF-6 Hungarian past 8 | KAN-6 | Accepted | Comment 10006; PR #5 `8f6756c` |
+| SF-7 Kitchen aggregator | KAN-7 | Accepted | Comment 10007; PR #5 `8f6756c` |
+| SF-8 ICP silhouette and pose | KAN-8 | as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding | Sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding |
+| SF-9 Background plane | KAN-9 | Merged (part 1 CPU into Main_duplicate, Fruits GPU image pending) | PR #16 merged `aec2c9f`. The earlier QA 10186 and PM SENT BACK 10191 at `4913e4a` are not this head. Not Accepted. |
+| SF-10 CubePart + Articulate Anything | KAN-10 | as of 2026-11-06 2:20 AM ET: Merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending | Merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending |
+| SF-11 Fix docs drift | KAN-11 | Accepted | Comments 10084 (PM accepted) + 10085; PR #7 merge `136d759` |
+| SF-12 Photo check 16-bit LA PNG | KAN-12 | Accepted | Comment 10055; PR #6 merge `51a8d54` |
+| SF-14 Bot-runnable GPU smoke triggers | KAN-14 | as of 2026-11-06 2:20 AM ET: In review; QA FAIL 10194; no longer gates SF-4 | PR #17 at `dbf38aa`; rulings 10188 (dc2/dc5 → SF-14b after main merge); QA FAIL 10194; no longer gates SF-4 |
+| Cut 1 epic | KAN-13 | Not started (epic open) | To Do; standing full-review rule 10185 |
+
+### Cut 1 → paper-gap map (ticket progress only)
+
+| Canvas / plan row | Catalog status (unchanged) | Cut 1 ticket progress |
+|---|---|---|
+| Alignment acceptance gate | partial | as of 2026-11-06 2:20 AM ET: SF-8 sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding; not Accepted |
+| COLMAP camera poses | partial | as of 2026-11-06 2:20 AM ET: SF-5 in review: PR #10, head `37889c4` (replaced `53f87c6` after PM 10217 rulings); not Accepted |
+| Trimmed similarity ICP | partial | as of 2026-11-06 2:20 AM ET: SF-8 sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding; not Accepted |
+| LaMa background infill | partial | SF-9 merged part 1 (`aec2c9f`); not Accepted; Fruits GPU image still open |
+| CubePart | missing | as of 2026-11-06 2:20 AM ET: SF-10 merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending; not Accepted |
+| Articulate Anything | partial | as of 2026-11-06 2:20 AM ET: SF-10 merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending; not Accepted |
+| F1 at 1 cm and Chamfer | partial | SF-6 Accepted unblocks matcher past 8; score file still absent → row stays partial |
+| (kitchen aggregator helper) | n/a (helper for Sec 4 kitchen file) | SF-7 Accepted; MessyKitchens inputs / score file still absent |
+| GraspClutter6D hard/000091 | missing | No Cut 1 ticket; still missing |
+| GroundingDINO / LangSplat / MLP / 4D / fracture / Meshy / Unreal / pi0.5 | missing or partial | as of 2026-11-06 2:20 AM ET: Cut 2 (KAN-15) on hold; Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into `Main_duplicate` |
+
+### Hungarian matcher in sections 2, 9.4, and 10.1
+
+Sections 2, 9.4, and 10.1 describe `metrics._hungarian` as it is on `Main_duplicate`. It matches any object count. At most `_ENUMERATION_MAX` (8) rows and columns, with a column for every row, still returns `_enumerate_assignment` (`test_at_most_eight_matches_phase1_enumeration`). Every other shape uses `_assign_every_row` (`test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`, `test_more_ground_truth_than_predictions`). A non-finite cost on that path still raises `ValueError` (`test_non_finite_cost_past_the_enumerator_raises`). Section 10.1's Match node records that shipped matcher. The Sec 4 score files and GraspClutter / MessyKitchens inputs remain the open paper work.
+
 ## 1. Purpose and scope
 
 One system is being extended: the SimFoundry fork.
@@ -52,7 +97,7 @@ Non-goals, from the same code:
 - The USD writer carries rigid-body mass, density, friction, and restitution. It does not carry deformables, fracture, or fluids.
 - `skills.LATER_SKILLS` stay `not_implemented` on the phase-1 plan: video-to-4D, background orientation, native articulation, fracture, 4D timeseries, policy autoresearch, and VLA adaptation.
 - `evaluation.sister_grid` sets `not_a_learned_policy` and `lighting_simulated` false. Repeating one geometric result across the nine lighting names is not a lighting study.
-- `metrics.f1_at_threshold` and `symmetric_chamfer` implement the published formulas for later scoring. The phase-1 Hungarian matcher raises above 8 objects on a side. No GraspClutter or kitchen scene file is an input of this package.
+- `metrics.f1_at_threshold` and `symmetric_chamfer` implement the published formulas for later scoring. `metrics._hungarian` matches any object count. At most `_ENUMERATION_MAX` (8) rows and columns, with a column for every row, still returns `_enumerate_assignment`, including the phase-1 tie break (`test_at_most_eight_matches_phase1_enumeration`). Every other shape uses `_assign_every_row` (in-tree Kuhn-Munkres, no SciPy): the shorter side is fully matched, extra reference rows are omitted, and 9 and 20 objects match (`test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`, `test_more_ground_truth_than_predictions`). A non-finite cost on that path still raises `ValueError` (`test_non_finite_cost_past_the_enumerator_raises`). No GraspClutter or kitchen scene file is an input of this package.
 - Figure 5 harnesses (`Codex`, `Claude Code`, `Antigravity`, `Muse`, `Stirrup`, `Grok CLI`) are listed by `agent_loop.harness_status` as `still_open` and `called: []`.
 
 ## 3. Architecture
@@ -147,7 +192,7 @@ Each module owns the artifacts in the right-hand column. A module with no artifa
 | `similarity_icp` | Umeyama similarity, trimmed ICP, residual measurement. `TRIM_KEEP` is 0.7 and is labeled as this implementation's overlap. | Nothing. A caller writes the residual JSON |
 | `sisters` | Model-free box deformation, procedural texture parameters, horizontal scene layouts, three task-instruction templates. Meshy is not called. | Nothing. `pipeline` writes the JSON |
 | `evaluation` | Geometric place grid, and `single_rollout_place` for one MuJoCo qpos. | Nothing. `pipeline` writes `sister_grid.json` |
-| `metrics` | Symmetric Chamfer, F1 at 1 cm (`tau` 0.01 m), Hungarian match up to 8, 95% Wilson interval. | Nothing |
+| `metrics` | Symmetric Chamfer, F1 at 1 cm (`tau` 0.01 m), `metrics._hungarian` any count (`_assign_every_row` past `_ENUMERATION_MAX` 8, `_enumerate_assignment` at most 8 with a column per row; `test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`, `test_more_ground_truth_than_predictions`, `test_at_most_eight_matches_phase1_enumeration`, `test_non_finite_cost_past_the_enumerator_raises`), 95% Wilson interval. | Nothing |
 | `report` | HTML table of the sister grid. States that lighting was not simulated. | Returns a string. `pipeline` writes `report.html` |
 | `video` | mp4 header, optional ffprobe, COLMAP when both binaries exist. | `video.json`, `tool_probe.json`, `colmap_poses.json`, `ledger.json` |
 | `colmap_stage` | ffmpeg sample at `fps=1` and `max_frames=16`, then extractor, sequential matcher, mapper. The cap is this runner's. A banner containing "without CUDA" forces CPU SIFT. | `images/`, `sparse/`, `database.db` under the work directory |
@@ -460,7 +505,7 @@ The ordered interfaces, matching the dependency those modules already have:
 4. **Plane completion, then optional LaMa.** `infill.complete_background` fits a plane when background points, colors, and a hole mask are present, and writes a rendered PNG. LaMa stays off unless `use_lama` is set. `plane_infill` returns `emitted: false` when it has nothing to inpaint. An inpainted patch is a new file, written only when LaMa is installed. The Fruits run on instance 58301075 is still open.
 5. **Parts, completion, and joints as ledger steps.** `append_step` is the recording API. `make_tools` does not launch PartSAM, CubePart, or Articulate Anything. `section34` already chooses the CubePart call shape that avoids the diffusers 0.39 `QwenEmbedRope` TypeError, and `articulate_download_allowed` checks free space against the uncompressed listing plus 8 GiB. A completion mesh and a URDF become comparable when a registered tool writes the file and a later ledger line accepts or rejects a simulation review. `cubepart_status` stays an open row while no part mesh exists.
 6. **Inspector frame before policy, 4D, or fracture.** `SCENEAGENT-INSPECT-ISAAC` is `stage_opened` until a coding model writes a fix report. `LATER_SKILLS` includes fracture, both 4D skills, policy autoresearch, and VLA adaptation, all `not_implemented`. The USD contract's `usd_written` flag and the rigid-only USDA writer are the export those later skills must not overload: deformables, fracture, and fluids stay outside that file. `evaluation.single_rollout_place` is the place to record one rollout; `sister_grid` is the place to record a geometric grid. Neither is a learned-policy result. A LoRA trainer is not a module in this package.
-7. **Scoring after meshes exist.** `metrics.symmetric_chamfer`, `f1_at_threshold`, and the small Hungarian matcher are the scoring interface. A scene score is a new file that names its clouds and its match. The matcher as written will not score a 20-object scene. Extending it is a code change with a test, and the score file is still empty until those clouds exist.
+7. **Scoring after meshes exist.** `metrics.symmetric_chamfer`, `f1_at_threshold`, and `metrics._hungarian` are the scoring interface. A scene score is a new file that names its clouds and its match. `metrics._hungarian` matches a 20-object scene with `_assign_every_row` (`test_twenty_objects_use_the_planted_matching`, `test_nine_objects_are_matched_instead_of_raising`, `test_more_ground_truth_than_predictions`). At most `_ENUMERATION_MAX` (8) rows and columns with a column per row stays `_enumerate_assignment` (`test_at_most_eight_matches_phase1_enumeration`). A non-finite cost on the Kuhn-Munkres path still raises (`test_non_finite_cost_past_the_enumerator_raises`). The score file is still empty until those clouds exist.
 8. **Prior status.** Applying `vote_loaded_prior` to a Fruits Gaussian set is a caller of the existing function. It does not change the catalog sentence. The row moves when `catalog.py` is edited and the matrix is regenerated, and the report field `weights` stays `ours` for any npz this trainer wrote.
 
 `docs/DESIGN.md` still prints an older row count (4 done, 11 partial, 23 missing, 38 rows) from an earlier phase-1 snapshot. `docs/GAP_MATRIX.md` is the count `catalog.py` emits now. Read the matrix.
@@ -543,7 +588,7 @@ flowchart TD
   Policy["4.4 LoRA missing"] --> Quote
 ```
 
-`metrics._hungarian` raises above 8 objects on a side. The bin has 20 objects. A score file for `hard/000091` needs that matcher extended, then clouds from that scene. Extending the matcher does not by itself create the number.
+`metrics._hungarian` matches the 20-object bin with `_assign_every_row` (`test_twenty_objects_use_the_planted_matching`, `test_nine_objects_are_matched_instead_of_raising`, `test_more_ground_truth_than_predictions`). At most `_ENUMERATION_MAX` (8) with a column per row stays `_enumerate_assignment` (`test_at_most_eight_matches_phase1_enumeration`). A non-finite cost on that path still raises (`test_non_finite_cost_past_the_enumerator_raises`). The bin has 20 objects. A score file for `hard/000091` still needs clouds from that scene. The match does not by itself create the number.
 
 `ours_iteration_1` rejects the Fruits residuals the canvas records. The first residual has coverage 0.14616666666666667 and silhouette null. The full-rate residual has coverage 0.09366666666666666 and silhouette 0.17505342248569655. Both fail coverage and silhouette against minima of 0.5. The paper's four thresholds stay unpublished, so `accept_alignment` without a caller-supplied map stays `undecided`. Lowering `OURS_COVERAGE_MIN` or `OURS_SILHOUETTE_MIN` so either residual passes is a behavior change. It is not a reproduction of section 3.1.
 
@@ -646,7 +691,7 @@ Done rows stay as the artifact named here. Partial and missing rows name the cod
 
 | Row | Status | Now | Counts as done | Do not |
 |---|---|---|---|---|
-| F1 at 1 cm and Chamfer | partial | `metrics.symmetric_chamfer` and `f1_at_threshold` with `TAU_1CM_M` 0.01. Tested on synthetic clouds. The matcher stops at 8 objects. | A score file that names MessyKitchens or the bin, the point counts, the alignment rule, and the match. | Score Fruits and file it here. Treat SimFoundry's own Pearson or cousin gains as this F1. |
+| F1 at 1 cm and Chamfer | partial | `metrics.symmetric_chamfer` and `f1_at_threshold` with `TAU_1CM_M` 0.01. Tested on synthetic clouds. `metrics._hungarian` matches any object count: `_assign_every_row` covers 9 and 20 (`test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`) and the shorter side (`test_more_ground_truth_than_predictions`); at most `_ENUMERATION_MAX` (8) with a column per row stays `_enumerate_assignment` (`test_at_most_eight_matches_phase1_enumeration`). A non-finite cost on the Kuhn-Munkres path still raises (`test_non_finite_cost_past_the_enumerator_raises`). | A score file that names MessyKitchens or the bin, the point counts, the alignment rule, and the match. | Score Fruits and file it here. Treat SimFoundry's own Pearson or cousin gains as this F1. |
 | GraspClutter6D hard/000091 | missing | This scene has not been started. Figure 6 labels stage S3 SplatGraph clustering. Section 3.3 grouping is `association.masks_same_object`, and that function has not been run on the bin. Stages S0 and S7 have no bin run. S1, S2, S4, S5, and S6 are partial on Fruits only. | The bin protocol above, after meshes of that scene exist. 60.75% and 6.9% / 4.29 cm stay the paper's comparison. | Enter `0001.glb` in that table. |
 | Official release | missing | This tree is the SimFoundry fork plus `sceneagent`. The paper's code, processed scenes, and example objects are a separate release. Section 4.3 has no reproduction phase. | That release, if it ships, as an upstream. It is not a substitute for the score files above. | Point the reproduction at another application checkout. |
 
@@ -656,7 +701,7 @@ Only rows the canvas still marks partial or missing are in this sequence. Done a
 
 1. Obtain GraspClutter6D `hard/000091` and the MessyKitchens shared capture. They are not in the repo. Fruits stays the example, off to the side of the score file.
 2. Run the sceneagent capture path on those inputs. Use a full-rate COLMAP invocation. `run_poses` will otherwise stop at 16 frames. Train splatfacto-big. Mask with SAM on the paper stride. Apply `association.gaussian_belongs`. Build the mesh with SAM 3D. Write ICP residuals. Leave `accept_alignment` undecided unless the caller passes `ours_iteration_1`, and do not edit those four constants to obtain an accept.
-3. Extend `metrics._hungarian` so the 20-object bin can be matched, and keep `metrics.score_reconstruction` as that file's aggregator. Write the kitchen file with the seed-then-object average in section 10.8. That file does not call the bin matcher. A dropped object, including a knife-block omission, is named in the kitchen file.
+3. Keep `metrics.score_reconstruction` as the bin file's aggregator. `metrics._hungarian` already matches the 20-object bin with `_assign_every_row` (`test_twenty_objects_use_the_planted_matching`, `test_nine_objects_are_matched_instead_of_raising`, `test_more_ground_truth_than_predictions`). At most `_ENUMERATION_MAX` (8) with a column per row stays `_enumerate_assignment` (`test_at_most_eight_matches_phase1_enumeration`). A non-finite cost on that path still raises (`test_non_finite_cost_past_the_enumerator_raises`). Write the kitchen file with the seed-then-object average in section 10.8. That file does not call the bin matcher. A dropped object, including a knife-block omission, is named in the kitchen file.
 4. Keep the conversion rows honest while that score is computed. Color calibration, a per-Gaussian feature file, plane completion, and a Harvard MLP are still partial or missing. A score file can exist while those rows stay open. The score file does not close them. `vote_loaded_prior` may run on an ours npz. The catalog MLP row stays missing, and the report field stays `weights: "ours"`.
 5. Dynamic IoU is next only after a section 3.6 build script exists for B_09, Z_06, and Z_12. The measured IoU is the number. 99.09% is not copied.
 6. Policy is after an inspector line whose `fix_report_from_model` is true. `stage_opened` on the Fruits USDA is not that line. The scripted expert then has to put the object inside the target. The LoRA run writes this repo's counts. The printed eggplant table stays the paper's. `inside_bowl: false` on the Fruits hull is not a step in that run.
@@ -695,7 +740,7 @@ flowchart TD
   Colmap["partial: colmap_stage.run_poses still caps at 16"]
   Assoc["partial: association.gaussian_belongs on the benchmark views"]
   Align["partial: similarity_icp then alignment.accept_alignment"]
-  Match["partial: metrics._hungarian past 8 objects"]
+  Match["done keep: metrics._hungarian any count; past _ENUMERATION_MAX 8 uses _assign_every_row; non-finite cost still raises; test_twenty_objects_use_the_planted_matching test_non_finite_cost_past_the_enumerator_raises"]
   BinFile["missing: bin score file"]
   KitFile["partial: kitchen score file"]
   Planes["partial: infill.complete_background CPU plane, Fruits image still open"]
@@ -724,7 +769,7 @@ flowchart TD
   KitFile --> Policy
 ```
 
-Build note. Inputs that stay: `examples/phase1_place_scene.json`, `docs/assets/example_videos/Fruits.mp4`, and the recorded host artifacts (`step-000029999.ckpt`, the two SAM masks, `gaussians.json`, `0001.glb`, `0001.ply`, the USDA opens). Output that unblocks a quoted number: two score files, one per protocol, written only after `Bench` exists. Extend `colmap_stage.run_poses`, `association.gaussian_belongs`, `similarity_icp.measure_residuals`, `alignment.accept_alignment`, and, for the bin file only, `metrics._hungarian`. The kitchen score file uses the seed-then-object average in section 10.8. A Fruits residual that fails `ours_iteration_1` stays a reject. Do not rebuild the keep nodes to manufacture that accept.
+Build note. Inputs that stay: `examples/phase1_place_scene.json`, `docs/assets/example_videos/Fruits.mp4`, and the recorded host artifacts (`step-000029999.ckpt`, the two SAM masks, `gaussians.json`, `0001.glb`, `0001.ply`, the USDA opens). Output that unblocks a quoted number: two score files, one per protocol, written only after `Bench` exists. Extend `colmap_stage.run_poses`, `association.gaussian_belongs`, `similarity_icp.measure_residuals`, and `alignment.accept_alignment`. The bin file reuses `metrics._hungarian`, which already matches any count: `_enumerate_assignment` at most `_ENUMERATION_MAX` (8) with a column per row (`test_at_most_eight_matches_phase1_enumeration`), and `_assign_every_row` otherwise (`test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`, `test_more_ground_truth_than_predictions`). A non-finite cost on that path still raises (`test_non_finite_cost_past_the_enumerator_raises`). The kitchen score file uses the seed-then-object average in section 10.8. A Fruits residual that fails `ours_iteration_1` stays a reject. Do not rebuild the keep nodes to manufacture that accept.
 
 ### 10.2 Association and alignment
 
@@ -878,7 +923,7 @@ flowchart TD
   Views --> Sim --> Pts --> Hun --> Agg --> File
 ```
 
-Build note for the bin. Input is the benchmark scene, not `0001.glb`. The views are 13 RGB frames at 1920×1080. Sampling is 10,000 surface points per ground-truth object. `metrics._hungarian` raises above 8 objects on a side, so the 20-object match is the function to extend. Keep `score_reconstruction`: the cost is `symmetric_chamfer`, which already applies the one-half factor in equation (4); F1 averages over all 20 reference objects with unmatched objects at 0; Chamfer averages over matched objects only. Output: one score file that names `hard/000091`, the point count, and the single similarity. 60.75% and 6.9% / 4.29 cm are not written into that file as this repo's result. F1 above 20% and Chamfer below 3 cm is not a printed pass line.
+Build note for the bin. Input is the benchmark scene, not `0001.glb`. The views are 13 RGB frames at 1920×1080. Sampling is 10,000 surface points per ground-truth object. `metrics._hungarian` matches the 20-object side with `_assign_every_row` (`test_twenty_objects_use_the_planted_matching`, `test_nine_objects_are_matched_instead_of_raising`, `test_more_ground_truth_than_predictions`). At most `_ENUMERATION_MAX` (8) with a column per row stays `_enumerate_assignment` (`test_at_most_eight_matches_phase1_enumeration`). A non-finite cost on that path still raises (`test_non_finite_cost_past_the_enumerator_raises`). Keep `score_reconstruction`: the cost is `symmetric_chamfer`, which already applies the one-half factor in equation (4); F1 averages over all 20 reference objects with unmatched objects at 0; Chamfer averages over matched objects only. Output: one score file that names `hard/000091`, the point count, and the single similarity. 60.75% and 6.9% / 4.29 cm are not written into that file as this repo's result. F1 above 20% and Chamfer below 3 cm is not a printed pass line.
 
 ```mermaid
 flowchart TD
@@ -960,7 +1005,7 @@ Dual Doc 2.0 was checked against the Harvard PDF (arXiv:2610.34745v1). The sente
 - Plane completion colors new Gaussians from nearby plane surfaces. LaMa stays optional texture.
 - Motion review follows section 3.4, which says simulation, and Figure 7, which names Isaac. The recorded SAPIEN exit stays a reject.
 - Model-free sisters keep noise, hue rotation, mottling, and speckle. Figure 15 shows seven variants. A CLIP band is not a gate.
-- Bin scoring extends `metrics._hungarian` and keeps `metrics.score_reconstruction`: Chamfer cost, equation (4), F1 over all 20 objects with unmatched at 0, Chamfer over matched objects only, 13 views at 1920×1080, one similarity, no per-object refit. Kitchen scoring averages both metrics over three seeds and then over objects, under one rigid transform. It does not call the bin aggregator. F1 above 20% and Chamfer below 3 cm is not a printed pass line. Website one-decimal bars stay off both files.
+- Bin scoring reuses `metrics._hungarian` (any count: `_enumerate_assignment` at most `_ENUMERATION_MAX` (8) with a column per row, `test_at_most_eight_matches_phase1_enumeration`; otherwise `_assign_every_row`, `test_nine_objects_are_matched_instead_of_raising`, `test_twenty_objects_use_the_planted_matching`, `test_more_ground_truth_than_predictions`; a non-finite cost still raises, `test_non_finite_cost_past_the_enumerator_raises`) and keeps `metrics.score_reconstruction`: Chamfer cost, equation (4), F1 over all 20 objects with unmatched at 0, Chamfer over matched objects only, 13 views at 1920×1080, one similarity, no per-object refit. Kitchen scoring averages both metrics over three seeds and then over objects, under one rigid transform. It does not call the bin aggregator. F1 above 20% and Chamfer below 3 cm is not a printed pass line. Website one-decimal bars stay off both files.
 - The 4D script, once a real inspection accept exists, targets B_09, Z_06, and Z_12 at the frame counts, resolutions, and 24 fps in section 10.9, with MPM, FLIP, or fracture as that section states, and particles that are not deleted or reseeded. 99.09% is Gemini 4 Argon's with-skills mean.
 - The policy function, behind the same inspection gate, uses the eight-step expert, the depth composite, the 42.9 by 9.8 cm demonstration box and the other printed randomizations, the split LoRA ranks, and checkpoint 19999. The episode table stays the paper's.
 
