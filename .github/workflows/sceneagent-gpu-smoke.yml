@@ -6,8 +6,10 @@
 # (main). A label on a pull request that targets Main_duplicate does not run
 # until main contains this file. The request-file push is a plain push, so it
 # uses the workflow committed on Main_duplicate. Once this file is on
-# Main_duplicate, that push starts a run with no workflow_dispatch and no
-# click from Sandeep.
+# Main_duplicate, that push starts a workflow run with no workflow_dispatch
+# and no click from Sandeep. It does not start a stopped instance. Only a
+# manual workflow_dispatch may start 58301075. A label and a request-file
+# trigger refuse before any start PUT.
 name: sceneagent-gpu-smoke
 
 on:

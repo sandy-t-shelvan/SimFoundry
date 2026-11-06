@@ -4,9 +4,11 @@
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
 The only instance this module will touch is ``58301075`` in Texas. It may
-show that instance, start it when it is stopped, and stop it again when this
-process was the one that started it. It attaches an ephemeral SSH public key
-so the runner can copy the checkout and bring the run files back.
+show that instance. Only an explicit ``workflow_dispatch`` may start it when
+it is stopped. A label or a request-file trigger refuses before any start
+PUT, and an unknown state refuses too. When this process was the one that
+started it, it stops the instance again. It attaches an ephemeral SSH public
+key so the runner can copy the checkout and bring the run files back.
 
 It does not create, rent, resize, or destroy an instance, and the remote
 command is only the SceneAgent video entry point. That path does not call
@@ -289,9 +291,11 @@ def public_instance_view(record: dict[str, Any]) -> dict[str, Any]:
 def classify_status(record: dict[str, Any]) -> str:
     """Map a show-instance row to running, starting, stopped, or unknown.
 
-    ``stopped`` and ``exited`` are startable. ``exited`` is what the Vast
-    listing showed for this machine when it was not running. ``offline`` and
-    ``unknown`` are not started: the API docs say those states do not become
+    ``stopped`` and ``exited`` are the stopped kind. Only an explicit
+    ``workflow_dispatch`` may start them. A label or a request-file trigger
+    refuses before any start PUT. ``exited`` is what the Vast listing showed
+    for this machine when it was not running. ``offline`` and ``unknown``
+    are not started: the API docs say those states do not become
     ``running``, and this module does not destroy the instance to replace it.
     """
     actual = _status_text(record.get("actual_status"))
