@@ -14,8 +14,10 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import sceneagent.infill as infill
 from sceneagent.infill import (
     COLOR_METHOD,
+    FILL_HOLE_CHUNK,
     PLANE_INLIER_SCALE,
     PlaneFitError,
     complete_background,
@@ -23,6 +25,7 @@ from sceneagent.infill import (
     fit_plane,
     plane_axes,
     plane_fill_from_association,
+    render_plane_background,
 )
 
 RED = (10, 20, 30)
@@ -278,6 +281,135 @@ def test_ledger_records_plane_inlier_scale_and_color_method(tmp_path):
     ][1]
     assert second["plane_inlier_scale"] == 0.05
     assert second["color_method"] == "nearest_plane_sample"
+
+
+def test_absent_lama_weights_keep_method_plane_and_write_no_copy(tmp_path):
+    """Weights absent stays plane. A copied PNG at the inpaint path is a forge."""
+    assert infill._lama_backend()[0] is None
+    points, colors, hole, expected = _scene()
+    destination = tmp_path / "inpaint.png"
+    result = complete_background(
+        points=points,
+        colors=colors,
+        hole=hole,
+        out_path=destination,
+        use_lama=True,
+    )
+    plane_path = tmp_path / "plane_background.png"
+    plane_bytes = plane_path.read_bytes()
+    decoded = np.asarray(Image.open(plane_path))
+    entry = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))[
+        "entries"
+    ][0]
+    assert result["method"] == "plane"
+    assert entry["method"] == "plane"
+    assert entry["plane_inlier_scale"] == 0.05
+    assert entry["color_method"] == "nearest_plane_sample"
+    assert not destination.exists()
+    assert np.array_equal(decoded, expected)
+    for path in tmp_path.iterdir():
+        if path.resolve() == plane_path.resolve():
+            continue
+        assert path.is_file()
+        assert path.read_bytes() != plane_bytes
+    assert not any(path.name == "inpaint.png" for path in tmp_path.iterdir())
+
+
+def test_lama_receives_exact_hole_mask(tmp_path, monkeypatch):
+    points, colors, hole, _expected = _scene()
+    recorded: dict = {}
+
+    def fake_backend():
+        return "fake", ""
+
+    def fake_run(image, mask):
+        recorded["mask"] = np.asarray(mask)
+        recorded["size"] = image.size
+        return image
+
+    monkeypatch.setattr(infill, "_lama_backend", fake_backend)
+    monkeypatch.setattr(infill, "_run_lama", fake_run)
+    destination = tmp_path / "inpaint.png"
+    result = complete_background(
+        points=points,
+        colors=colors,
+        hole=hole,
+        out_path=destination,
+        use_lama=True,
+    )
+    assert result["method"] == "lama"
+    passed = recorded["mask"]
+    assert recorded["size"] == (hole.shape[1], hole.shape[0])
+    assert passed.shape == hole.shape
+    assert np.array_equal(passed == 255, hole)
+    assert np.array_equal(passed == 0, ~hole)
+    assert int(passed[hole].min()) == 255
+    assert int(passed[~hole].max()) == 0
+
+
+def test_render_ignores_off_plane_outliers(tmp_path):
+    points, colors, hole, expected = _scene()
+    clean = render_plane_background(points, colors, hole, tmp_path / "clean.png")
+    assert np.array_equal(clean["image"], expected)
+    outlier = [50.0, 50.0, 20.0]
+    magenta = (255, 0, 255)
+    with_outlier = render_plane_background(
+        points + [outlier],
+        colors + [magenta],
+        hole,
+        tmp_path / "with_outlier.png",
+    )
+    assert with_outlier["plane"]["n_inliers"] == len(points)
+    assert int(with_outlier["plane"]["inliers"].max()) < len(points)
+    assert np.array_equal(with_outlier["image"], expected)
+    assert not np.any(np.all(with_outlier["image"] == magenta, axis=2))
+    decoded = np.asarray(Image.open(tmp_path / "with_outlier.png"))
+    assert np.array_equal(decoded, expected)
+
+
+def _brute_fill(image, known, hole):
+    """The previous full pairwise search, kept here only as the reference."""
+    canvas = np.array(image, copy=True)
+    source = known & ~hole
+    source_yx = np.argwhere(source)
+    hole_yx = np.argwhere(hole)
+    diff = hole_yx[:, None, :].astype(np.int64) - source_yx[None, :, :].astype(np.int64)
+    nearest = np.argmin(np.sum(diff * diff, axis=2), axis=1)
+    canvas[hole_yx[:, 0], hole_yx[:, 1]] = canvas[
+        source_yx[nearest, 0], source_yx[nearest, 1]
+    ]
+    return canvas
+
+
+def test_fill_hole_chunks_and_matches_the_full_search(monkeypatch):
+    side = 20
+    image = np.zeros((side, side, 3), dtype=np.uint8)
+    known = np.zeros((side, side), dtype=bool)
+    hole = np.zeros((side, side), dtype=bool)
+    rng = np.random.default_rng(2)
+    image[:] = rng.integers(0, 256, size=image.shape, dtype=np.uint8)
+    known[::2, ::2] = True
+    hole[1::2, 1::2] = True
+    n_source = int(known.sum())
+    n_hole = int(hole.sum())
+    assert n_source > FILL_HOLE_CHUNK
+    assert n_hole > FILL_HOLE_CHUNK
+    assert n_source * n_hole > FILL_HOLE_CHUNK * FILL_HOLE_CHUNK
+    blocks: list[tuple[int, int]] = []
+    real = infill._chunk_distances
+
+    def wrapped(hole_block, source_block):
+        blocks.append((len(hole_block), len(source_block)))
+        return real(hole_block, source_block)
+
+    monkeypatch.setattr(infill, "_chunk_distances", wrapped)
+    filled = fill_hole(image, known, hole)
+    assert np.array_equal(filled, _brute_fill(image, known, hole))
+    assert blocks
+    assert all(nh <= FILL_HOLE_CHUNK and ns <= FILL_HOLE_CHUNK for nh, ns in blocks)
+    assert sum(nh * ns for nh, ns in blocks) == n_source * n_hole
+    assert max(nh * ns for nh, ns in blocks) < n_source * n_hole
+    assert max(nh * ns for nh, ns in blocks) <= FILL_HOLE_CHUNK * FILL_HOLE_CHUNK
 
 
 def test_complete_background_raises_on_degenerate_points_without_writing(tmp_path):

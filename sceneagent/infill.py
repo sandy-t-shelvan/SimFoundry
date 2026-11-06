@@ -33,6 +33,10 @@ PLANE_INLIER_SCALE = 0.05
 # Hole pixels copy the nearest splatted plane-surface sample. This
 # repository's part-1 color method. It does not sample a posed input frame.
 COLOR_METHOD = "nearest_plane_sample"
+# Temporary distance block is at most this many hole pixels by this many
+# sources. The bound is this repository's, so a photo-sized hole does not
+# allocate an n_hole by n_source array. Not a published threshold.
+FILL_HOLE_CHUNK = 64
 _RANK_EPS = 1e-8
 
 
@@ -250,7 +254,6 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
             "reason": why,
         }
     from PIL import Image
-    from simple_lama_inpainting import SimpleLama
 
     image = Image.open(source).convert("RGB")
     if mask_path and Path(mask_path).is_file():
@@ -259,7 +262,7 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
         mask = Image.new("L", image.size, 0)
         hole = max(1, image.size[0] // 4)
         mask.paste(255, (0, 0, hole, hole))
-    result = SimpleLama()(image, mask)
+    result = _run_lama(image, mask)
     if destination is None:
         destination = source.with_name(source.stem + "_lama.png")
     result.save(destination)
@@ -274,6 +277,29 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
         "image_in": str(source),
         "reason": "LaMa wrote an inpaint.",
     }
+
+
+def _run_lama(image, mask):
+    """Call LaMa. Tests replace this with a fake that records the mask."""
+    from simple_lama_inpainting import SimpleLama
+
+    return SimpleLama()(image, mask)
+
+
+def _write_lama_mask(path, hole: np.ndarray):
+    """Write the hole as an RGB PNG. White is the hole, black is not.
+
+    ``lama_inpaint`` converts it to ``L``. 255 and 0 survive that conversion,
+    so the mask passed to LaMa is the hole and nothing outside it.
+    """
+    rows = []
+    for y in range(hole.shape[0]):
+        row: list[int] = []
+        for x in range(hole.shape[1]):
+            value = 255 if bool(hole[y, x]) else 0
+            row.extend((value, value, value))
+        rows.append(row)
+    return write_rgb_png(path, rows)
 
 
 class PlaneFitError(ValueError):
@@ -505,12 +531,42 @@ def fill_hole(image: Any, known: Any, hole: Any) -> np.ndarray:
     # argwhere is row-major, so the first minimum is the smaller row, then column.
     source_yx = np.argwhere(source)
     hole_yx = np.argwhere(hole_mask)
-    diff = hole_yx[:, None, :].astype(np.int32) - source_yx[None, :, :].astype(np.int32)
-    nearest = np.argmin(np.sum(diff * diff, axis=2), axis=1)
+    nearest = _nearest_source(hole_yx, source_yx)
     canvas[hole_yx[:, 0], hole_yx[:, 1]] = canvas[
         source_yx[nearest, 0], source_yx[nearest, 1]
     ]
     return canvas
+
+
+def _chunk_distances(hole_block: np.ndarray, source_block: np.ndarray) -> np.ndarray:
+    """Squared distances for one chunk. Both blocks are at most ``FILL_HOLE_CHUNK``."""
+    diff = hole_block[:, None, :].astype(np.int64) - source_block[None, :, :].astype(
+        np.int64
+    )
+    return np.sum(diff * diff, axis=2)
+
+
+def _nearest_source(hole_yx: np.ndarray, source_yx: np.ndarray) -> np.ndarray:
+    """Nearest source index for each hole pixel.
+
+    Blocks are ``FILL_HOLE_CHUNK`` on each side, so the temporary array is
+    not ``n_hole`` by ``n_source``. Sources stay in row-major order and a
+    tie keeps the earlier source, matching one full ``argmin``.
+    """
+    best_dist = np.full(len(hole_yx), np.iinfo(np.int64).max, dtype=np.int64)
+    best_index = np.zeros(len(hole_yx), dtype=np.int64)
+    for source_start in range(0, len(source_yx), FILL_HOLE_CHUNK):
+        source_block = source_yx[source_start : source_start + FILL_HOLE_CHUNK]
+        for hole_start in range(0, len(hole_yx), FILL_HOLE_CHUNK):
+            hole_block = hole_yx[hole_start : hole_start + FILL_HOLE_CHUNK]
+            dist2 = _chunk_distances(hole_block, source_block)
+            local = np.argmin(dist2, axis=1)
+            local_dist = dist2[np.arange(len(hole_block)), local]
+            span = slice(hole_start, hole_start + len(hole_block))
+            better = local_dist < best_dist[span]
+            best_dist[span] = np.where(better, local_dist, best_dist[span])
+            best_index[span] = np.where(better, local + source_start, best_index[span])
+    return best_index
 
 
 def _to_pixels(coords: np.ndarray, size: int) -> np.ndarray:
@@ -544,10 +600,12 @@ def render_plane_background(
 ) -> dict[str, Any]:
     """Orthographic render of the fitted plane, with the hole filled.
 
-    Points are projected on the plane axes from ``plane_axes``. Their bounding
-    box maps onto the hole mask's pixel grid. Samples that project into the
-    hole are not color sources. Hole pixels take the nearest source color.
-    The PNG, when ``out_path`` is set, is that array and nothing else.
+    Only the fitted inliers are projected. An outlier must not stretch the
+    UV box or become a color source. Points are projected on the plane axes
+    from ``plane_axes``. Their bounding box maps onto the hole mask's pixel
+    grid. Samples that project into the hole are not color sources. Hole
+    pixels take the nearest source color. The PNG, when ``out_path`` is set,
+    is that array and nothing else.
     """
     cloud = _as_points(points)
     rgb = _as_colors(colors, len(cloud))
@@ -558,18 +616,21 @@ def render_plane_background(
     if height < 1 or width < 1:
         raise PlaneFitError("hole mask must be 2-dimensional")
     plane = fit_plane(cloud)
+    inliers = np.asarray(plane["inliers"], dtype=int)
+    inlier_cloud = cloud[inliers]
+    inlier_rgb = rgb[inliers]
     u_axis, v_axis = plane_axes(plane["normal"])
-    relative = cloud - plane["origin"]
+    relative = inlier_cloud - plane["origin"]
     xs = _to_pixels(relative @ u_axis, width)
     ys = _to_pixels(relative @ v_axis, height)
     image = np.zeros((height, width, 3), dtype=np.uint8)
     known = np.zeros((height, width), dtype=bool)
-    for index in range(len(cloud)):
+    for index in range(len(inlier_cloud)):
         y = int(ys[index])
         x = int(xs[index])
         if mask[y, x] or known[y, x]:
             continue
-        image[y, x] = rgb[index]
+        image[y, x] = inlier_rgb[index]
         known[y, x] = True
     filled = fill_hole(image, known, mask)
     artifact = None
@@ -724,7 +785,9 @@ def _complete_from_fitted_plane(
     emitted = True
     reason = "Fitted a plane to the background points and filled the hole from nearby plane-surface colors."
     if use_lama:
-        painted = lama_inpaint(plane_path, destination)
+        mask_file = destination.with_name("hole_mask.png")
+        _write_lama_mask(mask_file, np.asarray(mask, dtype=bool))
+        painted = lama_inpaint(plane_path, destination, mask_path=mask_file)
         lama_status = str(painted.get("lama"))
         if painted.get("emitted") and painted.get("artifact"):
             method = "lama"
