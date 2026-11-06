@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Tests under tests/ (outside tests/sceneagent) that the pytest-cpu job does
+# not run. One entry per line:
+#
+#   gpu | <file or node id> | <reason>
+#   skip | <file or node id> | <reason>
+#
+# gpu: needs a GPU, the CUDA/faiss stack, or a network client import
+# (Gemini/OpenAI). Collected cases are marked `gpu` and dropped by
+# `-m "not gpu"`. A file that fails at import is omitted.
+# skip: not run for another stated reason. Omitted, or deselected when the
+# rest of the file runs.
+#
+# A skip inside the job is a failure. tests/sceneagent is the pytest-unit
+# job, not an entry here.
+#
+# Lines starting with # are comments.
+
+gpu | tests/test_faiss_gpu_policy.py | Needs the GPU index stack. Collection imports simfoundry.utils.faiss_utils, which imports torch and then faiss. This job does not install CUDA, torch, or faiss, so the file cannot be collected. Omitted, which is what `-m "not gpu"` does once that import succeeds.
+gpu | tests/test_frame_selection.py::test_refine_with_vlm_declines_on_an_unusable_answer | Network-client test. The body imports simfoundry.models.vlm, which imports openai and torch, and stubs Gemini. This job does not install those and does not call out. Marked gpu. All parametrized cases.
+gpu | tests/test_frame_selection.py::test_refine_with_vlm_parses_the_answer | Network-client test. The body imports simfoundry.models.vlm, which imports openai and torch, and stubs Gemini. This job does not install those and does not call out. Marked gpu. All parametrized cases.
+gpu | tests/test_frame_selection.py::test_refine_with_vlm_survives_a_failed_call | Network-client test. The body imports simfoundry.models.vlm, which imports openai and torch. This job does not install those and does not call out. Marked gpu.
+gpu | tests/test_remote_model_cache.py::test_cache_mode_reuses_existing_entry_without_remote_call | Network-client test. The body imports simfoundry.models.vlm (openai and torch) and constructs Gemini. This job does not install those and does not call out. Marked gpu.
+gpu | tests/test_remote_model_cache.py::test_gemini_cache_mode_writes_and_test_mode_replays | Network-client test. The body imports simfoundry.models.vlm (openai and torch) and constructs Gemini. This job does not install those and does not call out. Marked gpu.
+gpu | tests/test_remote_model_cache.py::test_gpt_image_cache_write_and_replay | Network-client test. The body imports simfoundry.models.vlm (openai and torch) and constructs GPT. This job does not install those and does not call out. Marked gpu.
+gpu | tests/test_remote_model_cache.py::test_orchestrator_fast_stage_cache_and_test_modes | Network-client test. The subprocess stage imports simfoundry.models.vlm (openai and torch). This job does not install those and does not call out. Marked gpu.
+gpu | tests/test_remote_model_cache.py::test_test_mode_cache_miss_fails_before_remote_call | Network-client test. The body imports simfoundry.models.vlm (openai and torch) and constructs Gemini. This job does not install those and does not call out. Marked gpu.
+
+skip | tests/test_ground_plane_application.py | Module-level pytest.importorskip("torch"). Every test in the file would skip. This job does not install torch. A skip is not a pass.
+skip | tests/test_mesh_generator_registry.py | Collection imports simfoundry.models.mesh_generator, which imports imageio and torch. This job does not install torch or model checkpoints.
+skip | tests/test_pipeline_refactor_utils.py | Collection imports depth_backends (hydra) and stage_utils. stage_utils imports processing_utils, which imports torch, cv2, Open3D, torchvision, and supervision. This job does not install that stack.
+skip | tests/test_pipeline_reference_data_e2e.py | Both tests skip unless SIMFOUNDRY_TEST_DATA_ROOT holds generated reference scenes (droid_desk_1, droid_desk_2). Those captures are not in CI. A skip is not a pass.
+skip | tests/test_placement_utils.py | Collection imports torch and builds CPU tensors with it. This job does not install torch. The tests do not need a GPU device; they need the torch package.
+skip | tests/test_propose_scene_tasks_predicates.py | Every test loads the stage module, which importorskips simfoundry.models.vlm. That import pulls openai and torch. This job does not install them, so every test would skip. A skip is not a pass.
+skip | tests/test_stage11_sim_ready.py | The file's own pytestmark skips every test: stage 11 refactor (discover_sim_ready_jobs / ConversionTask) is not in this release. A skip is not a pass.
+skip | tests/test_stage13_usd_import.py | The file's own pytestmark skips every test: stage 13 refactor (import_usd_asset) is not in this release. A skip is not a pass.
+skip | tests/test_stage5_iteration_gaps.py | Collection imports stage_utils, which imports processing_utils (torch, cv2, Open3D, torchvision, supervision). This job does not install that stack.
+skip | tests/test_stage7_modularization.py | The test loads stage 7, which imports hydra and simfoundry.models.mesh_generator (imageio and torch). This job does not install hydra or torch.
+skip | tests/test_stage9_articulation_policy.py | Each test loads stage 9, which imports processing_utils (torch and the vision stack) and simfoundry.models.vlm (openai and torch). This job does not install that stack.
+skip | tests/test_stream_subsequence.py | Collection imports stream_subsequence, which imports stage_utils, which imports processing_utils (torch, cv2, Open3D, torchvision, supervision). This job does not install that stack.
+skip | tests/test_task_aabb_predicates.py | Collection imports torch and omnigibson.object_states.aabb. OmniGibson is out of scope for this job.
+
+skip | tests/test_atomic_artifact_publish.py::test_watcher_ignores_a_partial_artifact | Imports discover_ready_indices from stream_subsequence, which imports stage_utils and then processing_utils (torch, cv2, Open3D, torchvision, supervision). This job does not install that stack.
+skip | tests/test_atomic_artifact_publish.py::test_watcher_ignores_a_partial_json_whose_suffix_still_matches | Imports discover_ready_indices from stream_subsequence, which imports stage_utils and then processing_utils (torch, cv2, Open3D, torchvision, supervision). This job does not install that stack.
+skip | tests/test_domain_randomization.py::TestBaseLibraryDiscovery | All five tests skip unless ~/Downloads/NVIDIA_Materials/Materials/Base exists (unittest.skipUnless). That NVIDIA material library is not in CI. A skip is not a pass.
+skip | tests/test_domain_randomization.py::TestHDRIDiscovery | All five tests skip unless assets/hdr_backgrounds exists. That directory is not in this checkout. A skip is not a pass.
+skip | tests/test_domain_randomization.py::TestVMaterialsDiscovery | All nine tests skip unless /opt/nvidia/mdl/vMaterials_2 exists (unittest.skipUnless). That NVIDIA material library is not in CI. A skip is not a pass.
+skip | tests/test_frame_selection.py::test_score_frame_measures_objects_standing_on_the_support_plane | Geometry path. pytest.importorskip("cv2"), Open3D, and scipy. scipy is installed; opencv and Open3D are not. Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin. Leaving the test in would skip on cv2, and a skip is not a pass.
+skip | tests/test_frame_selection.py::test_score_frame_rejects_a_frame_whose_objects_run_off_the_edge | Geometry path. pytest.importorskip("cv2"), Open3D, and scipy. opencv and Open3D are not installed (Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin). Leaving the test in would skip on cv2, and a skip is not a pass.
+skip | tests/test_frame_selection.py::test_score_frame_rejects_a_frame_with_no_support_surface | Geometry path. pytest.importorskip("cv2") and Open3D. Neither is installed (Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin). Leaving the test in would skip on cv2, and a skip is not a pass.
+skip | tests/test_frame_selection.py::test_select_canonical_frame_falls_back_when_the_vlm_declines | select_canonical_frame imports Open3D at entry to seed its RNG. Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin, so it is not installed.
+skip | tests/test_frame_selection.py::test_select_canonical_frame_lets_the_vlm_override_the_shortlist | select_canonical_frame imports Open3D at entry to seed its RNG, before the VLM stub runs. Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin, so it is not installed.
+skip | tests/test_frame_selection.py::test_select_canonical_frame_picks_the_best_heuristic_frame | select_canonical_frame imports Open3D at entry to seed its RNG. Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin, so it is not installed.
+skip | tests/test_frame_selection.py::test_select_canonical_frame_reports_why_every_frame_was_rejected | select_canonical_frame imports Open3D at entry to seed its RNG. Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin, so it is not installed.
+skip | tests/test_frame_selection.py::test_select_canonical_frame_returns_frame_ids_not_positions | pytest.importorskip("cv2"), Open3D, and scipy. opencv and Open3D are not installed (Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin). Leaving the test in would skip on cv2, and a skip is not a pass.
+skip | tests/test_frame_selection.py::test_select_canonical_frame_strides_long_captures | select_canonical_frame imports Open3D at entry to seed its RNG. Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin, so it is not installed.
+skip | tests/test_frame_selection.py::test_selection_round_trips_through_disk | Calls select_canonical_frame, which imports Open3D at entry. Open3D 0.19 forces numpy 2.2, below the 2.4.6 pin, so it is not installed.
+skip | tests/test_front_canonicalization.py::test_canonicalize_front_rotates_red_bin | Skips unless Data/CubeInMail/s7_mesh/textured_mesh/hunyuan/iter_0_mesh.glb is present. That capture is not in CI. A skip is not a pass.
+skip | tests/test_object_removal_order.py::test_real_droid_desk_1 | Needs the droid_desk_1 capture under Data/ plus cv2, Open3D, and SAM3. Reference data and those packages are not in this job. The test skips when the fixture is missing, and a skip is not a pass.
+skip | tests/test_object_removal_order.py::test_real_droid_desk_2 | Needs the droid_desk_2 capture under Data/ plus cv2, Open3D, and SAM3. Reference data and those packages are not in this job. The test skips when the fixture is missing, and a skip is not a pass.
+skip | tests/test_pipeline_orchestrator.py::test_reconstruction_stage_plan_can_insert_articulation | skipif when articulation_available() is false. That needs deps/articulate-anything and one of the articulate conda envs, which this job does not install. A skip is not a pass.
+skip | tests/test_task_geometry.py::TestXYOverlapFraction::test_works_with_torch_tensors | Imports torch inside the test to pass tensors through the AABB helpers. This job does not install torch. The rest of the file is pure Python and does run.
