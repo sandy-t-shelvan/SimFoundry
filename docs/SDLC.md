@@ -20,7 +20,7 @@ Harvard SceneAgent is the specification. The only code base being upgraded is th
 - The ledger or the design doc states what is still deferred.
 - No benchmark figure from either paper is reported as a result of this repo unless this repo ran that protocol and the command is recorded.
 - Secrets stay out of git: `.env`, `.env.local`, `api_keys.txt`, `Data/`, `checkpoints/`, `pulled/`, and Vast dumps that contain tokens. `tools/vast_texas_instance.json` may hold id, GPU, location, SSH host, SSH port, and price. It must not hold an API key.
-- The existing Vast instance `58357498` (`simfoundry-r580`) is not stopped, resized, or overwritten by work on this tree.
+- The only Vast instance this tree may use is `58301075`.
 
 ## How a change lands
 
@@ -28,7 +28,7 @@ Harvard SceneAgent is the specification. The only code base being upgraded is th
 2. Open a pull request against `main` for review. CI must pass. Do not force-push `main`.
 3. Do not push to `origin` (`sandy-t-shelvan/SimFoundry`) or `upstream` (`NVlabs/SimFoundry`) unless someone asked for that push. This checkout's remotes point at those repositories so the fork can be updated later. A push is not part of phase 1.
 4. Generated runs live in `runs/` and are not committed.
-5. A GPU install, if a later phase needs one, runs detached with a log on the machine named for that job. It does not use `/workspace/SimFoundry` on instance `58357498`.
+5. A GPU install, if a later phase needs one, runs detached with a log on the machine named for that job. The only Vast instance that job may use is `58301075`.
 
 ## CI
 
