@@ -390,9 +390,9 @@ def _class_source(source, material, raw_confidence, weight_before_scale):
 def _require_prior_tensors(features: Any, mask: Any) -> None:
     """Refuse a prior row whose shapes cannot be voted, before any VLM call.
 
-    ``vote_loaded_prior`` needs ``(N, 912)`` features and a mask of length
-    ``N``. Checking that here keeps a bad OpenCLIP or DINOv2 width from
-    spending a Gemini call.
+    ``vote_loaded_prior`` needs ``(N, 912)`` features and a rank-1 mask of
+    shape ``(N,)``. A column ``(N, 1)`` is not that mask. Checking it here
+    keeps a bad tensor from spending a Gemini call.
     """
 
     shape = getattr(features, "shape", None)
@@ -401,16 +401,15 @@ def _require_prior_tensors(features: Any, mask: Any) -> None:
             f"physics prior features must have shape (N, {PRIOR_DIM}), got {shape}"
         )
     count = int(shape[0])
-    mask_shape = getattr(mask, "shape", None)
-    if mask_shape is not None and len(tuple(mask_shape)) >= 1:
-        length = int(mask_shape[0])
-    else:
-        try:
-            length = len(mask)
-        except TypeError:
-            length = -1
-    if length != count:
-        raise ValueError("physics prior mask length must match the Gaussian count")
+    try:
+        mask_shape = tuple(np.asarray(mask).shape)
+    except (TypeError, ValueError):
+        mask_shape = ()
+    if mask_shape != (count,):
+        raise ValueError(
+            "physics prior mask length must match the Gaussian count, "
+            f"got shape {mask_shape}"
+        )
     values = np.asarray(features, dtype=np.float64)
     if values.shape != (count, PRIOR_DIM) or not np.isfinite(values).all():
         raise ValueError("physics prior features must be finite")

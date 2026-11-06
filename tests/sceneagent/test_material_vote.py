@@ -609,6 +609,49 @@ def test_mask_length_mismatch_raises_before_any_vlm_call(tmp_path, monkeypatch):
     assert not (out / "material_vote.json").exists()
 
 
+def test_column_mask_raises_before_any_vlm_call(tmp_path, monkeypatch):
+    path = _synthetic_prior(tmp_path / "physics_prior.npz")
+    client = _RecordingVlm("plastic", 0.4)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("vote_loaded_prior ran on a column mask")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "column"
+    with pytest.raises(ValueError, match="mask length"):
+        run_material_vote(
+            out,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": np.zeros((2, 912)),
+                    "mask": np.ones((2, 1), dtype=bool),
+                }
+            ],
+            client=client,
+            checkpoint=path,
+        )
+    assert client.calls == 0
+    assert not (out / "material_vote.json").exists()
+    rows = tmp_path / "rows"
+    with pytest.raises(ValueError, match="mask length"):
+        run_material_vote(
+            rows,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": np.zeros((2, 912)),
+                    "mask": [[True], [False]],
+                }
+            ],
+            client=client,
+            checkpoint=path,
+        )
+    assert client.calls == 0
+
+
 def test_nan_features_raise_before_any_vlm_call(tmp_path, monkeypatch):
     path = _synthetic_prior(tmp_path / "physics_prior.npz")
     features = np.zeros((2, 912))
