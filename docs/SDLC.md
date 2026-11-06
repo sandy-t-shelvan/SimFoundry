@@ -8,7 +8,7 @@ How changes land in this tree. The product phases are in `docs/DESIGN.md`.
 2. **Design.** New behavior goes in `sceneagent/` or in a patch under `patches/` if OmniGibson itself must change. `scripts/pipeline/A_reconstruction`, `B_augmentation`, and `C_application` keep their current contracts. Scene JSON from SimFoundry stays compatible with `AGENTS.md`: additive keys only, no rewritten USD to move an object.
 3. **Implement.** Phase-1 code is CPU-only. GPU reconstruction, Isaac, and learned policies wait for a later phase and a machine that can hold them.
 4. **Test.** `python -m pytest tests/sceneagent -q` passes locally before a change is called done. Tests call the formulas and the pipeline. A test that only asserts `True` is not a test.
-5. **Release.** `main` is the integration branch. Feature work can sit on a branch and merge by pull request. CI on push and pull request runs `.github/workflows/sceneagent-ci.yml`: `compileall` on `sceneagent`, then `pytest tests/sceneagent`. The job is `ubuntu-latest`, CPU, with `numpy` and `pytest` only. It does not install OmniGibson, CUDA, or checkpoints.
+5. **Release.** `main` is the integration branch. Feature work can sit on a branch and merge by pull request. CI on push and pull request runs `.github/workflows/sceneagent-ci.yml`: `compileall` on `sceneagent`, then `pytest tests/sceneagent`. The job is `ubuntu-latest`, CPU, with `numpy`, `pytest`, `trimesh`, and `pillow`. It does not install OmniGibson, CUDA, or checkpoints.
 
 ## Out of scope
 
@@ -34,4 +34,4 @@ Harvard SceneAgent is the specification. The only code base being upgraded is th
 
 Workflow: `.github/workflows/sceneagent-ci.yml`.
 
-The job checks out the repo, compiles `sceneagent`, installs `numpy` and `pytest`, and runs `pytest tests/sceneagent`. SimFoundry's broader `tests/` tree needs optional packages (torch, Open3D, faiss) and is outside this job on purpose. `pytest.ini` still points `testpaths` at `tests` for people who have those environments. CI passes an explicit path so collection stays on the phase-1 suite.
+The job checks out the repo, compiles `sceneagent`, installs `numpy`, `pytest`, `trimesh`, and `pillow`, and runs `pytest tests/sceneagent`. That list is what `main` installs. SF-2 is changing this CI workflow on another branch. SimFoundry's broader `tests/` tree needs optional packages (torch, Open3D, faiss) and is outside this job on purpose. `pytest.ini` still points `testpaths` at `tests` for people who have those environments. CI passes an explicit path so collection stays on the phase-1 suite.

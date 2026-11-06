@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Docs follow `sceneagent.catalog.counts()`: 17 done, 11 partial, 14 missing, 42 rows. `docs/GAP_MATRIX.md` was regenerated from `sceneagent.catalog.to_markdown()`. The canvas tally, the Quebec Articulate Anything row, and the `DESIGN.md` and `EXPANSION_PLAN.md` sentences named in the expansion plan now match that catalog. `docs/SDLC.md` lists the packages `main` installs in `.github/workflows/sceneagent-ci.yml` (`numpy`, `pytest`, `trimesh`, `pillow`). SF-2 is changing that workflow on another branch.
 - The MLP download check already accepts an RGB or RGBA photo and a color palette, and it rejects grayscale and LA. `test_rgba_image_passes` was failing because the sample source stayed `ycb` while the manifest said `gso`. The sample source now matches that manifest. An RGBA photo does not waive a source mismatch.
 - Added a `sceneagent` package on the SimFoundry fork. It does not change pipelines A, B, or C.
 - Phase 1 writes the paper's file contract: plan, manifest, ledger, material vote, association cuts, model-free sisters, a USD physics contract (JSON only), and a scripted place grid with Wilson intervals.
