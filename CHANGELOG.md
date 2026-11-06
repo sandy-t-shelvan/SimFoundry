@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The MLP photo check rejects a 16-bit grayscale+alpha PNG. Pillow has no 16-bit LA mode, so that file (PNG color type 4, bit depth 16, raw mode `LA;16B`) opens as mode `RGBA` and used to pass. The rejection is the same sentence as 8-bit LA: `image mode LA is not RGB`. 8-bit RGB, RGBA, and color-palette photos are unchanged.
 - The MLP download check already accepts an RGB or RGBA photo and a color palette, and it rejects grayscale and LA. `test_rgba_image_passes` was failing because the sample source stayed `ycb` while the manifest said `gso`. The sample source now matches that manifest. An RGBA photo does not waive a source mismatch.
 - Added a `sceneagent` package on the SimFoundry fork. It does not change pipelines A, B, or C.
 - Phase 1 writes the paper's file contract: plan, manifest, ledger, material vote, association cuts, model-free sisters, a USD physics contract (JSON only), and a scripted place grid with Wilson intervals.
