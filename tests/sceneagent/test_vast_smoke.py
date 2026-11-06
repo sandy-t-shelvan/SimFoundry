@@ -958,8 +958,12 @@ def _ssh_clock():
 def test_ssh_ready_succeeds_after_n_failures(capsys):
     _clock, sleeps, now, sleep = _ssh_clock()
     codes = [255, 255, 0]
+    probes = {"n": 0}
 
     def probe():
+        probes["n"] += 1
+        if probes["n"] > 6:
+            raise AssertionError("ssh readiness probe was not bounded")
         code = codes.pop(0)
         detail = "Permission denied (publickey)" if code != 0 else ""
         return code, detail
@@ -982,19 +986,37 @@ def test_ssh_ready_succeeds_after_n_failures(capsys):
     assert "sf4-planted-key" not in captured.err
 
 
+def _bounded_calls(counter, key, limit):
+    def _tick():
+        counter[key] += 1
+        if counter[key] > limit:
+            raise AssertionError(f"ssh readiness {key} was not bounded")
+
+    return _tick
+
+
 def test_ssh_ready_exhaustion_raises():
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 3)
+    sleep_tick = _bounded_calls(counter, "sleeps", 3)
+
     def probe():
+        probe_tick()
         return 255, "Permission denied (publickey)"
+
+    def sleep(_seconds):
+        sleep_tick()
 
     with pytest.raises(SmokeError, match="did not accept the ephemeral key"):
         wait_until_ssh_accepts(
             probe,
-            sleep=lambda _seconds: None,
+            sleep=sleep,
             now=lambda: 0.0,
             max_attempts=3,
             timeout_s=45,
             backoff_s=2,
         )
+    assert counter["probes"] == 3
 
 
 def test_ssh_ready_attempt_cap_is_not_an_unbounded_loop():
@@ -1026,6 +1048,8 @@ def test_ssh_ready_timeout_stops_before_max_attempts():
 
     def probe():
         probes["n"] += 1
+        if probes["n"] > 8:
+            raise AssertionError("ssh readiness probe was not bounded")
         return 255, "Permission denied (publickey)"
 
     with pytest.raises(SmokeError, match="did not accept"):
@@ -1044,14 +1068,21 @@ def test_ssh_ready_timeout_stops_before_max_attempts():
 
 def test_ssh_ready_log_omits_the_probe_text(capsys):
     secret = "sf4-planted-key"
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 1)
+    sleep_tick = _bounded_calls(counter, "sleeps", 1)
 
     def probe():
+        probe_tick()
         return 255, f"Permission denied (publickey) {secret}"
+
+    def sleep(_seconds):
+        sleep_tick()
 
     with pytest.raises(SmokeError):
         wait_until_ssh_accepts(
             probe,
-            sleep=lambda _seconds: None,
+            sleep=sleep,
             now=lambda: 0.0,
             api_key=secret,
             max_attempts=1,
@@ -1067,16 +1098,23 @@ def test_ssh_ready_log_omits_the_probe_text(capsys):
 def test_attach_without_key_id_is_explicit_and_does_not_detach(capsys):
     codes = [255, 0]
     detached = []
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 4)
+    sleep_tick = _bounded_calls(counter, "sleeps", 4)
 
     def probe():
+        probe_tick()
         code = codes.pop(0)
         return code, "Permission denied (publickey)" if code else ""
+
+    def sleep(_seconds):
+        sleep_tick()
 
     ready = await_ssh_after_attach(
         {"success": True, "msg": "SSH key attached successfully"},
         probe,
         api_key="sf4-planted-key",
-        sleep=lambda _seconds: None,
+        sleep=sleep,
         now=lambda: 0.0,
         detach=lambda key_id: detached.append(key_id),
         max_attempts=4,
@@ -1100,16 +1138,23 @@ def test_attach_without_key_id_is_explicit_and_does_not_detach(capsys):
 
 def test_attach_without_key_id_exhaustion_names_the_missing_id():
     detached = []
+    counter = {"probes": 0, "sleeps": 0}
+    probe_tick = _bounded_calls(counter, "probes", 2)
+    sleep_tick = _bounded_calls(counter, "sleeps", 2)
 
     def probe():
+        probe_tick()
         return 255, "Permission denied (publickey)"
+
+    def sleep(_seconds):
+        sleep_tick()
 
     with pytest.raises(SmokeError, match="no key id") as raised:
         await_ssh_after_attach(
             {"success": True},
             probe,
             api_key="sf4-planted-key",
-            sleep=lambda _seconds: None,
+            sleep=sleep,
             now=lambda: 0.0,
             detach=detached.append,
             max_attempts=2,
@@ -1263,7 +1308,7 @@ def _fingerprint(public_key):
     return "SHA256:" + digest.rstrip("=")
 
 
-def test_listing_attached_ssh_keys_is_show_only_and_does_not_detach():
+def test_listing_attached_ssh_keys_uses_pinned_get_and_fingerprints():
     calls = []
 
     def request(method, url, api_key, body=None, timeout=60):
@@ -1285,9 +1330,11 @@ def test_listing_attached_ssh_keys_is_show_only_and_does_not_detach():
     assert PUBLIC_KEY.split()[1] not in blob
     assert "PRIVATE" not in blob
     assert "77" not in blob
+    assert "sf4-smoke" not in blob
+    assert "2026-11-01" not in blob
 
 
-def test_show_ssh_keys_json_string_drops_the_public_key():
+def test_show_body_json_string_keeps_id_and_drops_the_public_key():
     payload = _texas("running", ssh_keys=json.dumps([_sample_ssh_key()]))
     report = attached_ssh_keys_from_show(payload)
     assert report["present_in_show"] is True
@@ -1307,6 +1354,8 @@ def test_show_body_without_keys_records_absence_and_makes_no_detach():
     report = list_attached_ssh_keys(request, "test-key", sleep=lambda _seconds: None)
     assert calls == ["GET"]
     assert report == {"count": 0, "fingerprints": []}
+    assert "detach_leftover_keys" not in report
+    assert DETACH_LEFTOVER_KEYS is False
     direct = attached_ssh_keys_from_show(_texas("running"))
     assert direct["keys"] == []
 
@@ -1323,7 +1372,7 @@ def test_allowlist_still_rejects_ssh_list_and_instance_mutations():
         )
 
 
-def test_run_smoke_records_show_ssh_keys_and_does_not_detach(tmp_path):
+def test_run_smoke_does_not_publish_show_body_key_material(tmp_path):
     calls = []
 
     def request(method, url, api_key, body=None, timeout=60):
@@ -1353,6 +1402,20 @@ def test_run_smoke_records_show_ssh_keys_and_does_not_detach(tmp_path):
     )
     assert "attached_ssh_keys" not in manifest
     assert PUBLIC_KEY.split()[1] not in json.dumps(manifest)
+
+    def list_request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        assert url.endswith("/58301075/ssh/")
+        assert body is None
+        return 200, {"success": True, "ssh_keys": json.dumps([_sample_ssh_key()])}
+
+    summary = list_attached_ssh_keys(
+        list_request, "test-key", sleep=lambda _seconds: None
+    )
+    assert summary == {"count": 1, "fingerprints": [_fingerprint(PUBLIC_KEY)]}
+    recorded = json.dumps(summary)
+    assert "77" not in recorded
+    assert "sf4-smoke" not in recorded
 
 
 PINNED_SSH_LIST = "https://console.vast.ai/api/v0/instances/58301075/ssh/"
@@ -1633,6 +1696,26 @@ def test_ssh_remote_sync_fails_cleanly_when_the_probe_bound_runs_out(
     assert remote.ssh_report["accepted"] is False
 
 
+def test_put_state_body_on_the_ssh_path_is_refused():
+    for state in ("running", "stopped"):
+        with pytest.raises(InstanceNotApproved):
+            assert_request_allowed(
+                "PUT",
+                PINNED_SSH_LIST,
+                {"state": state},
+            )
+    with pytest.raises(InstanceNotApproved):
+        assert_request_allowed(
+            "PUT",
+            "https://console.vast.ai/api/v0/instances/58301075/",
+            {"state": "paused"},
+        )
+    method, url, body = endpoint_for("start", 58301075)
+    assert method == "PUT"
+    assert url == "https://console.vast.ai/api/v0/instances/58301075/"
+    assert body == {"state": "running"}
+
+
 def test_patch_and_put_on_the_pinned_ssh_path_are_refused():
     for method in ("PATCH", "PUT"):
         with pytest.raises(InstanceNotApproved):
@@ -1675,13 +1758,28 @@ def _listing_transport(mode):
             if seen["gets"] == 1 or seen["key"] is None:
                 return 200, {"success": True, "ssh_keys": []}
             listed = seen["key"] + "\n"
+            key = seen["key"]
             if mode == "zero":
                 rows = [{"id": 9, "public_key": PUBLIC_KEY + " other"}]
             elif mode == "several":
                 rows = [
                     {"id": 77, "public_key": listed},
-                    {"id": 78, "public_key": seen["key"] + " "},
+                    {"id": 78, "public_key": key + " "},
                 ]
+            elif mode == "trailing":
+                rows = [{"id": 77, "public_key": key + "\n  "}]
+            elif mode == "leading":
+                rows = [{"id": 77, "public_key": " " + key}]
+            elif mode == "substring":
+                rows = [{"id": 77, "public_key": key + " extra"}]
+            elif mode == "reverse":
+                rows = [{"id": 77, "public_key": key[::-1]}]
+            elif mode == "case":
+                kind, blob, *rest = key.split(" ")
+                cased = kind + " " + blob.swapcase()
+                if rest:
+                    cased += " " + " ".join(rest)
+                rows = [{"id": 77, "public_key": cased}]
             else:
                 rows = [{"id": 77, "public_key": listed}]
             return 200, {"success": True, "ssh_keys": json.dumps(rows)}
@@ -1755,6 +1853,55 @@ def test_no_delete_when_zero_or_several_keys_match(tmp_path, monkeypatch):
         assert manifest["own_key"]["detached"] is False
         assert reason in manifest["own_key"]["reason"]
         assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
+
+
+def _assert_no_match(tmp_path, monkeypatch, mode):
+    calls, request = _listing_transport(mode)
+    _install_remote_run(monkeypatch, fail=False)
+    artifacts = tmp_path / mode
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        artifacts,
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+    )
+    manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+    assert code == 0
+    assert [url for method, url in calls if method == "DELETE"] == []
+    assert manifest["own_key"]["match_count"] == 0
+    assert manifest["own_key"]["detached"] is False
+    assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
+
+
+def test_near_miss_listed_keys_do_not_match(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    for mode in ("substring", "reverse", "case"):
+        _assert_no_match(tmp_path, monkeypatch, mode)
+
+
+def test_own_key_match_rstrip_boundary(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    calls, request = _listing_transport("trailing")
+    _install_remote_run(monkeypatch, fail=False)
+    artifacts = tmp_path / "trailing"
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        artifacts,
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+    )
+    manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
+    assert code == 0
+    assert [url for method, url in calls if method == "DELETE"] == [
+        "https://console.vast.ai/api/v0/instances/58301075/ssh/77/"
+    ]
+    assert manifest["own_key"]["match_count"] == 1
+    assert manifest["own_key"]["detached"] is True
+    _assert_no_match(tmp_path, monkeypatch, "leading")
 
 
 def test_detach_guard_refuses_any_other_key_id(monkeypatch):

@@ -882,6 +882,18 @@ def ssh_fingerprints(payload: dict[str, Any]) -> list[str]:
     return fingerprints
 
 
+def _raw_listed_key(item: object) -> str | None:
+    """The listed key text, including a leading space. Not filtered by prefix."""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for name in ("public_key", "ssh_key", "key"):
+            value = item.get(name)
+            if isinstance(value, str):
+                return value
+    return None
+
+
 def _listed_key_id(item: dict[str, Any]) -> str | None:
     for name in ("id", "key_id", "ssh_key_id"):
         value = item.get(name)
@@ -909,7 +921,8 @@ def match_own_public_key(
     found: list[str] = []
     if not bad and items is not None:
         for item in items:
-            listed = _public_key_text(item)
+            listed = _raw_listed_key(item)
+            # Equality after rstrip only. No case fold, no substring, no lstrip.
             if not isinstance(listed, str) or listed.rstrip() != wanted:
                 continue
             if isinstance(item, dict):
