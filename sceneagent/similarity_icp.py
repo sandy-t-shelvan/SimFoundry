@@ -615,13 +615,47 @@ def load_stored_sam3d_pose(path, glb_path):
     }
 
 
+def _warp_mask(mask, scale, rotation, translation, origin=(0.0, 0.0), pixel_size=1.0):
+    """Move a mask's pixel centers by the refined similarity, then splat them.
+
+    The orthographic frame matches ``rasterize_orthographic_silhouette``:
+    pixel ``(row, col)`` is centered at ``origin + (col + 0.5, row + 0.5) *
+    pixel_size`` on z = 0. A raw mask is the export frame. The gate needs
+    that mask after the same scale, rotation, and translation as the mesh.
+    """
+    mask = np.asarray(mask, dtype=bool)
+    if mask.ndim != 2:
+        raise ValueError("rendered mask must be 2D")
+    height, width = mask.shape
+    origin = np.asarray(origin, dtype=np.float64).reshape(2)
+    pixel = float(pixel_size)
+    rows, cols = np.nonzero(mask)
+    warped = np.zeros((height, width), dtype=bool)
+    if len(rows) == 0:
+        return warped
+    points = np.column_stack(
+        [
+            origin[0] + (cols.astype(np.float64) + 0.5) * pixel,
+            origin[1] + (rows.astype(np.float64) + 0.5) * pixel,
+            np.zeros(len(rows), dtype=np.float64),
+        ]
+    )
+    moved = apply_similarity(points, scale, rotation, translation)
+    col_f = (moved[:, 0] - origin[0]) / pixel - 0.5
+    row_f = (moved[:, 1] - origin[1]) / pixel - 0.5
+    ic = np.rint(col_f).astype(np.int64)
+    ir = np.rint(row_f).astype(np.int64)
+    inside = (ir >= 0) & (ir < height) & (ic >= 0) & (ic < width)
+    warped[ir[inside], ic[inside]] = True
+    return warped
+
+
 def _score_silhouette(result, rendered_masks, observed_masks, mesh):
     """Silhouette of the refined similarity, not the pre-ICP vertices.
 
     The gate judges the pose ICP finished on. A mesh is rasterized only after
-    ``apply_similarity`` with that scale, rotation, and translation. Supplied
-    masks cannot stand in for the mesh: they may be a render of the export
-    frame, and using them would skip the refined transform.
+    ``apply_similarity``. A supplied mask is warped by that same scale,
+    rotation, and translation. Neither path uses the export-frame render.
     """
     if mesh is not None:
         scored = dict(mesh)
@@ -633,7 +667,17 @@ def _score_silhouette(result, rendered_masks, observed_masks, mesh):
         )
         rendered = _rendered_masks(None, observed_masks, scored)
     else:
-        rendered = _rendered_masks(rendered_masks, observed_masks, None)
+        if not rendered_masks:
+            raise ValueError("silhouette needs rendered masks or a mesh")
+        rendered = [
+            _warp_mask(
+                mask,
+                result["scale"],
+                result["rotation"],
+                result["translation"],
+            )
+            for mask in rendered_masks
+        ]
     return silhouette_agreement(rendered, observed_masks)
 
 
@@ -867,12 +911,28 @@ def main(argv=None):
     parser.add_argument("--target", required=True)
     parser.add_argument("--rendered-mask", required=True)
     parser.add_argument("--observed-mask", required=True)
+    parser.add_argument("--mesh-vertices")
+    parser.add_argument("--mesh-faces")
+    parser.add_argument("--mesh-width", type=int)
+    parser.add_argument("--mesh-height", type=int)
     try:
         args = parser.parse_args(argv)
         source = np.load(args.source)
         target = np.load(args.target)
         rendered = np.load(args.rendered_mask)
         observed = np.load(args.observed_mask)
+        mesh = None
+        if args.mesh_vertices or args.mesh_faces:
+            if not args.mesh_vertices or not args.mesh_faces:
+                return 1
+            mesh = {
+                "vertices": np.load(args.mesh_vertices),
+                "faces": np.load(args.mesh_faces),
+            }
+            if args.mesh_width is not None:
+                mesh["width"] = args.mesh_width
+            if args.mesh_height is not None:
+                mesh["height"] = args.mesh_height
     except SystemExit as exc:
         code = exc.code
         if code in (None, 0):
@@ -888,6 +948,7 @@ def main(argv=None):
         args.out,
         rendered_masks=[rendered],
         observed_masks=[observed],
+        mesh=mesh,
         ledger_dir=args.ledger,
     )
 

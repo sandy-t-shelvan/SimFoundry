@@ -723,3 +723,24 @@ def test_mesh_fallback_uses_the_refined_transform_not_a_stale_mask(tmp_path):
     entry = json.loads((tmp_path / "ledger" / "ledger.json").read_text(encoding="utf-8"))["entries"][0]
     assert entry["pose_initialization"]["scored_pose"] == "post_icp"
     assert entry["residuals"]["silhouette"] == pytest.approx(1.0)
+
+
+def test_rendered_mask_is_warped_by_the_refined_similarity(tmp_path):
+    vertices, _faces, observed, initial, pose_path, glb, _mesh = _shifted_square(tmp_path)
+    stale_iou = silhouette_iou(initial, observed)
+    assert stale_iou == pytest.approx(1.0 / 3.0)
+    written = write_alignment_residual(
+        vertices,
+        vertices + np.array([0.6, 0.0, 0.0]),
+        pose_path,
+        tmp_path / "residual.json",
+        rendered_masks=[initial],
+        observed_masks=[observed],
+        ledger_dir=tmp_path / "ledger",
+        glb_path=glb,
+    )
+    assert written["residuals"]["silhouette"] == pytest.approx(1.0)
+    assert written["residuals"]["silhouette"] != pytest.approx(stale_iou)
+    assert written["pose_initialization"]["scored_pose"] == "post_icp"
+    transform = written["pose_initialization"]["silhouette_transform"]
+    np.testing.assert_allclose(transform["translation"], [0.6, 0.0, 0.0], atol=1e-6)
