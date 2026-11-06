@@ -16,6 +16,7 @@ from sceneagent.gpu_smoke_trigger import (
     classify_push_diff,
     label_trigger_allowed,
     paths_from_name_status,
+    smoke_trigger_mapping,
     validate_request_document,
     validate_request_text,
     workflow_label_actors,
@@ -282,6 +283,46 @@ def test_zero_sha_push_does_not_proceed(tmp_path, monkeypatch, capsys):
     assert check_push_diff() == 0
     assert "proceed=false" in output.read_text(encoding="utf-8")
     assert "no before SHA" in capsys.readouterr().out
+
+
+def test_smoke_trigger_mapping_is_pinned_to_the_event():
+    """workflow_dispatch, the label, and the request file each keep their name.
+
+    Any other event stays invalid. A remap is a safety finding, so pointing
+    pull_request_target or push at dispatch does not pass this check.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    findings = workflow_safety_findings(text)
+    assert [item for item in findings if item.startswith("SMOKE_TRIGGER")] == []
+    assert smoke_trigger_mapping(text) == {
+        "workflow_dispatch": "dispatch",
+        "pull_request_target": "label",
+        "push": "request-file",
+        "fallback": "invalid",
+    }
+    assert findings == []
+    label_as_dispatch = text.replace(
+        "github.event_name == 'pull_request_target' && 'label'",
+        "github.event_name == 'pull_request_target' && 'dispatch'",
+        1,
+    )
+    push_as_dispatch = text.replace(
+        "github.event_name == 'push' && 'request-file'",
+        "github.event_name == 'push' && 'dispatch'",
+        1,
+    )
+    label_findings = workflow_safety_findings(label_as_dispatch)
+    push_findings = workflow_safety_findings(push_as_dispatch)
+    assert label_findings == [
+        "SMOKE_TRIGGER maps pull_request_target to 'dispatch', not 'label'"
+    ]
+    assert push_findings == [
+        "SMOKE_TRIGGER maps push to 'dispatch', not 'request-file'"
+    ]
+    other = text.replace("|| 'invalid'", "|| 'dispatch'", 1)
+    assert workflow_safety_findings(other) == [
+        "SMOKE_TRIGGER maps any other event to 'dispatch', not 'invalid'"
+    ]
 
 
 def test_workflow_safety_contract():

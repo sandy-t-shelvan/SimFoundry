@@ -36,6 +36,20 @@ _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _TICKET_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 _REASON_RE = re.compile(r"(?=.*\S)[^\n\r]+")
 _ACTOR_RE = re.compile(r"github\.actor == '([^']+)'")
+_SMOKE_TRIGGER_LINE = re.compile(
+    r"(?m)^[ \t]*SMOKE_TRIGGER:[ \t]*\$\{\{[ \t]*(.*?)[ \t]*\}\}[ \t]*$"
+)
+_EVENT_CLAUSE = re.compile(r"^github\.event_name == '([^']*)' && '([^']*)'$")
+_LITERAL_CLAUSE = re.compile(r"^'([^']*)'$")
+# workflow_dispatch is the only name that may start a stopped instance.
+# pull_request_target is the label. push is the request file. Anything else
+# must stay invalid so a typo cannot become a start.
+SMOKE_TRIGGER_MAPPING = {
+    "workflow_dispatch": "dispatch",
+    "pull_request_target": "label",
+    "push": "request-file",
+    "fallback": "invalid",
+}
 
 
 def label_trigger_allowed(
@@ -378,6 +392,63 @@ def _keyed_import_findings(step: str) -> list[str]:
     return findings
 
 
+def smoke_trigger_mapping(text: str) -> dict[str, str] | None:
+    """Parse ``SMOKE_TRIGGER`` into event name to trigger name, plus fallback.
+
+    ``None`` means the expression is not a chain of
+    ``github.event_name == '…' && '…'`` clauses ending in one literal.
+    """
+    found = _SMOKE_TRIGGER_LINE.findall(text)
+    if len(found) != 1:
+        return None
+    expression = " ".join(found[0].split())
+    clauses = [part.strip() for part in expression.split("||")]
+    if len(clauses) < 2:
+        return None
+    mapping: dict[str, str] = {}
+    for clause in clauses[:-1]:
+        event = _EVENT_CLAUSE.fullmatch(clause)
+        if event is None:
+            return None
+        name, value = event.group(1), event.group(2)
+        if name in mapping or name == "fallback":
+            return None
+        mapping[name] = value
+    literal = _LITERAL_CLAUSE.fullmatch(clauses[-1])
+    if literal is None:
+        return None
+    mapping["fallback"] = literal.group(1)
+    return mapping
+
+
+def _smoke_trigger_findings(text: str) -> list[str]:
+    """Findings when SMOKE_TRIGGER is not the pinned event map."""
+    mapping = smoke_trigger_mapping(text)
+    if mapping == SMOKE_TRIGGER_MAPPING:
+        return []
+    if mapping is None:
+        return [
+            "SMOKE_TRIGGER mapping is not dispatch, label, request-file, and invalid"
+        ]
+    findings: list[str] = []
+    for event, want in SMOKE_TRIGGER_MAPPING.items():
+        if event == "fallback":
+            continue
+        got = mapping.get(event)
+        if got != want:
+            findings.append(f"SMOKE_TRIGGER maps {event} to {got!r}, not {want!r}")
+    if mapping.get("fallback") != "invalid":
+        findings.append(
+            "SMOKE_TRIGGER maps any other event to "
+            f"{mapping.get('fallback')!r}, not 'invalid'"
+        )
+    for name in sorted(set(mapping) - set(SMOKE_TRIGGER_MAPPING)):
+        findings.append(f"SMOKE_TRIGGER maps {name} to {mapping[name]!r}")
+    return findings or [
+        "SMOKE_TRIGGER mapping is not dispatch, label, request-file, and invalid"
+    ]
+
+
 def workflow_safety_findings(text: str) -> list[str]:
     """Static contract for the GPU smoke workflow. Empty means it holds.
 
@@ -387,6 +458,7 @@ def workflow_safety_findings(text: str) -> list[str]:
     the checker from the commit before the push.
     """
     findings: list[str] = []
+    findings.extend(_smoke_trigger_findings(text))
     on_block = _on_block(text)
     on_lines = {line.strip() for line in on_block.splitlines()}
     if "workflow_dispatch:" not in on_lines:

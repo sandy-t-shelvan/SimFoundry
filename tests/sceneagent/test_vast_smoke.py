@@ -2131,6 +2131,55 @@ def test_request_file_trigger_does_not_start_a_stopped_instance(tmp_path, capsys
     assert "instance stopped; start needs Sandeep" in capsys.readouterr().err
 
 
+def _run_bot_smoke(tmp_path, status, trigger, actor, commit_sha):
+    """Run one bot trigger. A fast clock keeps a missing wait from polling."""
+    calls, request = _calls_for_status(status)
+    clock = {"t": 0.0}
+
+    def now():
+        clock["t"] += 1.0
+        return clock["t"]
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+        now=now,
+        boot_timeout_s=0.5,
+        trigger=trigger,
+        actor=actor,
+        commit_sha=commit_sha,
+    )
+    return calls, code
+
+
+def test_label_trigger_refuses_a_starting_instance(tmp_path, capsys):
+    # Vast reports loading while the instance is coming up. That is starting.
+    calls, code = _run_bot_smoke(
+        tmp_path, "loading", "label", "cursor[bot]", "a" * 40
+    )
+    assert code != 0
+    assert _puts(calls) == []
+    assert "instance not running; start needs Sandeep" in capsys.readouterr().err
+    manifest = json.loads(
+        (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["failure_reason"] == "instance not running; start needs Sandeep"
+    assert manifest["passed"] is False
+
+
+def test_request_file_trigger_refuses_a_starting_instance(tmp_path, capsys):
+    calls, code = _run_bot_smoke(
+        tmp_path, "loading", "request-file", "sandy-t-shelvan", "b" * 40
+    )
+    assert code != 0
+    assert _puts(calls) == []
+    assert "instance not running; start needs Sandeep" in capsys.readouterr().err
+
+
 def test_bot_trigger_refuses_an_unknown_instance_state(tmp_path, capsys):
     calls, request = _calls_for_status("offline")
     code = run_smoke(
