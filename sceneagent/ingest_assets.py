@@ -51,10 +51,11 @@ OURS_COLOR_L1_LIMIT = 30.0
 OURS_COLOR_LABEL = "ours, not the paper's unpublished per-image color correction"
 # Named target written into color_calibration.json with the three channel values.
 COLOR_TARGET_NAME = "per_channel_median_of_set"
-# Closed gain interval. 16 keeps the locked fixture gain 10.5 (105/10) exact;
-# a cap of 4 would change that test. Non-finite gains are rejected instead.
+# Closed gain interval. A gain above 8 (3 stops) stretches a channel whose
+# mean is under about 32 of 255 levels, and that stretch amplifies one 8-bit
+# quantization or noise step by more than 8 levels. Non-finite gains are rejected.
 OURS_GAIN_MIN = 0.05
-OURS_GAIN_MAX = 16.0
+OURS_GAIN_MAX = 8.0
 # Sampled frames stay JPEG. q95 and 4:4:4 are the encode the round-trip test measures.
 JPEG_QUALITY = 95
 JPEG_SUBSAMPLING = 0
@@ -404,6 +405,23 @@ def _load_rgb(path):
     return "pillow", width, height, image.tobytes(), b""
 
 
+# Pillow format for the final path. The temp file is named ``*.calibrating``,
+# and Pillow raises ``unknown file extension: .calibrating`` if ``format`` is
+# omitted. ASCII P3 PPM is not raw P6, so it takes this Pillow path.
+_PILLOW_SAVE_FORMAT = {
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".png": "PNG",
+    ".ppm": "PPM",
+    ".pgm": "PPM",
+    ".pnm": "PPM",
+    ".bmp": "BMP",
+    ".tif": "TIFF",
+    ".tiff": "TIFF",
+    ".webp": "WEBP",
+}
+
+
 def _write_rgb(destination, kind, width, height, header, pixels):
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -415,8 +433,12 @@ def _write_rgb(destination, kind, width, height, header, pixels):
         from PIL import Image
 
         image = Image.frombytes("RGB", (width, height), pixels)
-        suffix = destination.suffix.lower()
-        if suffix in {".jpg", ".jpeg"}:
+        # Format follows the final suffix, never the ``.calibrating`` temp name.
+        image_format = _PILLOW_SAVE_FORMAT.get(destination.suffix.lower())
+        if image_format is None:
+            suffix = destination.suffix.lower() or "(none)"
+            raise ValueError(f"{destination.name} suffix {suffix} has no Pillow format")
+        if image_format == "JPEG":
             # Second JPEG encode of an already-compressed frame. 4:4:4 keeps
             # each channel's scale out of chroma subsampling. The round-trip
             # test records how far this encode moves the channel means.
@@ -426,16 +448,8 @@ def _write_rgb(destination, kind, width, height, header, pixels):
                 quality=JPEG_QUALITY,
                 subsampling=JPEG_SUBSAMPLING,
             )
-        elif suffix == ".png":
-            image.save(temporary, format="PNG")
-        elif suffix == ".bmp":
-            image.save(temporary, format="BMP")
-        elif suffix in {".tif", ".tiff"}:
-            image.save(temporary, format="TIFF")
-        elif suffix == ".webp":
-            image.save(temporary, format="WEBP")
         else:
-            image.save(temporary)
+            image.save(temporary, format=image_format)
     temporary.replace(destination)
 
 

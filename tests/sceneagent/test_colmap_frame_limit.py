@@ -21,6 +21,7 @@ from sceneagent.ingest_assets import (
     OURS_GAIN_MIN,
     _mean_packed_rgb,
     _scale_rgb_bytes,
+    _write_rgb,
     apply_per_image_color_calibration,
     jpeg_round_trip_mean_error,
     mean_rgb_file,
@@ -258,9 +259,10 @@ def test_gains_are_per_image_and_a_zero_channel_stays_at_one():
 def test_color_calibration_scales_each_image_on_its_own(tmp_path):
     folder = tmp_path / "frames"
     folder.mkdir()
-    _ppm(folder / "red.ppm", (200, 10, 10))
-    _ppm(folder / "blue.ppm", (10, 10, 200))
-    _ppm(folder / "gray.ppm", (105, 10, 105))
+    # Every channel's raw gain is at most 2, inside the 4x fixture limit.
+    _ppm(folder / "red.ppm", (80, 40, 20))
+    _ppm(folder / "blue.ppm", (20, 40, 80))
+    _ppm(folder / "gray.ppm", (40, 40, 40))
     before = {path.name: path.read_bytes() for path in folder.iterdir()}
     out = tmp_path / "calibrated"
     result = apply_per_image_color_calibration(folder, out)
@@ -271,22 +273,24 @@ def test_color_calibration_scales_each_image_on_its_own(tmp_path):
     assert result["method"] == "per_image_diagonal_to_median"
     assert "ours" in result["label"]
     assert result["colmap_ran"] is False
-    assert result["median_rgb"] == pytest.approx([105, 10, 105])
+    assert result["median_rgb"] == pytest.approx([40, 40, 40])
     assert result["median_rgb"] == pytest.approx(result["input_report"]["median_rgb"])
     assert result["input_report"]["heuristic"] == OURS_COLOR_HEURISTIC
     flagged = {Path(path).name for path in result["input_report"]["flagged_paths"]}
     assert flagged == {"red.ppm", "blue.ppm"}
     by_name = {Path(frame["source"]).name: frame for frame in result["frames"]}
-    assert by_name["red.ppm"]["gain_rgb"] == pytest.approx([105 / 200, 1, 105 / 10])
-    assert by_name["blue.ppm"]["gain_rgb"] == pytest.approx([105 / 10, 1, 105 / 200])
+    assert by_name["red.ppm"]["gain_rgb"] == pytest.approx([0.5, 1, 2])
+    assert by_name["blue.ppm"]["gain_rgb"] == pytest.approx([2, 1, 0.5])
     assert by_name["gray.ppm"]["gain_rgb"] == pytest.approx([1, 1, 1])
+    assert max(by_name["red.ppm"]["gain_rgb"]) <= 4
+    assert max(by_name["blue.ppm"]["gain_rgb"]) <= 4
     assert by_name["red.ppm"]["gain_rgb"] != by_name["blue.ppm"]["gain_rgb"]
-    target = bytes((105, 10, 105)) * 4
+    target = bytes((40, 40, 40)) * 4
     assert _ppm_pixels(out / "red.ppm") == target
     assert _ppm_pixels(out / "blue.ppm") == target
     assert (out / "gray.ppm").read_bytes() == before["gray.ppm"]
     for name in ("red.ppm", "blue.ppm", "gray.ppm"):
-        assert by_name[name]["calibrated_mean_rgb"] == pytest.approx([105, 10, 105])
+        assert by_name[name]["calibrated_mean_rgb"] == pytest.approx([40, 40, 40])
 
 
 def test_run_poses_calibrates_each_frame_before_feature_extraction(tmp_path, monkeypatch):
@@ -399,7 +403,7 @@ def test_nonfinite_means_are_rejected_and_extreme_gains_are_clamped():
     )
     assert low["gains_by_image"]["c"][0] == OURS_GAIN_MIN
     assert OURS_GAIN_MIN == 0.05
-    assert OURS_GAIN_MAX == 16.0
+    assert OURS_GAIN_MAX == 8.0
 
 
 def test_synthetic_color_cast_is_recovered_with_distinct_gains(tmp_path):
@@ -497,6 +501,102 @@ def _jpeg_fixture_pixels():
             raw.append((20 + x + 4 * y) % 256)
             raw.append((90 + 2 * x + 2 * y) % 256)
     return width, height, bytes(raw)
+
+
+def _ascii_p3(path, rgb, size=2):
+    rows = [
+        " ".join(" ".join(str(channel) for channel in rgb) for _ in range(size))
+        for _ in range(size)
+    ]
+    path.write_text(f"P3\n{size} {size}\n255\n" + "\n".join(rows) + "\n", encoding="ascii")
+
+
+def test_ascii_p3_ppm_calibrates_through_the_temp_file(tmp_path):
+    folder = tmp_path / "p3"
+    folder.mkdir()
+    _ascii_p3(folder / "red_cast.ppm", (160, 40, 40))
+    _ascii_p3(folder / "blue_cast.ppm", (40, 40, 160))
+    out = tmp_path / "out"
+    result = apply_per_image_color_calibration(folder, out)
+    assert result["applied"] is True
+    assert result["gains_by_image"]["red_cast.ppm"] != result["gains_by_image"]["blue_cast.ppm"]
+    assert list(out.glob("*.calibrating")) == []
+    for name in ("red_cast.ppm", "blue_cast.ppm"):
+        written = out / name
+        assert written.read_bytes().startswith(b"P6")
+        assert mean_rgb_file(written) == pytest.approx((100, 40, 100))
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [".jpg", ".jpeg", ".png", ".ppm", ".pgm", ".pnm", ".bmp", ".tif", ".tiff", ".webp"],
+)
+def test_write_rgb_uses_the_final_extension_not_the_temp_suffix(tmp_path, suffix):
+    destination = tmp_path / f"frame{suffix}"
+    pixels = bytes((10, 20, 30)) * 4
+    _write_rgb(destination, "pillow", 2, 2, b"", pixels)
+    assert destination.is_file()
+    assert list(tmp_path.glob("*.calibrating")) == []
+    image = Image.open(destination).convert("RGB")
+    assert image.size == (2, 2)
+    if suffix not in {".jpg", ".jpeg", ".webp"}:
+        assert image.tobytes() == pixels
+
+
+def _p6_bytes(rgb, size=2):
+    return f"P6\n{size} {size}\n255\n".encode("ascii") + bytes(rgb) * (size * size)
+
+
+def test_gain_above_eight_is_clamped_in_color_calibration_json(tmp_path, monkeypatch):
+    monkeypatch.setattr("sceneagent.colmap_stage.shutil.which", _which_binaries)
+    monkeypatch.setattr("sceneagent.colmap_stage.subprocess.run", _banner)
+
+    def fake_run(command, timeout_s=600):
+        if Path(str(command[0])).name == "ffmpeg":
+            folder = Path(command[-1]).parent
+            # Median red is 40. The dim frame's raw gain is 40/4 = 10, above 8.
+            (folder / "0001.jpg").write_bytes(_p6_bytes((4, 40, 40)))
+            (folder / "0002.jpg").write_bytes(_p6_bytes((40, 40, 40)))
+            (folder / "0003.jpg").write_bytes(_p6_bytes((40, 40, 40)))
+        return {
+            "command": command,
+            "returncode": 0,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+    monkeypatch.setattr("sceneagent.colmap_stage._run", fake_run)
+    work = tmp_path / "colmap"
+    run_poses(tmp_path / "clip.mp4", work, max_frames=3)
+    manifest = json.loads((work / "color_calibration.json").read_text(encoding="utf-8"))
+    assert manifest["gains_by_image"]["0001.jpg"][0] == 8.0
+    assert manifest["gains_by_image"]["0002.jpg"][0] == pytest.approx(1.0)
+    assert manifest["gains_by_image"]["0003.jpg"][0] == pytest.approx(1.0)
+
+
+def test_gain_of_eight_is_kept_and_anything_above_is_clamped():
+    exact = per_image_color_gains(
+        [
+            ("dim", (5.0, 10.0, 10.0)),
+            ("mid", (40.0, 10.0, 10.0)),
+            ("hot", (40.0, 10.0, 10.0)),
+        ]
+    )
+    # 40/5 is exactly 8, so the bound does not move it.
+    assert exact["gains_by_image"]["dim"][0] == 8.0
+    assert exact["gains_by_image"]["dim"][0] == pytest.approx(40.0 / 5.0)
+    above = per_image_color_gains(
+        [
+            ("dim", (40.0 / 8.001, 10.0, 10.0)),
+            ("mid", (40.0, 10.0, 10.0)),
+            ("hot", (40.0, 10.0, 10.0)),
+        ]
+    )
+    raw = 40.0 / (40.0 / 8.001)
+    assert raw > 8.0
+    assert above["gains_by_image"]["dim"][0] == 8.0
+    assert above["gains_by_image"]["dim"][0] != pytest.approx(raw)
 
 
 def test_jpeg_round_trip_mean_error_is_the_recorded_fixture_bound():
