@@ -402,6 +402,37 @@ def test_points_tie_has_no_rule_and_fails_closed(tmp_path):
     assert "no rule" in shared["document"]["selection_error"]
 
 
+def test_double_tie_fails_closed_in_either_directory_order(tmp_path):
+    """PM KAN-5 10275. A double tie fails in both directory orders.
+
+    v9 would keep whichever name sorts first. This test does not claim
+    that parity. The existing v9 parity test is a different function and
+    covers only unique winners.
+    """
+
+    def tied(order):
+        return _evaluate(
+            tmp_path / "".join(order),
+            15,
+            [
+                _passing(name=order[0], registered=12, points=40),
+                _passing(name=order[1], registered=12, points=40),
+            ],
+        )
+
+    for result in (tied(("a", "z")), tied(("z", "a"))):
+        assert result["pass"] is False
+        assert result["document"]["verdict"] == "fail"
+        assert result["document"]["chosen_model"] is None
+        assert result["document"]["largest_model"] is None
+        assert result["document"]["quality_bar"]["model"] is None
+        assert result["document"]["quality_bar"]["pass"] is False
+        error = result["document"]["selection_error"]
+        assert "ambiguous_largest_model" in error
+        assert "points tied at 40" in error
+        assert "no rule" in error
+
+
 def test_analyzer_nonzero_exit_fails_closed(tmp_path):
     text = analyzer_text(registered=15, points=400, observations="40.000000")
     result = _evaluate(tmp_path, 15, [("0", (1, text))])

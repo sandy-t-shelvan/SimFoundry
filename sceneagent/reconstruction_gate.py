@@ -18,10 +18,16 @@ A model is accepted only when all three hold on the largest sparse model:
 The largest model is the one with the most registered images. A tie is
 broken by the points count only when that picks a single model. Anything
 that cannot be ranked (no model, a failed or unparsable analyzer, a
-registered count that will not parse, a points value missing on a
-registered tie, or a points tie with nothing left to break it) fails
-closed. A missing count is not treated as zero, and a zero is not filled
-in so that some other model can win.
+registered count that will not parse, or a points value missing on a
+registered tie) fails closed. A missing count is not treated as zero, and
+a zero is not filled in so that some other model can win.
+
+Everywhere else the selection and the three comparisons match collector
+v9. The one exception is PM KAN-5 comment 10275: a double tie, the same
+registered-image count and the same points count on more than one model.
+v9 keeps the first directory name. This gate fails closed, reason
+``ambiguous_largest_model``, in either directory order. A pass does not
+depend on which name sorts first.
 """
 
 from __future__ import annotations
@@ -190,10 +196,11 @@ def pick_largest(
     """Return ``(largest, error)``. Nothing is ranked with a sentinel.
 
     Registered images decide. Points break a tie only when one tied model
-    has strictly more points than the others. An equal points count is not
-    a rule (directory order would otherwise pick a winner), so that tie
-    fails closed. v9's ``max`` keeps the first name in that case; this gate
-    does not.
+    has strictly more points than the others. A double tie, the same
+    registered count and the same points count, has no winner. v9's
+    ``max`` keeps the first directory name. PM KAN-5 10275 rejects that
+    fallback: the reason is ``ambiguous_largest_model`` whichever name
+    sorts first. That is the only departure from v9.
     """
     if not models:
         return None, "no sparse model"
@@ -215,7 +222,9 @@ def pick_largest(
     best_points = max(model["points"] for model in tied)
     winners = [model for model in tied if model["points"] == best_points]
     if len(winners) != 1:
+        # Directory order is not a rule. v9 would return the first name.
         return None, (
+            "ambiguous_largest_model: "
             f"registered tie at {top}; points tied at {best_points} with no rule"
         )
     return winners[0], None

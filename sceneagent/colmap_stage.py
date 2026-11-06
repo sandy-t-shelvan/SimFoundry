@@ -15,7 +15,10 @@ so the section 3.2 color gap stays partial.
 A mapper that writes a sparse model is not accepted until
 ``reconstruction_gate`` passes. The gate runs ``model_analyzer`` on every
 subdirectory of ``sparse/``, not on ``sparse/0`` alone, and rejects the
-reconstruction when the largest model misses the bar.
+reconstruction when the largest model misses the bar. A double tie, the
+same registered count and the same points count, fails closed
+(``ambiguous_largest_model``) in either directory order. That is the only
+departure from collector v9; PM KAN-5 comment 10275.
 """
 
 from __future__ import annotations
