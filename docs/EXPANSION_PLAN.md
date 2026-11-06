@@ -153,7 +153,7 @@ Section 3.3 follows LangSplat's approach of attaching features to Gaussians. SAM
 - Output: a mesh file and an ICP residual file. LaMa's output is an inpainted patch.
 - Tools: https://github.com/facebookresearch/sam-3d-objects and https://github.com/advimman/lama
 - Depends on: masks, then Gaussians for the ICP.
-- Done when: a mesh file and an ICP residual file exist. LaMa is optional and stays missing until a plane-completion render shows an inpainted patch.
+- Done when: a mesh file and an ICP residual file exist. The CPU plane fit is partial. LaMa stays optional until a Fruits plane-completion render shows an inpainted patch.
 - Machine: Canadian box. SAM3D weights are large; skip if free space would drop below the Isaac reserve.
 
 ## 3.4 Physical properties, parts, and articulation

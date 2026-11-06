@@ -237,13 +237,13 @@ const BLOCKS: Block[] = [
       },
       {
         sub: "LaMa background infill",
-        status: "missing",
+        status: "partial",
         addressed: "still open",
         paper: "Section 3.3: after foreground Gaussians are removed, detected planes complete the background, with optional LaMa texture inpainting.",
-        plan: "Optional. Stays missing until a plane-completion render shows an inpainted patch.",
-        changelog: "Not shipped.",
-        ran: "Not started. No plane-completion image.",
-        miss: "Not started. Plane completion itself, which LaMa is optional on top of, also has no artifact.",
+        plan: "sceneagent.infill.fit_plane fits the background on CPU. LaMa stays optional and off by default. Partial until the Fruits background image exists.",
+        changelog: "CPU plane fit and hole fill are tested on synthetic points. Counts are 17 done, 12 partial, 13 missing (17 / 12 / 13), 42 rows.",
+        ran: "No Fruits render yet. Synthetic CPU renders are produced by complete_background and are not stored as fixtures.",
+        miss: "LaMa weights are not installed. Instance 58301075 has not run the Fruits background. The row stays partial.",
       },
     ],
   },
@@ -835,13 +835,13 @@ function MissedFruitsPass() {
         </Text>
       </Row>
       <Grid columns={4} gap={16}>
-        <Stat value="17 / 11 / 14" label="catalog.py on this read" tone="warning" />
+        <Stat value="17 / 12 / 13" label="catalog.py on this read" tone="warning" />
         <Stat value="partial" label="Articulate Anything now" tone="warning" />
         <Stat value="missing" label="CubePart, no part mesh" tone="danger" />
         <Stat value="0 / 6" label="Figure 5 harnesses called" tone="danger" />
       </Grid>
       <Callout tone="info" title="Counts match catalog.py">
-        catalog.py, the GAP_MATRIX.md header, and this canvas count 17 done, 11 partial, and 14 missing. Articulate Anything is partial: a PartNet URDF was accepted and the motion review failed.
+        catalog.py, the GAP_MATRIX.md header, and this canvas count 17 done, 12 partial, and 13 missing. Articulate Anything is partial: a PartNet URDF was accepted and the motion review failed. The LaMa row is partial: the CPU plane fit is tested, and the Fruits background has not been run.
       </Callout>
       <Text size="small" tone="secondary">
         Live page checked in the browser on 2 Nov 2026. Paper text is arXiv:2610.34745v1. Run status is sceneagent/catalog.py. A local file, runs/section34_pass/vlm_pass.json, is cited only where it is newer than that catalog row.
@@ -1004,7 +1004,7 @@ export default function SceneAgentPaperGaps() {
       <Stack gap={8}>
         <H1>SceneAgent paper versus the SimFoundry upgrade</H1>
         <Text>
-          The expansion plan covers sections 3.1–3.10 and section 4, but the paper’s agent is a coding harness on a model API, and this tree’s agent is two Gemini generateContent calls plus local Python. Fracture, 4D, hybrid scenes, Unreal, Meshy, and the policy loop are only named. catalog.py and GAP_MATRIX.md agree: 17 done, 11 partial, 14 missing. That “done” on the agent loop means the ledger files exist.
+          The expansion plan covers sections 3.1–3.10 and section 4, but the paper’s agent is a coding harness on a model API, and this tree’s agent is two Gemini generateContent calls plus local Python. Fracture, 4D, hybrid scenes, Unreal, Meshy, and the policy loop are only named. catalog.py and GAP_MATRIX.md agree: 17 done, 12 partial, 13 missing. That “done” on the agent loop means the ledger files exist.
         </Text>
         <Text size="small" tone="secondary">
           Catalog status is the catalog.py field. A done row is an artifact this tree produced, not a paper metric. The This pass column on sections 3.1–3.4 is separate: fixed means this code or a real run does that paper requirement. Quebec evidence is instance 55073623, RTX 4090. Paper: Hollis, Fan, and Yang, arXiv:2610.34745v1. Site text checked against the saved extract and the live page: section 3.3 does not name GroundingDINO or SAM 2; website step 02 says GroundingDINO + SAM. Quebec SSH on 2 Nov 2026 connected. The RTX 4090 was not idle: articulate.py held 834 MiB, so GroundingDINO, SAM 2, full-rate COLMAP, and a 30000-step splat were not started.
@@ -1019,7 +1019,7 @@ export default function SceneAgentPaperGaps() {
       </Grid>
 
       <Callout tone="warning" title="The gap matrix does not lag the catalog">
-        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). DESIGN.md’s opening counts match catalog.py: 17 done, 11 partial, 14 missing, 42 rows. Its block-map table is still an earlier snapshot and is not regenerated. EXPANSION_PLAN records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. Its section 3.3 table records the SAM masks and the SAM 3D mesh as produced. The Features row is partial: crop vectors exist and the per-Gaussian feature file is missing. skills.py lists SCENEAGENT-INSPECT-ISAAC as stage_opened. No coding model wrote a fix report.
+        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). DESIGN.md’s opening counts match catalog.py: 17 done, 12 partial, 13 missing, 42 rows. Its block-map table is still an earlier snapshot and is not regenerated. EXPANSION_PLAN records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. Its section 3.3 table records the SAM masks and the SAM 3D mesh as produced. The Features row is partial: crop vectors exist and the per-Gaussian feature file is missing. skills.py lists SCENEAGENT-INSPECT-ISAAC as stage_opened. No coding model wrote a fix report.
       </Callout>
 
       <MissedFruitsPass />
@@ -1327,7 +1327,7 @@ export default function SceneAgentPaperGaps() {
 
       <H2>Catalog rows by paper block</H2>
       <Text size="small" tone="secondary">
-        Vertical axis: paper block. Horizontal axis: number of catalog.py rows. Stacked series are done, partial, and missing. Source: sceneagent/catalog.py status field, same 17 / 11 / 14 split as GAP_MATRIX.md. Quebec run 1 Nov 2026. The Sec 4 bar is the two section 4.1 rows plus the official-release row. Section 4.2 is the 3.6 bar, not a second count.
+        Vertical axis: paper block. Horizontal axis: number of catalog.py rows. Stacked series are done, partial, and missing. Source: sceneagent/catalog.py status field, same 17 / 12 / 13 split as GAP_MATRIX.md. Quebec run 1 Nov 2026. The Sec 4 bar is the two section 4.1 rows plus the official-release row. Section 4.2 is the 3.6 bar, not a second count.
       </Text>
       <BarChart
         horizontal
@@ -1414,14 +1414,14 @@ export default function SceneAgentPaperGaps() {
 
       <H2>Every paper block against the plan, the changelog, and the run</H2>
       <Text>
-        Each row is one catalog.py entry. The dot is that entry’s status. Open a block for the five-way comparison. Filter pills hide rows; they do not change the 17 / 11 / 14 counts.
+        Each row is one catalog.py entry. The dot is that entry’s status. Open a block for the five-way comparison. Filter pills hide rows; they do not change the 17 / 12 / 13 counts.
       </Text>
       <BlockDetails />
 
       <H2>Plan and design misses</H2>
       <Stack gap={10}>
         <Callout tone="warning" title="1. Opening counts match the catalog; two snapshots remain">
-          EXPANSION_PLAN section 3.3 records the splat, the SAM masks, and the SAM 3D mesh. The Features row is partial: OpenCLIP and DINOv2 crop vectors exist, and the per-Gaussian feature file is missing. Section 3.1 records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s opening counts match catalog.py (17 done, 11 partial, 14 missing, 42 rows). Its block-map table is still an earlier snapshot and is not regenerated. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
+          EXPANSION_PLAN section 3.3 records the splat, the SAM masks, and the SAM 3D mesh. The Features row is partial: OpenCLIP and DINOv2 crop vectors exist, and the per-Gaussian feature file is missing. Section 3.1 records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s opening counts match catalog.py (17 done, 12 partial, 13 missing, 42 rows). Its block-map table is still an earlier snapshot and is not regenerated. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
         </Callout>
         <Callout tone="warning" title="2. Two done-rules disagree on the splat">
           The splatfacto row is done at 2000 steps because a checkpoint and one render exist. The COLMAP row is done only when a full-rate sequence feeds splatfacto. Catalog says those cameras are not in the train, the runner is still 1 fps with a 16-frame cap, and nerfstudio’s default 30000 was not used. Marking one done and the other partial hides that the scene in section 3.2 was not built.
