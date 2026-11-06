@@ -678,14 +678,20 @@ def _score_silhouette(
     ``apply_similarity``. A supplied mask is warped by that same scale,
     rotation, and translation, on the same orthographic grid the rasterizer
     uses. A pixel is one world unit only when ``pixel_size`` is 1 and the
-    origin is zero. Neither path uses the export-frame render.
+    origin is zero. Neither path uses the export-frame render. A non-finite
+    origin, or a non-finite or non-positive pixel size, is an error here, so
+    a bad grid cannot become an empty mask.
     """
+    origin, pixel_size = _finite_silhouette_grid(origin, pixel_size)
     if mesh is not None:
         scored = dict(mesh)
         # A mesh that already names its grid keeps it. Otherwise the grid
         # passed with the masks is the one the rasterizer would have used.
         scored.setdefault("origin", origin)
         scored.setdefault("pixel_size", pixel_size)
+        scored["origin"], scored["pixel_size"] = _finite_silhouette_grid(
+            scored["origin"], scored["pixel_size"]
+        )
         scored["vertices"] = apply_similarity(
             mesh["vertices"],
             result["scale"],
@@ -921,8 +927,11 @@ def run_icp_step(
 
     A gate accept or reject, including ``silhouette_undefined``, is 0 and the
     ledger records that decision. A crash, a pose-sidecar error, or a missing
-    or non-numeric measure is 1. This step is not the Fruits smoke.
+    or non-numeric measure is 1. A non-finite origin, or a non-finite or
+    non-positive pixel size, raises ``ValueError`` before that catch, so it
+    is not a gate reject and not exit 0. This step is not the Fruits smoke.
     """
+    origin, pixel_size = _finite_silhouette_grid(origin, pixel_size)
     try:
         written = write_alignment_residual(
             source,

@@ -1103,6 +1103,41 @@ def test_cli_silhouette_grid_defaults_and_forwarding(tmp_path, monkeypatch, caps
     assert seen["warp_pixel"] == 0.05
 
 
+def test_run_icp_step_rejects_a_nan_origin_and_a_non_positive_pixel_size(tmp_path):
+    pose_path, glb, rendered, observed = _write_grid_cli(
+        tmp_path,
+        (0.0, 0.0),
+        1.0,
+        80,
+        20.0,
+        18.0,
+        12.0,
+        np.array([3.0, -2.0, 0.0]),
+    )
+    source = np.load(tmp_path / "source.npy")
+    target = np.load(tmp_path / "target.npy")
+    common = {
+        "source": source,
+        "target": target,
+        "pose_path": pose_path,
+        "glb_path": glb,
+        "out_path": tmp_path / "residual.json",
+        "rendered_masks": [rendered],
+        "observed_masks": [observed],
+        "ledger_dir": tmp_path / "ledger",
+    }
+    with pytest.raises(ValueError, match="^origin must be two finite numbers$"):
+        run_icp_step(**common, origin=(float("nan"), 0.0), pixel_size=1.0)
+    assert not (tmp_path / "residual.json").exists()
+    with pytest.raises(ValueError, match="^pixel_size must be a positive finite number$"):
+        run_icp_step(**common, origin=(0.0, 0.0), pixel_size=0.0)
+    with pytest.raises(ValueError, match="^pixel_size must be a positive finite number$"):
+        run_icp_step(**common, origin=(0.0, 0.0), pixel_size=-0.2)
+    with pytest.raises(ValueError, match="^pixel_size must be a positive finite number$"):
+        run_icp_step(**common, pixel_size=float("nan"))
+    assert not (tmp_path / "residual.json").exists()
+
+
 def test_cli_rejects_a_non_finite_silhouette_grid(capsys):
     base = [
         "--pose",
