@@ -153,7 +153,7 @@ Each module owns the artifacts in the right-hand column. A module with no artifa
 | `colmap_stage` | ffmpeg sample at `fps=1` and `max_frames=16`, then extractor, sequential matcher, mapper. The cap is this runner's. A banner containing "without CUDA" forces CPU SIFT. | `images/`, `sparse/`, `database.db` under the work directory |
 | `external_tools` | Probe catalog rows that are not `in_tree`. | Nothing. `video` writes `tool_probe.json` |
 | `ingest_assets` | Record a still-image directory or an on-disk 3DGS, photogrammetry, LiDAR, or generated-splat file. Does not download Marble, Lyra, or HY-World. Color flag `ours_mean_rgb_l1_above_30` is this tree's. | JSON the caller asks for |
-| `infill` | Refuse to emit an image when no plane render and no association counts exist. `complete_background` may write a plane-fill placeholder. LaMa runs only when an image exists and LaMa is installed. | A PNG only on that path |
+| `infill` | Fit a plane to background points and fill the hole. LaMa is optional and off by default. Counts without background points still write a placeholder, which is not a completed background. | A rendered PNG on the fitted path, plus a ledger entry |
 | `agent_loop` | Plan, one tool, one manifest, one ledger line. On reject, call `<step>_repair` when that callable is registered. Does not invent a pose. | `plan.json`, `manifests/<step>-<attempt>.json`, `ledger.json` |
 | `fruits_agent` | Build the Fruits tool table and call `run_agent_loop`. Repair is registered for MuJoCo only. | The vote JSON and MuJoCo report at the paths the caller passes. The loop writes the plan, manifests, and ledger |
 | `gemini_client` | `generateContent`. Tries `gemini-2.5-flash` first. A 404 is stored. A later Flash id is not labeled 2.5. The API key is redacted from returned bodies. | Nothing |
@@ -457,7 +457,7 @@ The ordered interfaces, matching the dependency those modules already have:
 1. **Posed cameras into a splat.** `colmap_stage.run_poses` still samples at 1 fps with a 16-frame cap. The canvas and `GAP_MATRIX.md` already record a separate host run of `Fruits.mp4`: 452 frames, COLMAP 4.2.1 CUDA, 452/452 registered, and a splatfacto-big checkpoint at `max-num-iterations` 30000 (`step-000029999.ckpt`). Those files were not written by `run_poses`. The 15-frame model and the 2000-step checkpoint were kept. A new capture still needs a full-rate caller inside this package before that host command is the default.
 2. **Masks and features that do not decide membership.** Section 3.3 masks and the two embeddings are inputs to `association.gaussian_belongs` and to `mlp.contract.pack_prior_input`. `sam2_user` and `website_step02` are the wrong hooks for that row; both refuse to close it. The association functions are ready. They need centers, a mask, and a camera.
 3. **A residual file the gate can read.** `similarity_icp.trimmed_similarity_icp` and `measure_residuals` produce the four residual kinds, with silhouette left null until a caller fills it. `accept_alignment` is the only acceptor. A published threshold map would be a new argument. Until that map exists, the honest outputs are `undecided` or an explicit `ours_iteration_1` reject. Lowering `OURS_*` constants to flip a stored residual is a behavior change, not a calibration.
-4. **Plane completion, then optional LaMa.** `infill.complete_background` is the placeholder path from association counts. `plane_infill` returns `emitted: false` when it has nothing to inpaint. An inpainted patch is a new file, written only when LaMa is installed.
+4. **Plane completion, then optional LaMa.** `infill.complete_background` fits a plane when background points, colors, and a hole mask are present, and writes a rendered PNG. LaMa stays off unless `use_lama` is set. `plane_infill` returns `emitted: false` when it has nothing to inpaint. An inpainted patch is a new file, written only when LaMa is installed. The Fruits run on instance 58301075 is still open.
 5. **Parts, completion, and joints as ledger steps.** `append_step` is the recording API. `make_tools` does not launch PartSAM, CubePart, or Articulate Anything. `section34` already chooses the CubePart call shape that avoids the diffusers 0.39 `QwenEmbedRope` TypeError, and `articulate_download_allowed` checks free space against the uncompressed listing plus 8 GiB. A completion mesh and a URDF become comparable when a registered tool writes the file and a later ledger line accepts or rejects a simulation review. `cubepart_status` stays an open row while no part mesh exists.
 6. **Inspector frame before policy, 4D, or fracture.** `SCENEAGENT-INSPECT-ISAAC` is `stage_opened` until a coding model writes a fix report. `LATER_SKILLS` includes fracture, both 4D skills, policy autoresearch, and VLA adaptation, all `not_implemented`. The USD contract's `usd_written` flag and the rigid-only USDA writer are the export those later skills must not overload: deformables, fracture, and fluids stay outside that file. `evaluation.single_rollout_place` is the place to record one rollout; `sister_grid` is the place to record a geometric grid. Neither is a learned-policy result. A LoRA trainer is not a module in this package.
 7. **Scoring after meshes exist.** `metrics.symmetric_chamfer`, `f1_at_threshold`, and the small Hungarian matcher are the scoring interface. A scene score is a new file that names its clouds and its match. The matcher as written will not score a 20-object scene. Extending it is a code change with a test, and the score file is still empty until those clouds exist.
@@ -582,7 +582,7 @@ Done rows stay as the artifact named here. Partial and missing rows name the cod
 | Gaussian association cuts | done, still open as coverage | `association.gaussian_belongs` and `masks_same_object`. Host artifact `gaussians.json`: 27548 of 84993 kept on the largest mask of `0001.jpg`. 76629 projected, 48534 in the mask. Cell side 4 px. Full-rate equation (1) kept 82174 of 268015. | That JSON, already produced for one mask. | Claim multi-view grouping or camera consensus. Kappa 1 means the union; the stricter filter was not exercised. An early changelog line that called this row partial disagrees with catalog. Catalog status is the one the matrix copies. |
 | SAM 3D meshes | done, still open as coverage | Host `0001.glb`, 3238692 bytes, max side 720, plus `0001_gaussian.ply` at 10153632 bytes, render, and overlay. Ledger `sam3d` attempt 2 accepted. | That mesh, already produced. | Label a Hunyuan, TRELLIS.2, or Pixal3D mesh as this file. Start ICP from a SAM 3D rotation vector the export did not store. The plan table that still says "Meshes: Missing" is stale. |
 | Trimmed similarity ICP | partial, still open | `similarity_icp.trimmed_similarity_icp`. First residual: scale 3.0328311154811303, translation `[-0.7755219189905452, 2.157819477783848, -0.28589919065664093]`, median 0.04999262711481225. Ledger `icp` attempt 1 accepted the file. Full-rate residual scale 1.6509326636538109. Ledger `icp` attempt 2 rejected it under `ours_iteration_1`. | A residual initialized from the stored SAM 3D pose, with silhouette filled, and the section 3.1 gate either undecided or an explicit ours reject. The file accept is not the pose accept. | Lower cutoffs so attempt 2 becomes an accept. Treat rotation seeds as the paper's initial pose. `GAP_MATRIX` matches catalog: partial. |
-| LaMa background infill | missing | `infill.plane_infill` and `complete_background`. No image when the plane render is missing. LaMa runs only when an image exists and weights are installed. The canvas records weights absent and a hole-fraction placeholder, spread about 4.08 reconstruction units, noted as not a fitted plane. | New background Gaussians on detected planes, colored from nearby plane surfaces in the input images, with optional LaMa inpainting. | Forge a PNG. Call the placeholder a completed background. |
+| LaMa background infill | partial | `infill.fit_plane` and `complete_background` fit a plane on CPU and fill the hole from nearby plane-surface colors. LaMa defaults off and is not imported when off. The ledger records method `plane` or `lama`, inputs, and outputs. Weights are not installed. The Fruits background on instance 58301075 has not been run. A counts-only placeholder is still not a completed background. | The Fruits plane-completion image, then an inpaint file only when LaMa is installed. | Forge a PNG. Call the placeholder a completed background. Make LaMa required. |
 
 #### 3.4 Materials, parts, articulation
 
@@ -593,7 +593,7 @@ Done rows stay as the artifact named here. Partial and missing rows name the cod
 | VLM material proposal | partial, this pass fixed as a recorded call | `gemini_client` tries `gemini-2.5-flash`, stores the 404, and does not relabel the fallback as 2.5. `material_vote.json` is class wood from `gemini-3.8-flash`. A later properties call on `0001_crop.jpg` returned plastic, friction 0.4, mass 0.05 kg, density 950. `request_audit` does not call unless `live=True`. One live audit returned "The provisional class stands." | A vote that includes a prior, a VLM class, and a keyword class, then the audit. The wood file and the plastic properties file already exist and stay labeled `gemini-3.8-flash`. | Call the fallback Gemini 2.5 Flash. Call one image class a per-Gaussian prior. Drop the historical 404. |
 | PartSAM | done, this pass fixed | `/workspace/PartSAM/evaluation/results/0001.ply`, 3723721 bytes. 1168 masks at 0.65, 15 after NMS. 161892 faces, so `use_graph_cut` was false. Batch size 4. Apex was not built; `FusedLayerNorm` fell back to `torch.nn.LayerNorm` and the checkpoint loaded. Ledger attempt 2 accepted. | That ply, already produced. | Rerun PartSAM on the same mesh to change the count. The part VLM is the CubePart row. |
 | CubePart | missing | Weights on disk. Attempt 2 is the diffusers 0.39 `QwenEmbedRope` TypeError: repo call `pos_embed(img_shapes, txt_seq_lens, device=...)` against `forward(video_fhw, device)`. No part mesh. The part VLM, `gemini-3.8-flash` after a 2.5 404, saw the 15 largest face-color parts of a ply the catalog says has 19 face colors, set `completion_needed` false, and described a fully captured table. Ledger `cubepart` attempt 3 rejected. `section34.choose_qwen_embed_rope_call` only picks the call shape. | A part mesh appended after a VLM says completion is needed, plus a ledger line. | Start inference after `completion_needed` false and call that the marker tip. Treat attempt 1's disk reject as the whole story. The canvas block said the VLM never looked and that catalog omitted attempt 2. The later canvas section and `GAP_MATRIX.md` record the VLM and attempt 2. This plan follows that later text. Status stays missing because no part mesh exists. |
-| Articulate Anything | partial | Two URDFs, each 13408 bytes, robot name table, PartNet 25959, links `base`, `furniture_body`, `wheel`, `wheel_2`, `wheel_3`, `wheel_4`, five fixed joints. `gemini-1.5-flash-latest` returned 404. `gemini-3.8-flash` labeled the clip as a table. Attempt 2 accepted the first URDF. Attempts 3 and 4 rejected both table URDFs for the fruit and kept the files. CoTracker wrote `aug_Fruits.mp4` (13307277 bytes) after `cotracker2.pth` (204396415 bytes). `sapien_simulate.py` exited 139. Joint actor `IndexError`. `feedback_score` -1. | A URDF whose links are the PartSAM parts of this object, then a simulation review the ledger accepts. | Call table 25959 a fruit joint set. The tool has no input for `0001.glb` or the 15 parts. Stage 9 of pipeline A is not this system. The matrix header still says 10 partial and 15 missing. This row is partial, so the working tally is 17 done, 11 partial, 14 missing. The header was not regenerated. |
+| Articulate Anything | partial | Two URDFs, each 13408 bytes, robot name table, PartNet 25959, links `base`, `furniture_body`, `wheel`, `wheel_2`, `wheel_3`, `wheel_4`, five fixed joints. `gemini-1.5-flash-latest` returned 404. `gemini-3.8-flash` labeled the clip as a table. Attempt 2 accepted the first URDF. Attempts 3 and 4 rejected both table URDFs for the fruit and kept the files. CoTracker wrote `aug_Fruits.mp4` (13307277 bytes) after `cotracker2.pth` (204396415 bytes). `sapien_simulate.py` exited 139. Joint actor `IndexError`. `feedback_score` -1. | A URDF whose links are the PartSAM parts of this object, then a simulation review the ledger accepts. | Call table 25959 a fruit joint set. The tool has no input for `0001.glb` or the 15 parts. Stage 9 of pipeline A is not this system. The matrix header was regenerated after that lag. The working tally moved again when the LaMa row became partial: 17 done, 12 partial, 13 missing. |
 
 #### 3.5 Fracture
 
@@ -666,7 +666,7 @@ Only rows the canvas still marks partial or missing are in this sequence. Done a
 
 This plan uses the canvas for what the gap review decided, and `catalog.py` / `GAP_MATRIX.md` plus the modules in sections 3–5 for what the repo contains.
 
-- The matrix header prints 17 done, 10 partial, 15 missing. The Articulate Anything row in that file is partial. The canvas says the same header lag, and counts 17 / 11 / 14 once that row is partial. Section 9.4 uses the row.
+- The matrix header used to print 17 done, 10 partial, 15 missing while the Articulate Anything row was already partial. That lag was closed at 17 / 11 / 14, then the LaMa row moved to partial. `catalog.py` and `GAP_MATRIX.md` now count 17 done, 12 partial, 13 missing. Section 9.4 uses the row.
 - The canvas MLP block says there is no network and that the 16 geometric features are not an interface. `caf16b7` adds `mlp/prior.py`, `mlp/contract.py`, and `mlp/train_prior.py`. The catalog row was not updated and still says `missing`. Both the decision (missing, and a local npz is not Harvard's) and the code (the trainer exists) are kept.
 - The canvas CubePart block says the part VLM never ran and that catalog omits attempt 2. The later canvas section and the matrix record the VLM reply `completion_needed: false`, the TypeError on attempt 2, and the reject on attempt 3. No part mesh. Status stays missing.
 - A canvas nuance bullet still says splatfacto stopped at 2000 iterations and that COLMAP was the 15-frame sample. The same canvas's full-rate callout, and the COLMAP and splatfacto `ran` fields, record 452 frames and `step-000029999.ckpt`. Those are the runs this plan keeps. The 15-frame and 2000-step files stay beside them. Color calibration is still undone.
@@ -698,7 +698,7 @@ flowchart TD
   Match["partial: metrics._hungarian past 8 objects"]
   BinFile["missing: bin score file"]
   KitFile["partial: kitchen score file"]
-  Planes["missing: infill.complete_background fitted plane"]
+  Planes["partial: infill.complete_background CPU plane, Fruits image still open"]
   Mlp["missing: catalog MLP row stays missing"]
   Cube["missing: CubePart part mesh"]
   Joints["partial: Articulate Anything motion review"]
@@ -756,24 +756,23 @@ Build note. Inputs: splat centers from the kept full-rate checkpoint, SAM masks,
 
 ### 10.3 Background planes and optional LaMa
 
-Canvas row: LaMa background infill is missing. Plane completion has no fitted plane.
+Canvas row: LaMa background infill is partial. The CPU plane fit writes a rendered image. The Fruits image and LaMa are still open.
 
 ```mermaid
 flowchart TD
-  Assoc["association counts from gaussians.json"]
+  Points["background points, colors, hole mask"]
+  Fit["infill.fit_plane"]
   Fill["infill.complete_background"]
-  Hold{"plane render on disk"}
-  Refuse["infill.plane_infill emitted false"]
-  Lama{"LaMa weights installed"}
+  Ledger["ledger method plane or lama"]
+  Lama{"use_lama and weights installed"}
   Patch["optional inpaint PNG"]
-  Assoc --> Fill --> Hold
-  Hold -->|no render| Refuse
-  Hold -->|render exists| Lama
-  Lama -->|weights absent| Refuse
-  Lama -->|weights present| Patch
+  Points --> Fit --> Fill --> Ledger
+  Fill --> Lama
+  Lama -->|flag off or weights absent| Ledger
+  Lama -->|weights present| Patch --> Ledger
 ```
 
-Build note. Input: the association JSON. The canvas records a hole-fraction placeholder, spread about 4.08 reconstruction units, noted as not a fitted plane. Output that counts: a plane-completion image whose new Gaussians take color from nearby plane surfaces in the input images, then an inpaint file only when LaMa is installed. Extend `infill.complete_background`. `plane_infill` writes nothing when the render is missing, and it does not run LaMa just because a render exists. LaMa stays optional texture on that plane fill. A forged PNG is a failed build.
+Build note. The CPU path is in `sceneagent.infill`. It does not read an ICP pose. Input: background points, one RGB color per point, and a 2D hole mask. Output that counts here: a plane-completion PNG whose hole pixels take the nearest plane-surface color, and a ledger entry with method, inputs, and outputs. `plane_infill` still writes nothing when the render is missing and no background points were passed, and it does not run LaMa just because a render exists. LaMa stays optional texture on that plane fill and is off by default. A forged PNG is a failed build. The remaining run is the Fruits background on Vast instance 58301075, through the existing GPU smoke, and it is not part of the CPU change.
 
 ### 10.4 Physics prior
 

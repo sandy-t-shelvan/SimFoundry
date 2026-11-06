@@ -2,7 +2,7 @@
 
 This document is the upgrade plan for a new tree at `sceneagent-simfoundry`. The tree is the SimFoundry fork (`sandy-t-shelvan/SimFoundry`, parent `NVlabs/SimFoundry`, commit `9e34ebe`) plus a `sceneagent` package. SceneAgent, the Harvard paper and site, is the target behavior. It is not a second codebase in this tree. No other application repository is imported.
 
-The row-by-row map is [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 11 partial, 14 missing, 42 rows. Done means this tree produced that block's artifact. A unit test of a formula is partial until the paper's output file exists. Missing means the named system has not been run. The block-by-block expansion is [`EXPANSION_PLAN.md`](EXPANSION_PLAN.md).
+The row-by-row map is [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 12 partial, 13 missing, 42 rows. Done means this tree produced that block's artifact. A unit test of a formula is partial until the paper's output file exists. Missing means the named system has not been run. The block-by-block expansion is [`EXPANSION_PLAN.md`](EXPANSION_PLAN.md).
 
 This document does not treat the SceneAgent website's demo numbers as results of this repository.
 
@@ -152,7 +152,7 @@ python -m sceneagent examples/phase1_place_scene.json --out runs/phase1_place
 - No invented friction, mass, modulus, or ICP thresholds.
 - No GraspClutter6D, MessyKitchens, or 4DCodeBench scores.
 - No pi0.5, GR00T, or real-robot loop.
-- No edit to the running Vast pipeline on instance `58357498`.
+- No Vast instance other than `58301075`.
 
 ## Risks
 
@@ -169,7 +169,7 @@ Phase 1 is the agent file contract, the published association and vote math, mod
 
 ## Block map
 
-The living rows are in [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 11 partial, 14 missing, 42 rows. The table below is an earlier snapshot and is not regenerated from the catalog.
+The living rows are in [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 12 partial, 13 missing, 42 rows. The table below is an earlier snapshot and is not regenerated from the catalog.
 
 | Block | Sub-block | Paper requirement | SimFoundry today | Status | Tool | Repo | Next action |
 |---|---|---|---|---|---|---|---|

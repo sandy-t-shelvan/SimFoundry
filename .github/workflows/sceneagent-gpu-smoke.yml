@@ -1,0 +1,47 @@
+# Manual GPU smoke for SceneAgent on Fruits.mp4.
+# Dispatch only. The instance id is the literal 58301075.
+# The job never creates, rents, resizes, or destroys an instance,
+# and it never calls a paid API.
+name: sceneagent-gpu-smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fruits-gpu-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Vast GPU smoke on Fruits.mp4
+        env:
+          VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+        run: python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts"
+      - name: Upload plan, ledger, and manifest
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sceneagent-fruits-smoke
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            sf4-artifacts/plan.json
+            sf4-artifacts/ledger.json
+            sf4-artifacts/manifest.json
+      # The smoke step writes this file only after the key scan passes.
+      # A scan failure leaves the directory empty, and if-no-files-found
+      # then fails the step without uploading.
+      - name: Upload redacted failure manifest
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sceneagent-fruits-failure-manifest
+          retention-days: 14
+          if-no-files-found: error
+          path: sf4-artifacts/manifest.json
