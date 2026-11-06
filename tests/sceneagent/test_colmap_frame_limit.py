@@ -19,6 +19,7 @@ from sceneagent.ingest_assets import (
     OURS_COLOR_HEURISTIC,
     OURS_GAIN_MAX,
     OURS_GAIN_MIN,
+    _bounded_channel_gain,
     _mean_packed_rgb,
     _scale_rgb_bytes,
     _write_rgb,
@@ -597,6 +598,26 @@ def test_gain_of_eight_is_kept_and_anything_above_is_clamped():
     assert raw > 8.0
     assert above["gains_by_image"]["dim"][0] == 8.0
     assert above["gains_by_image"]["dim"][0] != pytest.approx(raw)
+
+
+def test_bounded_channel_gain_rejects_nonfinite_and_keeps_unit_gain_at_zero():
+    # Direct call. The set-level finite check in per_image_color_gains does not
+    # run here, so these assertions see the guards inside _bounded_channel_gain.
+    for mean, center in (
+        (float("nan"), 40.0),
+        (float("inf"), 40.0),
+        (float("-inf"), 40.0),
+        (40.0, float("nan")),
+        (40.0, float("inf")),
+        (40.0, float("-inf")),
+        (float("nan"), float("nan")),
+        (float("inf"), float("-inf")),
+    ):
+        with pytest.raises(ValueError, match="finite"):
+            _bounded_channel_gain(mean, center)
+    assert _bounded_channel_gain(0.0, 40.0) == 1.0
+    assert _bounded_channel_gain(0.0, 0.0) == 1.0
+    assert _bounded_channel_gain(-1.0, 40.0) == 1.0
 
 
 def test_jpeg_round_trip_mean_error_is_the_recorded_fixture_bound():
