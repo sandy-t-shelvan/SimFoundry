@@ -41,3 +41,7 @@ Three jobs, each on `ubuntu-latest` and Python 3.11. Each job installs the pins 
 - **pytest unit** compiles `sceneagent`, then runs `pytest tests/sceneagent -m "not gpu"`.
 
 `pytest.ini` registers `gpu` and sets `--strict-markers`, so an unknown marker is an error. A GPU test is marked `gpu` and left out of this job. It is not skipped inside the job. SimFoundry's broader `tests/` tree needs optional packages (torch, Open3D, faiss) and is outside these jobs on purpose. `pytest.ini` still points `testpaths` at `tests` for people who have those environments. CI passes an explicit path so collection stays on the phase-1 suite.
+
+## GPU smoke
+
+`.github/workflows/sceneagent-gpu-smoke.yml` is manual (`workflow_dispatch` on the Actions tab, input `instance_id`). It does not run on push or pull request. The only accepted id is `58301075`, the existing Texas Vast instance. The job reads `VAST_API_KEY` from the Actions secret, starts that instance when it is stopped, runs `python -m sceneagent` on `docs/assets/example_videos/Fruits.mp4`, and uploads `plan.json`, `ledger.json`, and `manifest.json` as the artifact `sceneagent-fruits-smoke`. If this job started the instance, it stops it again. A ledger entry of `reject` or `deferred`, or a COLMAP accept that did not set `use_gpu`, fails the job. The workflow does not create, rent, resize, or destroy an instance.
