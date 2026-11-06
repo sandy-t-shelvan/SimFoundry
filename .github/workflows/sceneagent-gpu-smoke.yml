@@ -1,28 +1,151 @@
-# Manual GPU smoke for SceneAgent on Fruits.mp4.
-# Dispatch only. The instance id is the literal 58301075.
-# The job never creates, rents, resizes, or destroys an instance,
-# and it never calls a paid API.
+# GPU smoke for SceneAgent on Fruits.mp4.
+# The instance id is the literal 58301075. No input, label, or request file
+# can change it. The job never creates, rents, resizes, or destroys an instance.
+#
+# pull_request_target loads this file from the repository default branch
+# (main). A label on a pull request that targets Main_duplicate does not run
+# until main contains this file. The request-file push is a plain push, so it
+# uses the workflow committed on Main_duplicate.
 name: sceneagent-gpu-smoke
 
 on:
   workflow_dispatch:
+  pull_request_target:
+    types: [labeled]
+  push:
+    branches:
+      - Main_duplicate
+    paths:
+      - ci/gpu-run-request.json
 
 permissions:
   contents: read
 
+concurrency:
+  group: gpu-smoke-58301075
+  cancel-in-progress: false
+
 jobs:
-  fruits-gpu-smoke:
+  request_file_guard:
+    name: request-file guard
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.decide.outputs.proceed }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout the pushed commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Refuse a push that changes anything but the request file
+        id: decide
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          : "${BEFORE:?}"
+          : "${AFTER:?}"
+          : "${GITHUB_OUTPUT:?}"
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "gpu-smoke request-file refused: push has no before SHA"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git checkout --detach "$BEFORE"
+          echo "gpu-smoke diff checker at $(git rev-parse HEAD)"
+          python -m sceneagent.gpu_smoke_trigger check-push-diff
+
+  fruits_gpu_smoke:
+    name: fruits-gpu-smoke
+    needs: request_file_guard
+    # LABEL_SMOKE_GATE. REQUIRE_QA_PM_PASS is the false in the !false below.
+    # Flip that token to !true to also require the qa-pass and pm-pass labels.
+    # Left off: a same-repo run-gpu-smoke label from an allowlisted actor is enough.
+    if: >-
+      always() &&
+      (needs.request_file_guard.result == 'success' || needs.request_file_guard.result == 'skipped') &&
+      (github.event_name != 'push' || needs.request_file_guard.outputs.proceed == 'true') &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'push' ||
+        (
+          github.event_name == 'pull_request_target' &&
+          github.event.action == 'labeled' &&
+          github.event.label.name == 'run-gpu-smoke' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          (github.actor == 'sandy-t-shelvan' || github.actor == 'cursor[bot]') &&
+          (!false || (contains(github.event.pull_request.labels.*.name, 'qa-pass') && contains(github.event.pull_request.labels.*.name, 'pm-pass')))
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Log gpu-smoke actor
+        env:
+          GPU_SMOKE_ACTOR: ${{ github.actor }}
+        run: |
+          : "${GPU_SMOKE_ACTOR:?}"
+          echo "gpu-smoke actor=${GPU_SMOKE_ACTOR}"
+
+      - name: Checkout base orchestrator
+        if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: orchestrator
+          persist-credentials: false
+
+      - name: Checkout PR head payload
+        if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: payload
+          persist-credentials: false
+
+      - name: Checkout orchestrator for dispatch or request-file
+        if: github.event_name != 'pull_request_target'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: orchestrator
+          persist-credentials: false
+
+      - name: Checkout payload for dispatch or request-file
+        if: github.event_name != 'pull_request_target'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: payload
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Vast GPU smoke on Fruits.mp4
+        working-directory: orchestrator
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
-        run: python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts"
+          SMOKE_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event_name == 'pull_request_target' && 'label' || github.event_name == 'push' && 'request-file' || 'invalid' }}
+          SMOKE_ACTOR: ${{ github.actor }}
+          SMOKE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          : "${SMOKE_TRIGGER:?}"
+          : "${SMOKE_ACTOR:?}"
+          : "${SMOKE_SHA:?}"
+          python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$SMOKE_SHA"
+
       - name: Upload plan, ledger, and manifest
         if: success()
         uses: actions/upload-artifact@v4
@@ -34,6 +157,7 @@ jobs:
             sf4-artifacts/plan.json
             sf4-artifacts/ledger.json
             sf4-artifacts/manifest.json
+
       # The smoke step writes this file only after the key scan passes.
       # A scan failure leaves the directory empty, and if-no-files-found
       # then fails the step without uploading.
@@ -45,3 +169,40 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           path: sf4-artifacts/manifest.json
+
+  label_cleanup:
+    name: label-cleanup
+    needs: fruits_gpu_smoke
+    if: >-
+      always() &&
+      github.event_name == 'pull_request_target' &&
+      github.event.action == 'labeled' &&
+      github.event.label.name == 'run-gpu-smoke' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      needs.fruits_gpu_smoke.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment the run URL and remove run-gpu-smoke
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CONCLUSION: ${{ needs.fruits_gpu_smoke.result }}
+          GPU_SMOKE_ACTOR: ${{ github.actor }}
+        run: |
+          : "${GPU_SMOKE_ACTOR:?}"
+          : "${CONCLUSION:?}"
+          : "${REPO:?}"
+          : "${PR_NUMBER:?}"
+          : "${RUN_URL:?}"
+          echo "gpu-smoke actor=${GPU_SMOKE_ACTOR} conclusion=${CONCLUSION}"
+          if gh api --method DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/run-gpu-smoke"; then
+            echo "removed label run-gpu-smoke"
+          else
+            echo "label run-gpu-smoke was already absent"
+          fi
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "GPU smoke conclusion: ${CONCLUSION}. Run: ${RUN_URL}"

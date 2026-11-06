@@ -48,8 +48,12 @@ from sceneagent.vast_smoke import (
     request_json,
     require_approved_instance,
     rsync_invocations,
+    assess_secret_forwarding,
+    iter_shipped_files,
+    normalize_run_context,
     run_smoke,
     ssh_base_argv,
+    ssh_forwarding_problems,
     ssh_key_id_from_attach,
     wait_until_ssh_accepts,
 )
@@ -288,9 +292,15 @@ def test_add_mask_is_emitted_inside_actions(capsys, monkeypatch):
 
 def test_child_env_drops_the_api_key(monkeypatch):
     monkeypatch.setenv("VAST_API_KEY", "super-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-token-value")
+    monkeypatch.setenv("GH_TOKEN", "gh-token-value-2")
     env = child_env()
     assert "VAST_API_KEY" not in env
-    assert "super-secret" not in " ".join(env.values())
+    assert "GITHUB_TOKEN" not in env
+    assert "GH_TOKEN" not in env
+    blob = " ".join(env.values())
+    assert "super-secret" not in blob
+    assert "gh-token-value" not in blob
 
 
 def test_remote_command_is_the_fruits_entry_point_and_carries_no_secret():
@@ -722,61 +732,28 @@ def test_run_steps_do_not_interpolate_expressions():
         assert "${{" not in block
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "--instance-id 58301075" in text
-    assert '"$GITHUB_WORKSPACE"' in text
+    # The payload and the artifact dir stay under the runner env var.
+    # Expressions are kept out of run scripts by the loop above.
+    assert '"$GITHUB_WORKSPACE/payload"' in text
+    assert '"$GITHUB_WORKSPACE/sf4-artifacts"' in text
 
 
-def test_workflow_has_no_inputs_and_only_workflow_dispatch():
+def test_workflow_dispatch_has_no_inputs_and_keeps_the_instance_literal():
     text = WORKFLOW.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    start = next(index for index, line in enumerate(lines) if line == "on:")
-    block = []
-    for line in lines[start + 1 :]:
-        if line and not line.startswith(" ") and not line.startswith("#"):
-            break
-        block.append(line)
-    trigger = "\n".join(block)
-    assert trigger.strip() == "workflow_dispatch:"
+    assert "workflow_dispatch:" in text
     assert "inputs:" not in text
     assert "inputs." not in text
     assert "--instance-id 58301075" in text
-    for line in lines:
-        stripped = line.strip()
-        assert stripped not in {
-            "push:",
-            "pull_request:",
-            "pull_request_target:",
-            "schedule:",
-        }
-
-
-def test_workflow_is_manual_dispatch_only():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    lines = text.splitlines()
-    start = next(index for index, line in enumerate(lines) if line == "on:")
-    block = []
-    for line in lines[start + 1 :]:
-        if line and not line.startswith(" ") and not line.startswith("#"):
-            break
-        block.append(line)
-    trigger = "\n".join(block)
-    assert "workflow_dispatch:" in trigger
-    assert "push" not in trigger
-    assert "pull_request" not in trigger
-    for line in lines:
-        stripped = line.strip()
-        assert stripped not in {
-            "push:",
-            "pull_request:",
-            "pull_request_target:",
-            "schedule:",
-        }
+    assert "pull_request_target:" in text
+    for line in text.splitlines():
+        assert line.strip() != "pull_request:"
+        assert line.strip() != "schedule:"
         assert "continue-on-error" not in line
-        if "runs-on" in line:
+        if "runs-on:" in line:
             assert "ubuntu-latest" in line
         if "echo" in line:
             assert "VAST_API_KEY" not in line
     assert text.count("secrets.VAST_API_KEY") == 1
-    assert "58301075" in text
     assert "sceneagent-fruits-smoke" in text
     assert "plan.json" in text
     assert "ledger.json" in text
@@ -1222,7 +1199,15 @@ def test_failure_upload_step_is_manifest_only():
     start = next(
         index for index, line in enumerate(lines) if "Upload redacted failure" in line
     )
-    step = "\n".join(lines[start:])
+    end = next(
+        (
+            index
+            for index, line in enumerate(lines[start + 1 :], start + 1)
+            if line.startswith("  ") and not line.startswith("   ") and line.endswith(":")
+        ),
+        len(lines),
+    )
+    step = "\n".join(lines[start:end])
     assert "if: failure()" in step
     assert "sf4-artifacts/manifest.json" in step
     assert "plan.json" not in step
@@ -1935,3 +1920,230 @@ def test_detach_guard_refuses_any_other_key_id(monkeypatch):
         assert calls == [("DELETE", own)]
     finally:
         arm_own_key_delete(None)
+
+
+def test_ssh_argv_does_not_forward_environment():
+    argv = ssh_base_argv("/tmp/sf4_ed25519", "/tmp/known_hosts", 22)
+    assert ssh_forwarding_problems(argv) == []
+    assert "ForwardAgent=no" in argv
+    assert "ClearAllForwardings=yes" in argv
+    assert "/dev/null" in argv
+    forwarded = [*argv, "-o", "SendEnv=GITHUB_TOKEN"]
+    assert any("SendEnv" in problem for problem in ssh_forwarding_problems(forwarded))
+
+
+def test_rsync_does_not_copy_git_or_credential_files(tmp_path):
+    checkout = _checkout(tmp_path)
+    git_dir = checkout / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text(
+        "extraheader = AUTHORIZATION: basic planted-git-token\n",
+        encoding="utf-8",
+    )
+    (checkout / "sceneagent" / "credentials.json").write_text(
+        "token\n", encoding="utf-8"
+    )
+    nested = checkout / "sceneagent" / ".git"
+    nested.mkdir()
+    (nested / "config").write_text("planted-git-token\n", encoding="utf-8")
+    shipped = [
+        path.relative_to(checkout).as_posix() for path in iter_shipped_files(checkout)
+    ]
+    assert shipped
+    assert all(".git" not in path.split("/") for path in shipped)
+    assert "sceneagent/credentials.json" not in shipped
+    invocations = rsync_invocations(
+        checkout,
+        "ssh6.vast.ai",
+        22,
+        "/tmp/sf4_ed25519",
+        "/tmp/known_hosts",
+        REMOTE_REPO,
+    )
+    blob = " ".join(" ".join(command) for command, _cwd in invocations)
+    assert "--exclude" in blob
+    assert ".git" in blob
+    assert "planted-git-token" not in blob
+
+
+def test_mentioning_the_key_name_is_not_treated_as_forwarding_the_value(tmp_path):
+    checkout = _checkout(tmp_path)
+    (checkout / "sceneagent" / "note.py").write_text(
+        'os.environ["VAST_API_KEY"]\n',
+        encoding="utf-8",
+    )
+    record, problems = assess_secret_forwarding(checkout, "sf4-api-key-value")
+    assert problems == []
+    assert record["secrets_forwarded"] is False
+    assert record["payload_secret_hits"] == 0
+
+
+def test_secret_in_payload_is_refused_before_any_gpu_call(
+    tmp_path, monkeypatch, capsys
+):
+    secret = "sf4-payload-secret"
+    monkeypatch.setenv("GITHUB_TOKEN", "sf4-github-token-value")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    checkout = _checkout(tmp_path)
+    (checkout / "sceneagent" / "note.txt").write_text(secret + "\n", encoding="utf-8")
+
+    def request(*_args, **_kwargs):
+        raise AssertionError("GPU call")
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        checkout,
+        tmp_path / "artifacts",
+        secret,
+        request=request,
+        sleep=lambda _seconds: None,
+        trigger="label",
+        actor="cursor[bot]",
+        commit_sha="a" * 40,
+    )
+    assert code == 2
+    assert not (tmp_path / "artifacts").exists()
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "sf4-github-token-value" not in captured.out
+    assert "sf4-github-token-value" not in captured.err
+    assert "No instance call was made." in captured.err
+
+
+def test_git_credentials_in_the_checkout_are_not_forwarded(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "sf4-git-credential")
+    checkout = _checkout(tmp_path)
+    git_dir = checkout / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text(
+        "[http]\n\textraheader = AUTHORIZATION: basic sf4-git-credential\n",
+        encoding="utf-8",
+    )
+    record, problems = assess_secret_forwarding(checkout, "sf4-api-key-value")
+    assert problems == []
+    assert record["secrets_forwarded"] is False
+    assert record["git_credentials_shipped"] is False
+
+
+def test_manifest_records_trigger_actor_sha_and_no_secret_forwarded(
+    tmp_path, capsys, monkeypatch
+):
+    secret = "sf4-not-a-real-key"
+    token = "sf4-github-token-not-shipped"
+    monkeypatch.setenv("VAST_API_KEY", secret)
+    monkeypatch.setenv("GITHUB_TOKEN", token)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert api_key == secret
+        assert secret not in url
+        assert token not in url
+        return 200, {"instances": _texas("running")}
+
+    def write_passing_run(run):
+        _write_run(run, decision="accept", use_gpu=True)
+        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+
+    remote = _Remote(write_passing_run)
+    sha = "a" * 40
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        secret,
+        request=request,
+        remote_factory=lambda _row: remote,
+        sleep=lambda _seconds: None,
+        trigger="label",
+        actor="cursor[bot]",
+        commit_sha=sha,
+    )
+    assert code == 0
+    text = (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(text)
+    assert manifest["trigger"] == "label"
+    assert manifest["actor"] == "cursor[bot]"
+    assert manifest["commit_sha"] == sha
+    assert manifest["secrets_forwarded"] is False
+    assert manifest["secret_forwarding"] == {
+        "secrets_forwarded": False,
+        "ssh_env_forwarded": False,
+        "git_credentials_shipped": False,
+        "payload_secret_hits": 0,
+    }
+    assert secret not in text
+    assert token not in text
+    captured = capsys.readouterr()
+    assert secret not in captured.out + captured.err
+    assert token not in captured.out + captured.err
+    assert "cursor[bot]" in captured.out
+
+
+def test_failure_manifest_records_trigger_and_no_secret(tmp_path, monkeypatch):
+    secret = "sf4-not-a-real-key"
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        return 200, {"instances": _texas("offline")}
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "artifacts",
+        secret,
+        request=request,
+        sleep=lambda _seconds: None,
+        trigger="dispatch",
+        actor="sandy-t-shelvan",
+        commit_sha="b" * 40,
+    )
+    assert code == 2
+    artifact = tmp_path / "artifacts"
+    assert [path.name for path in artifact.iterdir()] == ["manifest.json"]
+    text = (artifact / "manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(text)
+    assert manifest["trigger"] == "dispatch"
+    assert manifest["actor"] == "sandy-t-shelvan"
+    assert manifest["commit_sha"] == "b" * 40
+    assert manifest["secrets_forwarded"] is False
+    assert manifest["passed"] is False
+    assert secret not in text
+
+
+def test_manifest_refuses_a_record_that_forwarded_a_secret(tmp_path):
+    run = tmp_path / "run"
+    _write_run(run, decision="accept", use_gpu=True)
+    (run / "plan.json").write_text("{}\n", encoding="utf-8")
+    with pytest.raises(SmokeError, match="forwarded a secret"):
+        collect_artifact_manifest(
+            run,
+            command=_command(),
+            instance_id=ALLOWED_INSTANCE_ID,
+            secret_forwarding={
+                "secrets_forwarded": True,
+                "ssh_env_forwarded": True,
+                "git_credentials_shipped": False,
+                "payload_secret_hits": 1,
+            },
+        )
+    assert not (run / "manifest.json").exists()
+
+
+def test_run_context_cannot_change_the_instance_id():
+    context = normalize_run_context("request-file", "sandy-t-shelvan", "c" * 40)
+    assert context == {
+        "trigger": "request-file",
+        "actor": "sandy-t-shelvan",
+        "commit_sha": "c" * 40,
+    }
+    assert "instance" not in context
+    for trigger, actor, sha in (
+        ("rent", "sandy-t-shelvan", "c" * 40),
+        ("label", "bad actor", "c" * 40),
+        ("label", "cursor[bot]", "not-a-sha"),
+        ("label", "a" * 80, "c" * 40),
+    ):
+        with pytest.raises(InstanceNotApproved):
+            normalize_run_context(trigger, actor, sha)

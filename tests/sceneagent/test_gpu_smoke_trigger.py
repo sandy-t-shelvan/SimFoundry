@@ -1,0 +1,243 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""CPU tests for GPU smoke triggers. No Vast call and no network."""
+
+import json
+import subprocess
+from pathlib import Path
+
+from sceneagent.gpu_smoke_trigger import (
+    LABEL_ACTORS,
+    REQUEST_FIELDS,
+    REQUEST_FILE,
+    REQUIRE_QA_PM_PASS,
+    check_push_diff,
+    classify_push_diff,
+    label_trigger_allowed,
+    validate_request_document,
+    validate_request_text,
+    workflow_label_actors,
+    workflow_safety_findings,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+WORKFLOW = ROOT / ".github" / "workflows" / "sceneagent-gpu-smoke.yml"
+SCHEMA = ROOT / "ci" / "gpu-run-request.schema.json"
+EXAMPLE = ROOT / "ci" / "gpu-run-request.example.json"
+THIS_REPO = "sandy-t-shelvan/SimFoundry"
+
+
+def _git(repo: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _init_repo(repo: Path) -> str:
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "sf14@example.com")
+    _git(repo, "config", "user.name", "sf14")
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "base")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _label(**overrides: object) -> tuple[bool, str]:
+    payload = {
+        "event_name": "pull_request_target",
+        "action": "labeled",
+        "label": "run-gpu-smoke",
+        "head_repo": THIS_REPO,
+        "repository": THIS_REPO,
+        "actor": "cursor[bot]",
+        "pr_labels": ["run-gpu-smoke"],
+    }
+    payload.update(overrides)
+    return label_trigger_allowed(**payload)  # type: ignore[arg-type]
+
+
+def test_fork_label_does_not_run():
+    allowed, reason = _label(head_repo="someone/SimFoundry")
+    assert allowed is False
+    assert "fork" in reason
+    allowed, _reason = _label(head_repo="")
+    assert allowed is False
+
+
+def test_label_requires_the_exact_name_and_an_allowlisted_actor():
+    assert _label()[0] is True
+    assert _label(actor="sandy-t-shelvan")[0] is True
+    assert _label(label="run-gpu-smoke-now")[0] is False
+    assert _label(actor="someone-else")[0] is False
+    assert _label(event_name="pull_request")[0] is False
+    allowed, reason = _label()
+    assert reason == "gpu-smoke actor=cursor[bot]"
+
+
+def test_qa_pm_gate_defaults_off_and_can_be_required():
+    assert REQUIRE_QA_PM_PASS is False
+    assert _label(pr_labels=["run-gpu-smoke"])[0] is True
+    refused, reason = _label(pr_labels=["run-gpu-smoke"], require_qa_pm_pass=True)
+    assert refused is False
+    assert "QA and PM PASS" in reason
+    allowed, _reason = _label(
+        pr_labels=["run-gpu-smoke", "qa-pass", "pm-pass"],
+        require_qa_pm_pass=True,
+    )
+    assert allowed is True
+
+
+def test_mixed_push_is_refused():
+    ok, message = classify_push_diff(
+        ["ci/gpu-run-request.json", "sceneagent/vast_smoke.py"]
+    )
+    assert ok is False
+    assert "refused" in message
+    assert "sceneagent/vast_smoke.py" in message
+    ok, message = classify_push_diff(["sceneagent/vast_smoke.py"])
+    assert ok is False
+    ok, message = classify_push_diff([])
+    assert ok is False
+    ok, message = classify_push_diff(["ci/gpu-run-request.json"])
+    assert ok is True
+
+
+def test_mixed_commit_is_refused(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    before = _init_repo(repo)
+    request = repo / "ci"
+    request.mkdir()
+    (request / "gpu-run-request.json").write_text(
+        '{"ticket_id":"SF-14","reason":"mixed"}\n',
+        encoding="utf-8",
+    )
+    (repo / "sceneagent_note.txt").write_text("unreviewed\n", encoding="utf-8")
+    _git(repo, "add", "ci/gpu-run-request.json", "sceneagent_note.txt")
+    _git(repo, "commit", "-q", "-m", "mixed")
+    after = _git(repo, "rev-parse", "HEAD")
+    output = tmp_path / "output.txt"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BEFORE", before)
+    monkeypatch.setenv("AFTER", after)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert check_push_diff() == 0
+    assert "proceed=false" in output.read_text(encoding="utf-8")
+    captured = capsys.readouterr()
+    assert "refused" in captured.out
+    assert "sceneagent_note.txt" in captured.out
+
+
+def test_request_file_only_commit_is_allowed(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / "repo"
+    before = _init_repo(repo)
+    request = repo / "ci"
+    request.mkdir()
+    (request / "gpu-run-request.json").write_text(
+        '{"ticket_id":"KAN-14","reason":"standing GPU approval for 58301075"}\n',
+        encoding="utf-8",
+    )
+    _git(repo, "add", "ci/gpu-run-request.json")
+    _git(repo, "commit", "-q", "-m", "request only")
+    after = _git(repo, "rev-parse", "HEAD")
+    output = tmp_path / "output.txt"
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("BEFORE", before)
+    monkeypatch.setenv("AFTER", after)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert check_push_diff() == 0
+    assert output.read_text(encoding="utf-8") == "proceed=true\n"
+    assert "accepted" in capsys.readouterr().out
+
+
+def test_request_file_rejects_instance_id_and_invalid_json():
+    errors = validate_request_document(
+        {"ticket_id": "SF-14", "reason": "because", "instance_id": 58301075}
+    )
+    assert any("instance_id" in error for error in errors)
+    assert validate_request_text("{") == ["request file is not JSON"]
+    assert validate_request_document(["SF-14"]) == [
+        "request file must be a JSON object"
+    ]
+    assert validate_request_text('{"ticket_id":"SF-14","reason":"ok"}\n') == []
+
+
+def test_request_schema_and_example_cannot_name_an_instance():
+    schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+    assert schema["additionalProperties"] is False
+    assert tuple(schema["required"]) == REQUEST_FIELDS
+    assert tuple(schema["properties"]) == REQUEST_FIELDS
+    assert "instance_id" not in schema["properties"]
+    example = json.loads(EXAMPLE.read_text(encoding="utf-8"))
+    assert validate_request_document(example) == []
+    assert not (ROOT / REQUEST_FILE).exists()
+
+
+def test_zero_sha_push_does_not_proceed(tmp_path, monkeypatch, capsys):
+    output = tmp_path / "output.txt"
+    monkeypatch.setenv("BEFORE", "0" * 40)
+    monkeypatch.setenv("AFTER", "a" * 40)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert check_push_diff() == 0
+    assert "proceed=false" in output.read_text(encoding="utf-8")
+    assert "no before SHA" in capsys.readouterr().out
+
+
+def test_workflow_safety_contract():
+    findings = workflow_safety_findings(WORKFLOW.read_text(encoding="utf-8"))
+    assert findings == []
+    assert (
+        tuple(workflow_label_actors(WORKFLOW.read_text(encoding="utf-8")))
+        == LABEL_ACTORS
+    )
+
+
+def test_keyed_step_uses_base_orchestrator_and_does_not_execute_payload():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    broken = text.replace(
+        "working-directory: orchestrator",
+        "working-directory: payload",
+        1,
+    )
+    findings = workflow_safety_findings(broken)
+    assert any("payload" in item for item in findings)
+    installed = text.replace(
+        "python -m sceneagent.vast_smoke",
+        "pip install -e payload && python -m sceneagent.vast_smoke",
+        1,
+    )
+    assert any("pip install" in item for item in workflow_safety_findings(installed))
+
+
+def test_write_token_job_does_not_checkout_head():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    broken = text.replace(
+        "      - name: Comment the run URL and remove run-gpu-smoke\n",
+        "      - uses: actions/checkout@v4\n"
+        "        with:\n"
+        "          path: payload\n"
+        "          ref: ${{ github.event.pull_request.head.sha }}\n"
+        "      - name: Comment the run URL and remove run-gpu-smoke\n",
+        1,
+    )
+    findings = workflow_safety_findings(broken)
+    assert any(
+        "cleanup" in item or "checkout" in item or "head" in item for item in findings
+    )
+
+
+def test_label_gate_drops_a_fork_when_the_condition_is_removed():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    broken = text.replace(
+        "github.event.pull_request.head.repo.full_name == github.repository &&\n",
+        "",
+        1,
+    )
+    findings = workflow_safety_findings(broken)
+    assert any("head.repo" in item for item in findings)
