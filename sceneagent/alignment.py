@@ -66,8 +66,11 @@ def accept_alignment(residuals, thresholds=None):
     ours = _using_ours(thresholds)
     if not ours:
         missing = [
-            name for name in RESIDUAL_NAMES
-            if name not in residuals or name not in thresholds or residuals.get(name) is None
+            name
+            for name in RESIDUAL_NAMES
+            if name not in residuals
+            or name not in thresholds
+            or residuals.get(name) is None
         ]
         if missing or not thresholds:
             return {

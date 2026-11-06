@@ -5,6 +5,8 @@ or a scripted success count. The remaining identifiers are listed so later
 phases have a stable name. Their status is ``not_implemented``.
 """
 
+from typing import Any
+
 PHASE1_SKILLS = (
     "SCENEAGENT-RUN-PIPELINE",
     "SCENEAGENT-INGEST-DATA",
@@ -51,22 +53,26 @@ LATER_SKILLS = (
 
 
 def plan_steps():
-    steps = []
+    steps: list[dict[str, Any]] = []
     for skill in PHASE1_SKILLS:
         steps.append({"skill": skill, "status": "implemented_phase1"})
     for skill, reason in GATE_SKILLS:
         steps.append({"skill": skill, "status": "gate_only", "reason": reason})
     for skill, status, reason, fix_report in STAGE_OPENED_SKILLS:
-        steps.append({
-            "skill": skill,
-            "status": status,
-            "reason": reason,
-            "fix_report_from_model": fix_report,
-        })
+        steps.append(
+            {
+                "skill": skill,
+                "status": status,
+                "reason": reason,
+                "fix_report_from_model": fix_report,
+            }
+        )
     for skill in LATER_SKILLS:
-        steps.append({
-            "skill": skill,
-            "status": "not_implemented",
-            "reason": "Requires reconstruction, a simulator, or a learned policy that phase 1 does not run.",
-        })
+        steps.append(
+            {
+                "skill": skill,
+                "status": "not_implemented",
+                "reason": "Requires reconstruction, a simulator, or a learned policy that phase 1 does not run.",
+            }
+        )
     return steps

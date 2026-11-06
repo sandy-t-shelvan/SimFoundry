@@ -61,7 +61,7 @@ def render_report(scene_name, grid):
 <table>
 <thead><tr><th>Object sister</th>{header}</tr></thead>
 <tbody>
-{''.join(body)}
+{"".join(body)}
 </tbody>
 </table>
 </body>

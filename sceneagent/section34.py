@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from sceneagent.agent_loop import parse_material_class
 from sceneagent.gemini_client import PAPER_MODEL_ID
@@ -31,11 +32,13 @@ from sceneagent.taxonomy import (
 # video_fhw and then passes device twice, which is the TypeError seen on Quebec.
 DIFFUSERS_039_FORWARD = "QwenEmbedRope.forward(video_fhw, device)"
 REPO_POS_EMBED_CALL = "pos_embed(img_shapes, txt_seq_lens, device=...)"
-ROPE_CRASH = "TypeError: QwenEmbedRope.forward() got multiple values for argument 'device'"
+ROPE_CRASH = (
+    "TypeError: QwenEmbedRope.forward() got multiple values for argument 'device'"
+)
 
 # Listing from the Quebec zip. The download is not started by this module.
 ARTICULATE_UNCOMPRESSED_BYTES = 15_616_309_082
-ARTICULATE_SPARE_BYTES = 8 * (1024 ** 3)
+ARTICULATE_SPARE_BYTES = 8 * (1024**3)
 
 HISTORICAL_VLM = (
     {"model_id": "gemini-2.5-flash", "http_status": 404},
@@ -43,37 +46,45 @@ HISTORICAL_VLM = (
 )
 
 
-def equation2_vote(object_name, vlm_class=None, physics_prior=None, vlm_confidence=None):
+def equation2_vote(
+    object_name, vlm_class=None, physics_prior=None, vlm_confidence=None
+):
     """Vote with equation (2). A missing prior is absent and is not the MLP.
 
     ``vlm_class`` is the existing class string. ``physics_prior`` is a mapping
     with ``class`` and ``confidence``, or None. ``claimed_mlp`` stays false
     unless the caller sets ``from_mlp`` on a prior this process did not train.
     """
-    sources = []
-    voters = []
+    sources: list[dict[str, Any]] = []
+    voters: list[dict[str, Any]] = []
     if physics_prior is None:
-        sources.append({
-            "source": "physics_prior",
-            "status": "absent",
-            "class": None,
-            "weight": None,
-            "claimed_mlp": False,
-            "note": "No per-Gaussian MLP output. The class is not the MLP.",
-        })
+        sources.append(
+            {
+                "source": "physics_prior",
+                "status": "absent",
+                "class": None,
+                "weight": None,
+                "claimed_mlp": False,
+                "note": "No per-Gaussian MLP output. The class is not the MLP.",
+            }
+        )
     else:
         material = require_material(physics_prior["class"])
         confidence = float(physics_prior["confidence"])
         from_mlp = bool(physics_prior.get("from_mlp"))
-        sources.append({
-            "source": "physics_prior",
-            "status": "present",
-            "class": material,
-            "weight": confidence,
-            "weight_basis": "caller_confidence",
-            "claimed_mlp": from_mlp,
-        })
-        voters.append({"source": "physics_prior", "class": material, "weight": confidence})
+        sources.append(
+            {
+                "source": "physics_prior",
+                "status": "present",
+                "class": material,
+                "weight": confidence,
+                "weight_basis": "caller_confidence",
+                "claimed_mlp": from_mlp,
+            }
+        )
+        voters.append(
+            {"source": "physics_prior", "class": material, "weight": confidence}
+        )
     keyword = keyword_material(object_name, weight=DEFAULT_KEYWORD_WEIGHT)
     keyword["weight_basis"] = (
         "taxonomy.DEFAULT_KEYWORD_WEIGHT; the paper says keyword priors use a "
@@ -81,15 +92,19 @@ def equation2_vote(object_name, vlm_class=None, physics_prior=None, vlm_confiden
     )
     keyword["status"] = "present"
     sources.append(keyword)
-    voters.append({"source": "keyword", "class": keyword["class"], "weight": keyword["weight"]})
+    voters.append(
+        {"source": "keyword", "class": keyword["class"], "weight": keyword["weight"]}
+    )
     if vlm_class is None:
-        sources.append({
-            "source": "vlm",
-            "status": "absent",
-            "class": None,
-            "weight": None,
-            "note": "No VLM class string was supplied.",
-        })
+        sources.append(
+            {
+                "source": "vlm",
+                "status": "absent",
+                "class": None,
+                "weight": None,
+                "note": "No VLM class string was supplied.",
+            }
+        )
     else:
         material = require_material(vlm_class)
         if vlm_confidence is None:
@@ -98,13 +113,15 @@ def equation2_vote(object_name, vlm_class=None, physics_prior=None, vlm_confiden
         else:
             weight = float(vlm_confidence)
             basis = "caller_confidence"
-        sources.append({
-            "source": "vlm",
-            "status": "present",
-            "class": material,
-            "weight": weight,
-            "weight_basis": basis,
-        })
+        sources.append(
+            {
+                "source": "vlm",
+                "status": "present",
+                "class": material,
+                "weight": weight,
+                "weight_basis": basis,
+            }
+        )
         voters.append({"source": "vlm", "class": material, "weight": weight})
     winner, scores = vote_material(voters)
     return {
@@ -115,8 +132,12 @@ def equation2_vote(object_name, vlm_class=None, physics_prior=None, vlm_confiden
         "scores": scores,
         "sources": sources,
         "physics_prior": "absent" if physics_prior is None else "present",
-        "claimed_mlp": False if physics_prior is None else bool(physics_prior.get("from_mlp")),
-        "class_is_mlp": bool(physics_prior and physics_prior.get("from_mlp") and winner is not None),
+        "claimed_mlp": False
+        if physics_prior is None
+        else bool(physics_prior.get("from_mlp")),
+        "class_is_mlp": bool(
+            physics_prior and physics_prior.get("from_mlp") and winner is not None
+        ),
     }
 
 
@@ -169,7 +190,9 @@ def request_audit(object_name, provisional_class, sources, api_key=None, live=Fa
     body["model_id"] = reply.get("model_id")
     body["http_status"] = reply.get("http_status")
     body["text"] = reply.get("text") or ""
-    body["decision"] = "replied" if reply.get("http_status") == 200 and body["text"] else "pending"
+    body["decision"] = (
+        "replied" if reply.get("http_status") == 200 and body["text"] else "pending"
+    )
     body["used_paper_model"] = bool(reply.get("used_paper_model"))
     return body
 
@@ -220,7 +243,7 @@ def _completion_needed(text):
     end = raw.rfind("}")
     if start >= 0 and end > start:
         try:
-            payload = json.loads(raw[start:end + 1])
+            payload = json.loads(raw[start : end + 1])
         except json.JSONDecodeError:
             payload = None
         if isinstance(payload, dict) and "completion_needed" in payload:
@@ -262,7 +285,7 @@ def parse_material_properties(text):
     end = raw.rfind("}")
     if start >= 0 and end > start:
         try:
-            loaded = json.loads(raw[start:end + 1])
+            loaded = json.loads(raw[start : end + 1])
         except json.JSONDecodeError:
             loaded = None
         if isinstance(loaded, dict):
@@ -294,7 +317,9 @@ def parse_material_properties(text):
     }
 
 
-def request_material_properties(object_name, notes="", api_key=None, image_bytes=None, live=False):
+def request_material_properties(
+    object_name, notes="", api_key=None, image_bytes=None, live=False
+):
     """Ask Gemini for class, friction, mass, and density. Default is not to call.
 
     A 404 on gemini-2.5-flash stays the paper attempt. gemini-3.8-flash, when
@@ -390,7 +415,9 @@ def cubepart_status(part_mesh_path=None):
     }
 
 
-def articulate_download_allowed(gpu_up, free_bytes, uncompressed_bytes=ARTICULATE_UNCOMPRESSED_BYTES):
+def articulate_download_allowed(
+    gpu_up, free_bytes, uncompressed_bytes=ARTICULATE_UNCOMPRESSED_BYTES
+):
     """True only when a GPU is up and free space exceeds the extract plus 8 GiB."""
     if not gpu_up:
         return False
@@ -407,5 +434,7 @@ def articulate_row(gpu_up, free_bytes, urdf_path=None):
         "download_started": False,
         "download_allowed": allowed,
         "urdf": str(urdf) if has_urdf else None,
-        "reason": "URDF exists." if has_urdf else "No URDF. The Articulate Anything download was not started.",
+        "reason": "URDF exists."
+        if has_urdf
+        else "No URDF. The Articulate Anything download was not started.",
     }

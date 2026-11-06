@@ -171,7 +171,9 @@ def geometry_from_ply(path):
     if total < 1:
         raise PriorContractError("short ply: vertex count is 0", kept=0, dropped=0)
 
-    raw = np.column_stack([np.asarray(table[name], dtype=np.float64) for name in REQUIRED_PLY_PROPERTIES])
+    raw = np.column_stack(
+        [np.asarray(table[name], dtype=np.float64) for name in REQUIRED_PLY_PROPERTIES]
+    )
     xyz = raw[:, 0:3]
     log_scales = raw[:, 3:6]
     opacity = raw[:, 6]
@@ -269,7 +271,9 @@ def write_gaussian_ply(path, *, xyz, log_scales, opacity, rotation, f_dc):
     header.extend(f"property float {name}" for name in REQUIRED_PLY_PROPERTIES)
     header.append("end_header")
     header_bytes = ("\n".join(header) + "\n").encode("ascii")
-    packed = np.column_stack([columns[name] for name in REQUIRED_PLY_PROPERTIES]).astype("<f4")
+    packed = np.column_stack(
+        [columns[name] for name in REQUIRED_PLY_PROPERTIES]
+    ).astype("<f4")
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(header_bytes + packed.tobytes())
@@ -331,9 +335,13 @@ def _parse_ply_header(header):
             elements.append(current)
         elif parts[0] == "property":
             if current is None:
-                raise PriorContractError("short ply: property appears before an element")
+                raise PriorContractError(
+                    "short ply: property appears before an element"
+                )
             if len(parts) >= 2 and parts[1] == "list":
-                raise PriorContractError("short ply: list properties are not gaussian columns")
+                raise PriorContractError(
+                    "short ply: list properties are not gaussian columns"
+                )
             if len(parts) < 3:
                 raise PriorContractError("short ply: property line is incomplete")
             current["props"].append((parts[1], parts[2]))
@@ -343,7 +351,11 @@ def _parse_ply_header(header):
 
 
 def _read_ascii_vertices(body, elements, vertex):
-    lines = [line for line in body.decode("ascii", errors="replace").splitlines() if line.strip()]
+    lines = [
+        line
+        for line in body.decode("ascii", errors="replace").splitlines()
+        if line.strip()
+    ]
     cursor = 0
     for element in elements:
         count = element["count"]
@@ -352,11 +364,15 @@ def _read_ascii_vertices(body, elements, vertex):
         cursor += count
         if element is not vertex:
             if len(block) != count:
-                raise PriorContractError("short ply: body ended before the vertex element")
+                raise PriorContractError(
+                    "short ply: body ended before the vertex element"
+                )
             continue
         if len(block) != count:
             raise PriorContractError("short ply: vertex rows are truncated")
-        columns = {name: np.empty(count, dtype=np.float64) for _typ, name in element["props"]}
+        columns = {
+            name: np.empty(count, dtype=np.float64) for _typ, name in element["props"]
+        }
         for row_index, line in enumerate(block):
             values = line.split()
             if len(values) < width:
@@ -393,9 +409,13 @@ def _read_binary_vertices(body, elements, vertex):
             continue
         if not names:
             raise PriorContractError("short ply: vertex element has no properties")
-        dtype = np.dtype({"names": names, "formats": formats, "offsets": offsets, "itemsize": stride})
+        dtype = np.dtype(
+            {"names": names, "formats": formats, "offsets": offsets, "itemsize": stride}
+        )
         table = np.frombuffer(block, dtype=dtype, count=count)
-        columns = {name: np.asarray(table[name], dtype=np.float64).copy() for name in names}
+        columns = {
+            name: np.asarray(table[name], dtype=np.float64).copy() for name in names
+        }
         return columns, count
     raise PriorContractError("short ply: vertex element is missing")
 

@@ -22,9 +22,9 @@ from __future__ import annotations
 import math
 import warnings
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 import numpy as np
 import trimesh
@@ -96,7 +96,10 @@ def check_sample(sample: Mapping, manifest: Mapping) -> CheckResult:
             reasons.append(image_reason)
 
     extent = None
-    if mesh_targets and not any(r.startswith("SDF") or "mesh uri" in r or "referenced mesh" in r for r in reasons):
+    if mesh_targets and not any(
+        r.startswith("SDF") or "mesh uri" in r or "referenced mesh" in r
+        for r in reasons
+    ):
         try:
             extent, area, volume = _measure(mesh_targets)
         except Exception as exc:
@@ -200,7 +203,9 @@ def _measure(paths: list[Path]):
                     raise ValueError("mesh coordinates are not finite")
                 triangles += len(mesh.faces)
                 lo, hi = mesh.bounds
-                bounds.append((tuple(float(v) for v in lo), tuple(float(v) for v in hi)))
+                bounds.append(
+                    (tuple(float(v) for v in lo), tuple(float(v) for v in hi))
+                )
                 area += float(mesh.area)
                 # Open scans often have no enclosed volume. Surface area still
                 # counts. Asking trimesh for volume on those meshes divides by zero.
@@ -227,7 +232,11 @@ def _as_meshes(loaded):
     if isinstance(loaded, trimesh.Trimesh):
         return [loaded]
     if isinstance(loaded, trimesh.Scene):
-        return [geom for geom in loaded.geometry.values() if isinstance(geom, trimesh.Trimesh)]
+        return [
+            geom
+            for geom in loaded.geometry.values()
+            if isinstance(geom, trimesh.Trimesh)
+        ]
     return []
 
 
@@ -244,23 +253,23 @@ def _sdf_meshes(sdf_path: Path) -> tuple[list[Path], list[str]]:
         tree = ET.parse(sdf_path)
     except ET.ParseError as exc:
         return [], [f"SDF is not readable XML: {exc}"]
-    uris = []
-    seen = set()
+    uris: list[str] = []
+    seen: set[str] = set()
     for mesh in tree.getroot().iter("mesh"):
-        for uri in mesh.iter("uri"):
-            text = uri.text.strip() if uri.text else ""
+        for element in mesh.iter("uri"):
+            text = element.text.strip() if element.text else ""
             if text and text not in seen:
                 seen.add(text)
                 uris.append(text)
     if not uris:
         return [], ["SDF does not reference a mesh"]
 
-    targets = []
-    reasons = []
-    for uri in uris:
-        resolved, problem = _resolve_mesh_uri(sdf_path, uri)
-        if problem:
-            reasons.append(problem)
+    targets: list[Path] = []
+    reasons: list[str] = []
+    for mesh_uri in uris:
+        resolved, problem = _resolve_mesh_uri(sdf_path, mesh_uri)
+        if problem or resolved is None:
+            reasons.append(problem or "referenced mesh is missing")
             continue
         container = _container_problem(resolved, kind="referenced mesh")
         if container:
@@ -320,9 +329,17 @@ def _container_problem(path: Path, *, kind: str) -> str | None:
         return f"{kind} file is empty"
     stripped = head.lstrip().lower()
     if stripped.startswith((b"<!doctype", b"<html", b"<head")):
-        return f"{kind} file is HTML, not a mesh" if kind != "image" else "image file is HTML, not a photo"
+        return (
+            f"{kind} file is HTML, not a mesh"
+            if kind != "image"
+            else "image file is HTML, not a photo"
+        )
     if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-        return f"{kind} file is a zip archive, not a mesh" if kind != "image" else "image file is a zip archive, not a photo"
+        return (
+            f"{kind} file is a zip archive, not a mesh"
+            if kind != "image"
+            else "image file is a zip archive, not a photo"
+        )
     return None
 
 
@@ -358,7 +375,15 @@ def _palette_has_color(image: Image.Image) -> bool:
     colors = rgb.getcolors(maxcolors=256 * 256)
     if not colors:
         return True
-    return any(red != green or green != blue for _count, (red, green, blue) in colors)
+    for _count, pixel in colors:
+        # RGB conversion yields channel tuples. The float arm is the mode-F
+        # shape of getcolors, which this function does not feed.
+        if not isinstance(pixel, tuple) or len(pixel) < 3:
+            continue
+        red, green, blue = pixel[0], pixel[1], pixel[2]
+        if red != green or green != blue:
+            return True
+    return False
 
 
 def _as_path(value) -> Path | None:

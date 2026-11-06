@@ -5,7 +5,36 @@ on:
   pull_request:
 
 jobs:
-  cpu-tests:
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned ruff
+        run: python -m pip install -r requirements-sceneagent-ci.txt
+      - name: Ruff
+        run: python -m ruff check sceneagent
+      - name: Ruff format
+        run: python -m ruff format --check sceneagent
+
+  mypy:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned mypy and typed CPU libraries
+        run: python -m pip install -r requirements-sceneagent-ci.txt
+      - name: Mypy
+        run: python -m mypy sceneagent
+
+  pytest-unit:
+    name: pytest unit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,7 +43,9 @@ jobs:
           python-version: "3.11"
       - name: Syntax check
         run: python -m compileall -q sceneagent
-      - name: Install CPU test dependencies
-        run: python -m pip install numpy pytest trimesh pillow
-      - name: Phase-1 unit tests
-        run: python -m pytest tests/sceneagent -q
+      - name: Install pinned CPU test dependencies
+        run: python -m pip install -r requirements-sceneagent-ci.txt
+      - name: Pytest unit
+        # GPU tests are marked `gpu` and left out of this run. A skip inside
+        # the job is not how a GPU test stays off the CPU gate.
+        run: python -m pytest tests/sceneagent -q -m "not gpu" --strict-markers

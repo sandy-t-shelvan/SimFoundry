@@ -37,7 +37,11 @@ def wilson_interval(successes, trials, z=WILSON_Z_95):
     z2 = z * z
     denom = 1.0 + z2 / trials
     center = (phat + z2 / (2.0 * trials)) / denom
-    half = z * math.sqrt(phat * (1.0 - phat) / trials + z2 / (4.0 * trials * trials)) / denom
+    half = (
+        z
+        * math.sqrt(phat * (1.0 - phat) / trials + z2 / (4.0 * trials * trials))
+        / denom
+    )
     return center - half, center + half
 
 
@@ -59,7 +63,9 @@ def symmetric_chamfer(points_x, points_y):
     y = _as_points(points_y)
     if len(x) == 0 or len(y) == 0:
         raise ValueError("Chamfer distance needs points on both clouds")
-    return 0.5 * (float(_min_distances(x, y).mean()) + float(_min_distances(y, x).mean()))
+    return 0.5 * (
+        float(_min_distances(x, y).mean()) + float(_min_distances(y, x).mean())
+    )
 
 
 def f1_at_threshold(points_x, points_y, tau=TAU_1CM_M):
@@ -181,11 +187,7 @@ def _hungarian(cost):
     n_rows, n_cols = cost.shape
     if n_rows == 0 or n_cols == 0:
         return []
-    if (
-        n_rows <= n_cols
-        and n_rows <= _ENUMERATION_MAX
-        and n_cols <= _ENUMERATION_MAX
-    ):
+    if n_rows <= n_cols and n_rows <= _ENUMERATION_MAX and n_cols <= _ENUMERATION_MAX:
         return _enumerate_assignment(cost)
     if n_rows <= n_cols:
         columns = _assign_every_row(cost)
@@ -233,12 +235,14 @@ def score_reconstruction(delivered, reference, tau=TAU_1CM_M):
         f1 = f1_at_threshold(delivered[del_name], reference[ref_name], tau=tau)
         f1_by_ref[ref_name] = f1
         chamfers.append(chamfer)
-        matches.append({
-            "reference": ref_name,
-            "delivered": del_name,
-            "chamfer_m": chamfer,
-            "f1": f1,
-        })
+        matches.append(
+            {
+                "reference": ref_name,
+                "delivered": del_name,
+                "chamfer_m": chamfer,
+                "f1": f1,
+            }
+        )
     return {
         "f1_mean": float(np.mean([f1_by_ref[name] for name in ref_names])),
         "chamfer_mean_matched_m": float(np.mean(chamfers)) if chamfers else None,
@@ -350,7 +354,9 @@ def _scene_summary(scored, omitted, full_scene, expected_given, per_object):
             uneven.append(f"{name} seeds {seed_text}")
     if uneven:
         sentences.append(
-            "Seed measurements are not the three-seed protocol: " + "; ".join(uneven) + "."
+            "Seed measurements are not the three-seed protocol: "
+            + "; ".join(uneven)
+            + "."
         )
     sentences.append(
         "This is not the full-scene MessyKitchens score and not the GraspClutter6D bin score."
@@ -467,14 +473,18 @@ def aggregate_messy_kitchens(
         stats["n_seeds"] == n_protocol_seeds for stats in per_object_stats.values()
     )
     full_scene = bool(objects_complete and protocol_seeds)
-    summary = _scene_summary(scored, omitted, full_scene, expected is not None, per_object_stats)
+    summary = _scene_summary(
+        scored, omitted, full_scene, expected is not None, per_object_stats
+    )
     return {
         "protocol": "messy_kitchens",
         "aggregation": "seeds_then_objects",
         "full_scene": full_scene,
         "protocol_seeds_complete": protocol_seeds,
         "objects_complete": objects_complete,
-        "reported_as": "messy_kitchens_full_scene" if full_scene else "messy_kitchens_subset",
+        "reported_as": "messy_kitchens_full_scene"
+        if full_scene
+        else "messy_kitchens_subset",
         "summary": summary,
         "scored_objects": scored,
         "omitted_objects": omitted,

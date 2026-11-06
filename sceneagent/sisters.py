@@ -112,7 +112,8 @@ def check_sister(extent, volume, original_volume, target_inner=None):
         "volume_m3": float(volume),
         "volume_ratio": ratio,
         "fits_target": fits,
-        "graspable": "extent_below_grasp_minimum" not in reasons and "volume_ratio_outside_band" not in reasons,
+        "graspable": "extent_below_grasp_minimum" not in reasons
+        and "volume_ratio_outside_band" not in reasons,
         "accepted": len(reasons) == 0,
         "reasons": reasons,
         "gates": {
@@ -123,18 +124,22 @@ def check_sister(extent, volume, original_volume, target_inner=None):
     }
 
 
-def model_free_object_sisters(name, size, target_inner=None, appearance=None, size_source="capture_primitive"):
+def model_free_object_sisters(
+    name, size, target_inner=None, appearance=None, size_source="capture_primitive"
+):
     """Section 3.8 first method on one primitive. No SAM 3D mesh and no Meshy call."""
     rows = geometry_sisters(size, target_inner=target_inner)
     if appearance:
-        rows.append(appearance_sister(
-            size,
-            appearance["hue_degrees"],
-            appearance["mottle"],
-            appearance["speckle"],
-            appearance["noise"],
-            appearance.get("name") or f"{name} texture",
-        ))
+        rows.append(
+            appearance_sister(
+                size,
+                appearance["hue_degrees"],
+                appearance["mottle"],
+                appearance["speckle"],
+                appearance["noise"],
+                appearance.get("name") or f"{name} texture",
+            )
+        )
     return {
         "object": name,
         "section": "3.8",
@@ -142,7 +147,9 @@ def model_free_object_sisters(name, size, target_inner=None, appearance=None, si
         "generative_model": None,
         "size_m": [float(value) for value in size],
         "size_source": size_source,
-        "target_inner_m": None if target_inner is None else [float(value) for value in target_inner],
+        "target_inner_m": None
+        if target_inner is None
+        else [float(value) for value in target_inner],
         "sisters": rows,
     }
 
@@ -164,12 +171,14 @@ def geometry_sisters(size, target_inner=None, length_scales=WEBSITE_LENGTH_SCALE
         extent = mesh_extent(scaled)
         volume = mesh_volume(scaled, faces)
         report = check_sister(extent, volume, base_volume, target_inner=target_inner)
-        report.update({
-            "name": label,
-            "kind": "bounded_axis_scale",
-            "scale": list(factors),
-            "texture": procedural_texture(0.0, 0.0, 0.0, 0.0),
-        })
+        report.update(
+            {
+                "name": label,
+                "kind": "bounded_axis_scale",
+                "scale": list(factors),
+                "texture": procedural_texture(0.0, 0.0, 0.0, 0.0),
+            }
+        )
         sisters.append(report)
     return sisters
 
@@ -180,12 +189,14 @@ def appearance_sister(size, hue_degrees, mottle, speckle, noise, name):
     volume = mesh_volume(verts, faces)
     extent = mesh_extent(verts)
     report = check_sister(extent, volume, volume, target_inner=None)
-    report.update({
-        "name": name,
-        "kind": "procedural_texture",
-        "scale": [1.0, 1.0, 1.0],
-        "texture": procedural_texture(hue_degrees, mottle, speckle, noise),
-    })
+    report.update(
+        {
+            "name": name,
+            "kind": "procedural_texture",
+            "scale": [1.0, 1.0, 1.0],
+            "texture": procedural_texture(hue_degrees, mottle, speckle, noise),
+        }
+    )
     return report
 
 
@@ -209,12 +220,14 @@ def scene_sisters(anchor_xy, gap_m, relations=None):
         if name not in offsets:
             raise ValueError(f"unsupported relation {name!r}")
         dx, dy = offsets[name]
-        layouts.append({
-            "relation": name,
-            "anchor_xy_m": [ax, ay],
-            "object_xy_m": [ax + dx, ay + dy],
-            "gap_m": float(gap_m),
-        })
+        layouts.append(
+            {
+                "relation": name,
+                "anchor_xy_m": [ax, ay],
+                "object_xy_m": [ax + dx, ay + dy],
+                "gap_m": float(gap_m),
+            }
+        )
     return layouts
 
 

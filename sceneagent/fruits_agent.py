@@ -19,7 +19,6 @@ from sceneagent.gemini_client import PAPER_MODEL_ID
 from sceneagent.mjcf_contract import write_physics_mjcf
 from sceneagent.taxonomy import MATERIAL_CLASSES
 
-
 # The model is asked to plan from the input state. The prompt does not
 # contain a JSON object to copy and does not name a figure-5 harness.
 PLAN_PROMPT = (
@@ -53,6 +52,7 @@ def order_plan(model_steps):
 def load_mujoco_xml(path, steps=30):
     """Load an XML scene and advance it. USDA fails here; MJCF can succeed."""
     import mujoco
+
     model = mujoco.MjModel.from_xml_path(str(path))
     data = mujoco.MjData(model)
     for _ in range(steps):
@@ -94,21 +94,32 @@ def make_tools(client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=
         material = parse_material_class(result.get("text") or "")
         vote_path = Path(paths["vote"])
         vote_path.parent.mkdir(parents=True, exist_ok=True)
-        vote_path.write_text(json.dumps({
-            "paper_model_id": result.get("paper_model_id") or PAPER_MODEL_ID,
-            "model_id": result.get("model_id"),
-            "http_status": result.get("http_status"),
-            "paper_http_status": result.get("paper_http_status"),
-            "used_paper_model": result.get("used_paper_model"),
-            "material_class": material,
-            "text": result.get("text") or "",
-            "error_body": result.get("error_body") or result.get("paper_error_body") or "",
-        }, indent=2) + "\n", encoding="utf-8")
+        vote_path.write_text(
+            json.dumps(
+                {
+                    "paper_model_id": result.get("paper_model_id") or PAPER_MODEL_ID,
+                    "model_id": result.get("model_id"),
+                    "http_status": result.get("http_status"),
+                    "paper_http_status": result.get("paper_http_status"),
+                    "used_paper_model": result.get("used_paper_model"),
+                    "material_class": material,
+                    "text": result.get("text") or "",
+                    "error_body": result.get("error_body")
+                    or result.get("paper_error_body")
+                    or "",
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         ok = material is not None and result.get("http_status") == 200
         return {
             "ok": ok,
             "artifact": str(vote_path),
-            "reason": "" if ok else (result.get("error_body") or "no published class in the reply"),
+            "reason": ""
+            if ok
+            else (result.get("error_body") or "no published class in the reply"),
             "detail": {
                 "model_id": result.get("model_id"),
                 "paper_model_id": result.get("paper_model_id") or PAPER_MODEL_ID,
@@ -137,7 +148,9 @@ def make_tools(client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=
         loaded["artifact"] = str(xml_path)
         report = Path(paths["mujoco_report"])
         report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(json.dumps(loaded["detail"], indent=2) + "\n", encoding="utf-8")
+        report.write_text(
+            json.dumps(loaded["detail"], indent=2) + "\n", encoding="utf-8"
+        )
         return loaded
 
     def sam3d(_context):
@@ -149,8 +162,8 @@ def make_tools(client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=
                 "detail": {},
             }
         needed = paths.get("sam3d_bytes")
-        free_bytes = disk_free_gb * (1024 ** 3)
-        if needed and free_bytes < needed + 5 * (1024 ** 3):
+        free_bytes = disk_free_gb * (1024**3)
+        if needed and free_bytes < needed + 5 * (1024**3):
             return {
                 "ok": False,
                 "artifact": None,
@@ -174,7 +187,8 @@ def make_tools(client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=
         return {
             "ok": False,
             "artifact": started.get("log"),
-            "reason": started.get("reason") or "SAM 3D download started; no mesh file yet",
+            "reason": started.get("reason")
+            or "SAM 3D download started; no mesh file yet",
             "detail": started,
         }
 
@@ -238,9 +252,13 @@ def plan_with_client(client):
     }
 
 
-def run_fruits(out_dir, client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=None):
+def run_fruits(
+    out_dir, client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=None
+):
     plan_info = plan_with_client(client)
-    tools = make_tools(client, paths, disk_free_gb, loader=loader, start_sam3d=start_sam3d)
+    tools = make_tools(
+        client, paths, disk_free_gb, loader=loader, start_sam3d=start_sam3d
+    )
     summary = run_agent_loop(out_dir, tools, plan_info["steps"])
     summary["plan_model"] = {
         key: plan_info[key]

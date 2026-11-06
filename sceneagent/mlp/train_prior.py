@@ -64,12 +64,18 @@ def loss_and_gradients(prior, features, label):
     The chunked mean and the summed gradient match the full-array formulas.
     """
 
-    if getattr(features, "ndim", None) != 2 or features.shape[1] != 912 or features.shape[0] < 1:
-        raise ValueError(f"training row must be (N, 912), got {getattr(features, 'shape', None)}")
+    if (
+        getattr(features, "ndim", None) != 2
+        or features.shape[1] != 912
+        or features.shape[0] < 1
+    ):
+        raise ValueError(
+            f"training row must be (N, 912), got {getattr(features, 'shape', None)}"
+        )
     count = int(features.shape[0])
     total = np.zeros(OUTPUT_DIM, dtype=np.float64)
     for start in range(0, count, _CHUNK):
-        chunk = np.asarray(features[start:start + _CHUNK], dtype=np.float64)
+        chunk = np.asarray(features[start : start + _CHUNK], dtype=np.float64)
         if chunk.ndim != 2 or chunk.shape[1] != 912 or not np.isfinite(chunk).all():
             raise ValueError("training features are not finite")
         hidden_1 = np.tanh(chunk @ prior.w1 + prior.b1)
@@ -95,7 +101,7 @@ def loss_and_gradients(prior, features, label):
     grad_w_out = np.zeros_like(prior.w_out)
     grad_b_out = np.zeros_like(prior.b_out)
     for start in range(0, count, _CHUNK):
-        chunk = np.asarray(features[start:start + _CHUNK], dtype=np.float64)
+        chunk = np.asarray(features[start : start + _CHUNK], dtype=np.float64)
         hidden_1 = np.tanh(chunk @ prior.w1 + prior.b1)
         hidden_2 = np.tanh(hidden_1 @ prior.w2 + prior.b2)
         per_row = np.broadcast_to(per_row_grad, (chunk.shape[0], OUTPUT_DIM)).copy()
@@ -109,7 +115,11 @@ def loss_and_gradients(prior, features, label):
         grad_z1 = grad_hidden_1 * (1.0 - hidden_1 * hidden_1)
         grad_w1 += chunk.T @ grad_z1
         grad_b1 += grad_z1.sum(axis=0)
-    if not np.isfinite(grad_w_out[:, 28:]).all() or np.any(grad_w_out[:, 28:]) or np.any(grad_b_out[28:]):
+    if (
+        not np.isfinite(grad_w_out[:, 28:]).all()
+        or np.any(grad_w_out[:, 28:])
+        or np.any(grad_b_out[28:])
+    ):
         raise ValueError("slots 28-32 received a gradient")
     grads = {
         "w1": grad_w1,
@@ -152,7 +162,9 @@ def train_and_report(epochs=30, lr=1e-3, seed=0):
         raise SystemExit(f"stopped before training: {reason}")
     by_source = _count_sources(rows)
     if any(by_source.get(source, 0) < 20 for source in ("ycb", "gso", "abo")):
-        raise SystemExit(f"stopped before training: a source has fewer than 20 labels ({by_source})")
+        raise SystemExit(
+            f"stopped before training: a source has fewer than 20 labels ({by_source})"
+        )
     held = holdout_ids([row["id"] for row in rows])
     train_rows = [row for row in rows if row["id"] not in held]
     hold_rows = [row for row in rows if row["id"] in held]
@@ -217,7 +229,9 @@ def load_training_rows():
             prior_path = Path(record.get("prior_input") or "")
             if not prior_path.is_file():
                 continue
-            shape = tuple(int(value) for value in np.load(prior_path, mmap_mode="r").shape)
+            shape = tuple(
+                int(value) for value in np.load(prior_path, mmap_mode="r").shape
+            )
             if len(shape) != 2 or shape[1] != 912 or shape[0] < 1:
                 continue
             found[record["id"]] = {
@@ -242,9 +256,19 @@ def score_split(prior, rows):
 
     if not rows:
         raise ValueError("score split is empty")
-    totals = {name: 0.0 for name in (
-        "loss", "material", "body", "collision", "log_mass", "log_density", "rigidity", "deformability",
-    )}
+    totals = {
+        name: 0.0
+        for name in (
+            "loss",
+            "material",
+            "body",
+            "collision",
+            "log_mass",
+            "log_density",
+            "rigidity",
+            "deformability",
+        )
+    }
     for row in rows:
         features = _features(row)
         mask = np.ones(features.shape[0], dtype=bool)
@@ -295,7 +319,9 @@ def _fit(prior, rows, epochs, lr, seed):
             if not math.isfinite(loss):
                 raise RuntimeError(f"loss became non-finite on {row['id']}")
             total += loss
-            adam.step([grads[name] for name in ("w1", "b1", "w2", "b2", "w_out", "b_out")])
+            adam.step(
+                [grads[name] for name in ("w1", "b1", "w2", "b2", "w_out", "b_out")]
+            )
         mean_loss = total / len(rows)
         history.append(mean_loss)
         prior.save(CHECKPOINT)
@@ -362,8 +388,13 @@ def _mean_gradient(mean, label):
     grad[SLOT_COLLISION] = _softmax(mean[SLOT_COLLISION])
     grad[SLOT_COLLISION][COLLISION_PRIMITIVES.index(label["collision"])] -= 1.0
     grad[SLOT_LOG_MASS] = 2.0 * (float(mean[SLOT_LOG_MASS]) - float(label["log_mass"]))
-    grad[SLOT_LOG_DENSITY] = 2.0 * (float(mean[SLOT_LOG_DENSITY]) - float(label["log_density"]))
-    for slot, key in ((SLOT_RIGIDITY, "rigidity"), (SLOT_DEFORMABILITY, "deformability")):
+    grad[SLOT_LOG_DENSITY] = 2.0 * (
+        float(mean[SLOT_LOG_DENSITY]) - float(label["log_density"])
+    )
+    for slot, key in (
+        (SLOT_RIGIDITY, "rigidity"),
+        (SLOT_DEFORMABILITY, "deformability"),
+    ):
         value = _sigmoid(float(mean[slot]))
         grad[slot] = 2.0 * (value - float(label[key])) * value * (1.0 - value)
     return grad
@@ -392,7 +423,9 @@ def _count_sources(rows):
 
 
 class _Adam:
-    def __init__(self, params, lr, beta1=0.9, beta2=0.999, eps=1e-8, decay=1e-6, clip=5.0):
+    def __init__(
+        self, params, lr, beta1=0.9, beta2=0.999, eps=1e-8, decay=1e-6, clip=5.0
+    ):
         self.params = params
         self.moment = [np.zeros_like(param) for param in params]
         self.velocity = [np.zeros_like(param) for param in params]
@@ -407,9 +440,11 @@ class _Adam:
     def step(self, grads):
         clipped = _clip(grads, self.clip)
         self.step_index += 1
-        bias_1 = 1.0 - self.beta1 ** self.step_index
-        bias_2 = 1.0 - self.beta2 ** self.step_index
-        for param, moment, velocity, grad in zip(self.params, self.moment, self.velocity, clipped):
+        bias_1 = 1.0 - self.beta1**self.step_index
+        bias_2 = 1.0 - self.beta2**self.step_index
+        for param, moment, velocity, grad in zip(
+            self.params, self.moment, self.velocity, clipped
+        ):
             grad = np.asarray(grad, dtype=np.float64)
             if self.decay:
                 grad = grad + self.decay * param
@@ -417,7 +452,9 @@ class _Adam:
             moment += (1.0 - self.beta1) * grad
             velocity *= self.beta2
             velocity += (1.0 - self.beta2) * (grad * grad)
-            param -= self.lr * (moment / bias_1) / (np.sqrt(velocity / bias_2) + self.eps)
+            param -= (
+                self.lr * (moment / bias_1) / (np.sqrt(velocity / bias_2) + self.eps)
+            )
 
 
 def _clip(grads, clip):

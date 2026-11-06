@@ -140,7 +140,9 @@ def store_log_mass_density(record, log_mass, log_density):
     return updated
 
 
-def build_physics_record(name, proposals, numerical=None, body_type=None, collision=None):
+def build_physics_record(
+    name, proposals, numerical=None, body_type=None, collision=None
+):
     """Fuse proposals into one object physics record.
 
     ``numerical`` may contain friction_static, friction_dynamic, restitution,
@@ -171,7 +173,9 @@ def build_physics_record(name, proposals, numerical=None, body_type=None, collis
                 "source": proposal.get("source", "unspecified"),
                 "class": proposal["class"],
                 "weight": float(proposal["weight"]),
-                "weight_after_unknown_scale": scaled_weight(proposal["class"], proposal["weight"]),
+                "weight_after_unknown_scale": scaled_weight(
+                    proposal["class"], proposal["weight"]
+                ),
             }
             for proposal in proposals
         ],
