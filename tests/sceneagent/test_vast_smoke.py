@@ -860,6 +860,31 @@ def test_key_in_ledger_publishes_nothing(tmp_path, capsys, monkeypatch):
     assert "ledger.json" in captured.err
 
 
+def test_manifest_key_fails_when_redaction_does_not_remove_it(
+    tmp_path, capsys, monkeypatch
+):
+    secret = "sf4-planted-key"
+    monkeypatch.setattr("sceneagent.vast_smoke.redact", lambda text, _secret: text)
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "plan.json").write_bytes(b'{"scene_name":"Fruits"}\n')
+    (run / "ledger.json").write_bytes(b'{"scene_name":"Fruits","entries":[]}\n')
+    (run / "manifest.json").write_bytes(b'{"note":"sf4-planted-key"}\n')
+    artifacts = tmp_path / "sf4-artifacts"
+    with pytest.raises(SmokeError):
+        publish_artifacts(run, artifacts, api_key=secret)
+    written = (
+        [path for path in artifacts.rglob("*") if path.is_file()]
+        if artifacts.exists()
+        else []
+    )
+    assert written == []
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "manifest.json" in captured.err
+
+
 def test_published_ledger_is_byte_identical_to_the_pipeline(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="accept", use_gpu=True)
