@@ -94,16 +94,31 @@ def test_expansion_plan_drops_the_named_stale_sentences():
     assert "All missing" not in section
 
 
+def _sceneagent_ci_pins():
+    """Package pins installed by sceneagent CI, ignoring comments."""
+    text = (ROOT / "requirements-sceneagent-ci.txt").read_text(encoding="utf-8")
+    pins = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            pins.append(stripped)
+    return pins
+
+
 def test_sdlc_dependency_list_matches_sceneagent_ci():
+    pins = _sceneagent_ci_pins()
+    assert [pin.split("==", 1)[0] for pin in pins] == [
+        "ruff",
+        "mypy",
+        "numpy",
+        "pytest",
+        "trimesh",
+        "pillow",
+    ]
     workflow = (ROOT / ".github" / "workflows" / "sceneagent-ci.yml").read_text(encoding="utf-8")
-    match = re.search(r"python -m pip install (\S+(?: \S+)*)", workflow)
-    assert match is not None
-    packages = match.group(1).split()
-    assert packages == ["numpy", "pytest", "trimesh", "pillow"]
+    assert workflow.count("python -m pip install -r requirements-sceneagent-ci.txt") == 3
+    assert "pip install numpy pytest trimesh pillow" not in workflow
     sdlc = (ROOT / "docs" / "SDLC.md").read_text(encoding="utf-8")
-    listed = "`numpy`, `pytest`, `trimesh`, and `pillow`"
-    assert sdlc.count(listed) == 2
-    assert "SF-2 is changing this CI workflow on another branch." in sdlc
+    for pin in pins:
+        assert pin in sdlc
     assert "numpy` and `pytest` only" not in sdlc
-    for package in packages:
-        assert package in sdlc
