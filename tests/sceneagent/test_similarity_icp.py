@@ -1138,6 +1138,77 @@ def test_run_icp_step_rejects_a_nan_origin_and_a_non_positive_pixel_size(tmp_pat
     assert not (tmp_path / "residual.json").exists()
 
 
+def _unit_grid_case(tmp_path):
+    pose_path, glb, rendered, observed = _write_grid_cli(
+        tmp_path,
+        (0.0, 0.0),
+        1.0,
+        80,
+        20.0,
+        18.0,
+        12.0,
+        np.array([3.0, -2.0, 0.0]),
+    )
+    x0, y0, side = 20.0, 18.0, 12.0
+    vertices = np.array(
+        [
+            [x0, y0, 0.0],
+            [x0 + side, y0, 0.0],
+            [x0 + side, y0 + side, 0.0],
+            [x0, y0 + side, 0.0],
+        ]
+    )
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    return pose_path, glb, rendered, observed, vertices, faces
+
+
+def test_run_icp_step_rejects_a_nan_origin_stored_on_the_mesh(tmp_path):
+    """A finite call grid must not waive a NaN origin already stored on the mesh."""
+    pose_path, glb, rendered, observed, vertices, faces = _unit_grid_case(tmp_path)
+    mesh = {
+        "vertices": vertices,
+        "faces": faces,
+        "width": 80,
+        "height": 80,
+        "origin": (float("nan"), 0.0),
+        "pixel_size": 1.0,
+    }
+    code = run_icp_step(
+        np.load(tmp_path / "source.npy"),
+        np.load(tmp_path / "target.npy"),
+        pose_path,
+        glb,
+        tmp_path / "residual.json",
+        rendered_masks=[rendered],
+        observed_masks=[observed],
+        mesh=mesh,
+        ledger_dir=tmp_path / "ledger",
+        origin=(0.0, 0.0),
+        pixel_size=1.0,
+    )
+    assert code == 1
+    assert not (tmp_path / "residual.json").exists()
+
+
+def test_write_alignment_residual_rejects_a_nan_origin(tmp_path):
+    """The scorer rejects a NaN origin before a direct writer can store a residual."""
+    pose_path, glb, rendered, observed, _vertices, _faces = _unit_grid_case(tmp_path)
+    with pytest.raises(ValueError, match="^origin must be two finite numbers$"):
+        write_alignment_residual(
+            np.load(tmp_path / "source.npy"),
+            np.load(tmp_path / "target.npy"),
+            pose_path,
+            tmp_path / "residual.json",
+            rendered_masks=[rendered],
+            observed_masks=[observed],
+            ledger_dir=tmp_path / "ledger",
+            glb_path=glb,
+            origin=(float("nan"), 1.0),
+            pixel_size=1.0,
+        )
+    assert not (tmp_path / "residual.json").exists()
+
+
 def test_cli_rejects_a_non_finite_silhouette_grid(capsys):
     base = [
         "--pose",
