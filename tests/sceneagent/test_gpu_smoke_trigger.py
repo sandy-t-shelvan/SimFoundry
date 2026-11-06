@@ -325,6 +325,38 @@ def test_smoke_trigger_mapping_is_pinned_to_the_event():
     ]
 
 
+def test_cancelled_run_cannot_reach_the_start_put():
+    """A queued run that was cancelled must not satisfy the smoke job if.
+
+    Removing ``!cancelled()`` is a killed mutant. An ``always()`` on the
+    step that runs ``vast_smoke`` is the same hole.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert [
+        item for item in workflow_safety_findings(text) if "cancelled" in item
+    ] == []
+    mutant = text.replace("      !cancelled() &&\n", "", 1)
+    killed = [item for item in workflow_safety_findings(mutant) if "cancelled" in item]
+    assert killed == [
+        "fruits_gpu_smoke job if uses always() without !cancelled() "
+        "on the path to the start PUT"
+    ]
+    step_mutant = text.replace(
+        "      - name: Vast GPU smoke on Fruits.mp4\n",
+        "      - name: Vast GPU smoke on Fruits.mp4\n        if: always()\n",
+        1,
+    )
+    step_killed = [
+        item
+        for item in workflow_safety_findings(step_mutant)
+        if "step uses always()" in item
+    ]
+    assert step_killed == [
+        "fruits_gpu_smoke step uses always() without !cancelled() "
+        "on the path to the start PUT"
+    ]
+
+
 def test_workflow_safety_contract():
     findings = workflow_safety_findings(WORKFLOW.read_text(encoding="utf-8"))
     assert findings == []

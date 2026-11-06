@@ -286,6 +286,28 @@ def _jobs(text: str) -> dict[str, str]:
     return jobs
 
 
+def _condition_if(block: str) -> str:
+    """Return the first ``if:`` expression in a job or step block."""
+    lines = block.splitlines()
+    collected: list[str] = []
+    capturing = False
+    if_indent = 0
+    for line in lines:
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        if not capturing and stripped.startswith("if:"):
+            capturing = True
+            if_indent = indent
+            collected.append(stripped[len("if:") :].strip())
+            continue
+        if capturing:
+            if stripped == "" or indent > if_indent:
+                collected.append(stripped)
+                continue
+            break
+    return "\n".join(collected)
+
+
 def _job_if(job_text: str) -> str:
     lines = job_text.splitlines()
     collected: list[str] = []
@@ -449,6 +471,38 @@ def _smoke_trigger_findings(text: str) -> list[str]:
     ]
 
 
+def _always_without_cancelled(expression: str) -> bool:
+    """True when ``always()`` is used and ``!cancelled()`` is not in the same if."""
+    return "always()" in expression and "!cancelled()" not in expression
+
+
+def _start_put_cancelled_findings(jobs: dict[str, str]) -> list[str]:
+    """Flag ``always()`` on a job or step that can send the start PUT.
+
+    ``label_cleanup`` uses ``always()`` and does not call Vast, so it is
+    not on this path. A cancelled queued run must not reach
+    ``sceneagent.vast_smoke``.
+    """
+    findings: list[str] = []
+    for name, job in jobs.items():
+        if "python -m sceneagent.vast_smoke" not in job:
+            continue
+        if _always_without_cancelled(_job_if(job)):
+            findings.append(
+                f"{name} job if uses always() without !cancelled() "
+                "on the path to the start PUT"
+            )
+        for step in _steps(job):
+            if _always_without_cancelled(_condition_if(step)):
+                findings.append(
+                    f"{name} step uses always() without !cancelled() "
+                    "on the path to the start PUT"
+                )
+            if "python -m sceneagent.vast_smoke" in step:
+                break
+    return findings
+
+
 def workflow_safety_findings(text: str) -> list[str]:
     """Static contract for the GPU smoke workflow. Empty means it holds.
 
@@ -497,6 +551,7 @@ def workflow_safety_findings(text: str) -> list[str]:
             "label actor allowlist must be sandy-t-shelvan and cursor[bot], in that order"
         )
     jobs = _jobs(text)
+    findings.extend(_start_put_cancelled_findings(jobs))
     smoke = jobs.get("fruits_gpu_smoke", "")
     guard = jobs.get("request_file_guard", "")
     cleanup = jobs.get("label_cleanup", "")

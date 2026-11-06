@@ -74,6 +74,7 @@ jobs:
     # Left off: a same-repo run-gpu-smoke label from an allowlisted actor is enough.
     if: >-
       always() &&
+      !cancelled() &&
       (needs.request_file_guard.result == 'success' || needs.request_file_guard.result == 'skipped') &&
       (github.event_name != 'push' || needs.request_file_guard.outputs.proceed == 'true') &&
       (
