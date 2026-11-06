@@ -2156,28 +2156,35 @@ def _run_bot_smoke(tmp_path, status, trigger, actor, commit_sha):
     return calls, code
 
 
+# Exact text InstanceNotApproved raises for a starting instance. Do not loosen
+# this to a substring: a longer message would still contain the words.
+_STARTING_REFUSAL = "instance not running; start needs Sandeep"
+
+
+def _assert_starting_refusal(tmp_path, capsys, calls, code):
+    assert code != 0
+    assert _puts(calls) == []
+    assert capsys.readouterr().err == _STARTING_REFUSAL + "\n"
+    manifest = json.loads(
+        (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["failure_reason"] == _STARTING_REFUSAL
+    assert manifest["passed"] is False
+
+
 def test_label_trigger_refuses_a_starting_instance(tmp_path, capsys):
     # Vast reports loading while the instance is coming up. That is starting.
     calls, code = _run_bot_smoke(
         tmp_path, "loading", "label", "cursor[bot]", "a" * 40
     )
-    assert code != 0
-    assert _puts(calls) == []
-    assert "instance not running; start needs Sandeep" in capsys.readouterr().err
-    manifest = json.loads(
-        (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
-    )
-    assert manifest["failure_reason"] == "instance not running; start needs Sandeep"
-    assert manifest["passed"] is False
+    _assert_starting_refusal(tmp_path, capsys, calls, code)
 
 
 def test_request_file_trigger_refuses_a_starting_instance(tmp_path, capsys):
     calls, code = _run_bot_smoke(
         tmp_path, "loading", "request-file", "sandy-t-shelvan", "b" * 40
     )
-    assert code != 0
-    assert _puts(calls) == []
-    assert "instance not running; start needs Sandeep" in capsys.readouterr().err
+    _assert_starting_refusal(tmp_path, capsys, calls, code)
 
 
 def test_bot_trigger_refuses_an_unknown_instance_state(tmp_path, capsys):
