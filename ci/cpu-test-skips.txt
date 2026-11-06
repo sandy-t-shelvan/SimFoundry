@@ -33,15 +33,15 @@ torch | tests/test_placement_utils.py | needs torch, not installed in CPU CI
 torch | tests/test_task_geometry.py::TestXYOverlapFraction::test_works_with_torch_tensors | needs torch, not installed in CPU CI
 
 skip | tests/test_faiss_gpu_policy.py | needs torch, faiss; not installed in CPU CI
-skip | tests/test_mesh_generator_registry.py | needs imageio, torch; not installed in CPU CI
+skip | tests/test_mesh_generator_registry.py | needs imageio, torch, shapely, torchvision, supervision; not installed in CPU CI
 skip | tests/test_pipeline_refactor_utils.py | needs hydra, torch, shapely, torchvision, supervision; not installed in CPU CI
-skip | tests/test_pipeline_reference_data_e2e.py | Skips unless Data/droid_desk_1 and Data/droid_desk_2 exist. Those reference captures are not in CI.
-skip | tests/test_propose_scene_tasks_predicates.py | needs openai, torch; not installed in CPU CI
+skip | tests/test_pipeline_reference_data_e2e.py | Skips when SIMFOUNDRY_TEST_DATA_ROOT or any reference scene is missing.
+skip | tests/test_propose_scene_tasks_predicates.py | needs hydra, openai, torch; not installed in CPU CI
 skip | tests/test_stage11_sim_ready.py | The file's own pytestmark skips every test: stage 11 refactor (discover_sim_ready_jobs / ConversionTask) is not in this release. A skip is not a pass.
 skip | tests/test_stage13_usd_import.py | The file's own pytestmark skips every test: stage 13 refactor (import_usd_asset) is not in this release. A skip is not a pass.
 skip | tests/test_stage5_iteration_gaps.py | needs torch, shapely, torchvision, supervision; not installed in CPU CI
 skip | tests/test_stage7_modularization.py | needs hydra, imageio, torch, shapely, torchvision, supervision; not installed in CPU CI
-skip | tests/test_stage9_articulation_policy.py | needs hydra, openai, torch, shapely, torchvision, supervision; not installed in CPU CI
+skip | tests/test_stage9_articulation_policy.py | needs torch, shapely, torchvision, supervision, openai, hydra; not installed in CPU CI
 skip | tests/test_stream_subsequence.py | needs torch, shapely, torchvision, supervision; not installed in CPU CI
 skip | tests/test_task_aabb_predicates.py | needs torch, omnigibson; not installed in CPU CI
 skip | tests/test_atomic_artifact_publish.py::test_watcher_ignores_a_partial_artifact | needs torch, shapely, torchvision, supervision; not installed in CPU CI
