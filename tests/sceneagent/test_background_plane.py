@@ -15,6 +15,8 @@ import pytest
 from PIL import Image
 
 from sceneagent.infill import (
+    COLOR_METHOD,
+    PLANE_INLIER_SCALE,
     PlaneFitError,
     complete_background,
     fill_hole,
@@ -245,6 +247,37 @@ def test_background_ledger_records_method_inputs_and_outputs(tmp_path):
     assert reread["entries"][0] == entry
     assert reread["entries"][1]["method"] == "plane"
     assert reread["entries"][1]["outputs"]["artifact"].endswith("assoc.png")
+
+
+def test_ledger_records_plane_inlier_scale_and_color_method(tmp_path):
+    points, colors, hole, _expected = _scene()
+    complete_background(
+        points=points,
+        colors=colors,
+        hole=hole,
+        out_path=tmp_path / "background.png",
+    )
+    entry = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))[
+        "entries"
+    ][0]
+    assert entry["plane_inlier_scale"] == PLANE_INLIER_SCALE == 0.05
+    assert entry["color_method"] == COLOR_METHOD == "nearest_plane_sample"
+    followed = complete_background(
+        association={
+            "background_points": points,
+            "colors": colors,
+            "hole": hole.tolist(),
+        },
+        out_path=tmp_path / "assoc.png",
+        use_lama=True,
+    )
+    assert followed["ledger"]["plane_inlier_scale"] == 0.05
+    assert followed["ledger"]["color_method"] == "nearest_plane_sample"
+    second = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))[
+        "entries"
+    ][1]
+    assert second["plane_inlier_scale"] == 0.05
+    assert second["color_method"] == "nearest_plane_sample"
 
 
 def test_complete_background_raises_on_degenerate_points_without_writing(tmp_path):

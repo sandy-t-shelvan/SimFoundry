@@ -25,10 +25,14 @@ from typing import Any
 
 import numpy as np
 
-# Inlier band as a fraction of the cloud's median radius. Not a SceneAgent
-# threshold. Outliers farther than this, relative to the inlier cloud, drop
-# out of the refit. A published residual was not given.
+# Inlier band as a fraction of the cloud's median radius. This repository's
+# own fitting parameter, not a value published in the paper and not a
+# SceneAgent accept/reject threshold. Outliers farther than this, relative to
+# the inlier cloud, drop out of the refit. A published residual was not given.
 PLANE_INLIER_SCALE = 0.05
+# Hole pixels copy the nearest splatted plane-surface sample. This
+# repository's part-1 color method. It does not sample a posed input frame.
+COLOR_METHOD = "nearest_plane_sample"
 _RANK_EPS = 1e-8
 
 
@@ -400,7 +404,8 @@ def fit_plane(
     most inliers is refit by SVD on those inliers. The inlier band is
     ``residual`` when the caller passes one, otherwise
     ``PLANE_INLIER_SCALE`` times the median radius. That band is how outliers
-    stay out of the normal. It is not a published SceneAgent number.
+    stay out of the normal. ``PLANE_INLIER_SCALE`` is this repository's own
+    value, not a number published in the paper.
 
     Raises ``PlaneFitError`` when fewer than three points are given, or when
     the points are collinear (including a coincident pile).
@@ -578,8 +583,14 @@ def background_ledger_record(
     inputs: dict[str, Any],
     outputs: dict[str, Any],
     decision: str = "accept",
+    plane_inlier_scale: float = PLANE_INLIER_SCALE,
+    color_method: str = COLOR_METHOD,
 ) -> dict[str, Any]:
-    """One background run: method ``plane`` or ``lama``, plus inputs and outputs."""
+    """One background run: method ``plane`` or ``lama``, plus inputs and outputs.
+
+    ``plane_inlier_scale`` is this repository's fitting parameter, not a
+    published residual. ``color_method`` names how hole pixels were colored.
+    """
     if method not in ("plane", "lama"):
         raise ValueError("background ledger method must be plane or lama")
     return {
@@ -589,6 +600,8 @@ def background_ledger_record(
         "inputs": inputs,
         "outputs": outputs,
         "decision": decision,
+        "plane_inlier_scale": float(plane_inlier_scale),
+        "color_method": color_method,
     }
 
 
