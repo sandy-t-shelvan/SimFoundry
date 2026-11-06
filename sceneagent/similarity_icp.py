@@ -664,15 +664,28 @@ def _warp_mask(mask, scale, rotation, translation, origin=(0.0, 0.0), pixel_size
     return warped
 
 
-def _score_silhouette(result, rendered_masks, observed_masks, mesh):
+def _score_silhouette(
+    result,
+    rendered_masks,
+    observed_masks,
+    mesh,
+    origin=(0.0, 0.0),
+    pixel_size=1.0,
+):
     """Silhouette of the refined similarity, not the pre-ICP vertices.
 
     The gate judges the pose ICP finished on. A mesh is rasterized only after
     ``apply_similarity``. A supplied mask is warped by that same scale,
-    rotation, and translation. Neither path uses the export-frame render.
+    rotation, and translation, on the same orthographic grid the rasterizer
+    uses. A pixel is one world unit only when ``pixel_size`` is 1 and the
+    origin is zero. Neither path uses the export-frame render.
     """
     if mesh is not None:
         scored = dict(mesh)
+        # A mesh that already names its grid keeps it. Otherwise the grid
+        # passed with the masks is the one the rasterizer would have used.
+        scored.setdefault("origin", origin)
+        scored.setdefault("pixel_size", pixel_size)
         scored["vertices"] = apply_similarity(
             mesh["vertices"],
             result["scale"],
@@ -689,6 +702,8 @@ def _score_silhouette(result, rendered_masks, observed_masks, mesh):
                 result["scale"],
                 result["rotation"],
                 result["translation"],
+                origin=origin,
+                pixel_size=pixel_size,
             )
             for mask in rendered_masks
         ]
@@ -804,6 +819,8 @@ def write_alignment_residual(
     mesh=None,
     ledger_dir=None,
     glb_path=None,
+    origin=(0.0, 0.0),
+    pixel_size=1.0,
 ):
     """Align from the stored SAM 3D pose and write the residual JSON.
 
@@ -831,7 +848,14 @@ def write_alignment_residual(
     )
     if result["seeds_searched"] != 1 or result["pose_source"] != "stored_sam3d":
         raise RuntimeError("ICP did not start from the stored SAM 3D pose")
-    agreement = _score_silhouette(result, rendered_masks, observed_masks, mesh)
+    agreement = _score_silhouette(
+        result,
+        rendered_masks,
+        observed_masks,
+        mesh,
+        origin=origin,
+        pixel_size=pixel_size,
+    )
     residuals = measure_residuals(result, target, silhouette=agreement["silhouette"])
     pose_info = _pose_initialization(pose, result)
     body = dict(residuals)
@@ -890,6 +914,8 @@ def run_icp_step(
     observed_masks=None,
     mesh=None,
     ledger_dir=None,
+    origin=(0.0, 0.0),
+    pixel_size=1.0,
 ):
     """Entry point for the separate ICP step. Returns a process exit code.
 
@@ -908,6 +934,8 @@ def run_icp_step(
             mesh=mesh,
             ledger_dir=ledger_dir,
             glb_path=glb_path,
+            origin=origin,
+            pixel_size=pixel_size,
         )
     except Exception:
         return 1
@@ -929,6 +957,8 @@ def main(argv=None):
     parser.add_argument("--mesh-faces")
     parser.add_argument("--mesh-width", type=int)
     parser.add_argument("--mesh-height", type=int)
+    parser.add_argument("--origin", type=float, nargs=2, default=(0.0, 0.0))
+    parser.add_argument("--pixel-size", type=float, default=1.0)
     try:
         args = parser.parse_args(argv)
         source = np.load(args.source)
@@ -947,6 +977,8 @@ def main(argv=None):
                 mesh["width"] = args.mesh_width
             if args.mesh_height is not None:
                 mesh["height"] = args.mesh_height
+            mesh["origin"] = (float(args.origin[0]), float(args.origin[1]))
+            mesh["pixel_size"] = float(args.pixel_size)
     except SystemExit as exc:
         code = exc.code
         if code in (None, 0):
@@ -964,6 +996,8 @@ def main(argv=None):
         observed_masks=[observed],
         mesh=mesh,
         ledger_dir=args.ledger,
+        origin=(float(args.origin[0]), float(args.origin[1])),
+        pixel_size=float(args.pixel_size),
     )
 
 

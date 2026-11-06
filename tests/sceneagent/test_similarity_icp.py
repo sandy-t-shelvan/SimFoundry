@@ -22,6 +22,7 @@ from sceneagent.similarity_icp import (
     PoseSidecarHashMissingError,
     PoseSidecarMissingError,
     PoseSidecarRotationMissingError,
+    _score_silhouette,
     _warp_mask,
     apply_similarity,
     icp_step_exit_code,
@@ -859,6 +860,57 @@ def test_inverse_warp_scale_half_thirty_degrees_and_translation():
     expected = _expected_raster(vertices, faces, size, scale, rotation, translation)
     assert _interior_hole_count(warped) == 0
     assert silhouette_iou(warped, expected) >= 0.95
+
+
+def test_score_silhouette_warps_on_the_mesh_grid():
+    size = 48
+    origin = (1.0, 2.0)
+    pixel_size = 0.05
+    x0, y0, side = 1.25, 2.25, 0.40
+    vertices = np.array(
+        [
+            [x0, y0, 0.0],
+            [x0 + side, y0, 0.0],
+            [x0 + side, y0 + side, 0.0],
+            [x0, y0 + side, 0.0],
+        ]
+    )
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    source = rasterize_orthographic_silhouette(
+        vertices, faces, size, size, origin=origin, pixel_size=pixel_size
+    )
+    result = {
+        "scale": 1.0,
+        "rotation": np.eye(3),
+        "translation": np.array([0.50, -0.15, 0.0]),
+    }
+    moved = apply_similarity(
+        vertices, result["scale"], result["rotation"], result["translation"]
+    )
+    expected = rasterize_orthographic_silhouette(
+        moved, faces, size, size, origin=origin, pixel_size=pixel_size
+    )
+    mask_score = _score_silhouette(
+        result,
+        [source],
+        [expected],
+        None,
+        origin=origin,
+        pixel_size=pixel_size,
+    )
+    mesh = {
+        "vertices": vertices,
+        "faces": faces,
+        "width": size,
+        "height": size,
+        "origin": origin,
+        "pixel_size": pixel_size,
+    }
+    mesh_score = _score_silhouette(result, None, [expected], mesh)
+    assert int(source.sum()) > 0
+    assert mask_score["silhouette"] >= 0.95
+    assert mesh_score["silhouette"] >= 0.95
+    assert abs(mask_score["silhouette"] - mesh_score["silhouette"]) <= 0.05
 
 
 def test_warped_mask_iou_matches_mesh_reraster_within_0_05():
