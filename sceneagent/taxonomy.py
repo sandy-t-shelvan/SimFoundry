@@ -69,8 +69,8 @@ _KEYWORD_RULES = (
     ("clamp", "metal"),
 )
 
-# Fixed weight used when a caller does not supply one. The paper says keyword
-# priors use a fixed weight and does not publish the number.
+# SimFoundry choice, not published. The paper says keyword priors use a fixed
+# weight and does not give the number, so this tree uses 1.0.
 DEFAULT_KEYWORD_WEIGHT = 1.0
 
 

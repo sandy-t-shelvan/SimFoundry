@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import traceback
+import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest.mock import Mock
@@ -489,6 +490,196 @@ def test_empty_object_list_raises_before_client_construction(tmp_path, monkeypat
         run_material_vote(out, [], client=client)
     assert client.calls == 0
     assert not (out / "manifest.json").exists()
+
+
+def _features_and_mask(selected=True):
+    return np.zeros((2, 912)), np.array([selected, False])
+
+
+def test_invalid_npz_raises_before_any_vlm_call(tmp_path, monkeypatch):
+    path = tmp_path / "physics_prior.npz"
+    path.write_bytes(b"not-a-real-prior")
+    features, mask = _features_and_mask(True)
+    client = _RecordingVlm("plastic", 0.4)
+    factory = Mock(side_effect=AssertionError("client factory was called"))
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("vote_loaded_prior ran on an invalid npz")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "invalid"
+    with pytest.raises(Exception) as caught:
+        run_material_vote(
+            out,
+            [{"name": "apple", "crops": [b"crop"], "features": features, "mask": mask}],
+            client=client,
+            client_factory=factory,
+            checkpoint=path,
+        )
+    assert "vote_loaded_prior ran" not in str(caught.value)
+    assert client.calls == 0
+    assert factory.call_count == 0
+    assert not (out / "material_vote.json").exists()
+    assert not (out / "manifest.json").exists()
+
+
+def test_empty_mask_raises_before_any_vlm_call(tmp_path, monkeypatch):
+    path = _synthetic_prior(tmp_path / "physics_prior.npz")
+    features, _mask = _features_and_mask(True)
+    empty = np.array([False, False])
+    client = _RecordingVlm("plastic", 0.4)
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("vote_loaded_prior ran on an empty mask")
+
+    monkeypatch.setattr("sceneagent.material_vote.vote_loaded_prior", _boom)
+    out = tmp_path / "empty-mask"
+    with pytest.raises(ValueError, match="selects no Gaussian"):
+        run_material_vote(
+            out,
+            [
+                {
+                    "name": "apple",
+                    "crops": [b"crop"],
+                    "features": features,
+                    "mask": empty,
+                }
+            ],
+            client=client,
+            checkpoint=path,
+        )
+    assert client.calls == 0
+    assert not (out / "material_vote.json").exists()
+    assert not (out / "manifest.json").exists()
+
+
+def test_confidence_endpoints_zero_and_one_are_votes(tmp_path):
+    for confidence, winner in ((0.0, "unknown"), (1.0, "plastic")):
+        client = _RecordingVlm("plastic", confidence)
+        body = _run(
+            tmp_path / f"conf-{confidence}",
+            client,
+            objects=[{"name": "widget", "crops": [b"crop"]}],
+            checkpoint=tmp_path / "absent.npz",
+        )
+        vote = body["votes"][0]
+        vlm = _source(vote, "vlm")
+        assert vlm["raw_confidence"] == confidence
+        assert vlm["weight"] == confidence
+        assert vote["material_class"] == winner
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [-0.01, 1.01, 5, float("nan"), float("inf"), float("-inf")],
+)
+def test_confidence_outside_unit_interval_is_rejected(tmp_path, raw):
+    client = _RecordingVlm("plastic", raw)
+    out = tmp_path / "rejected"
+    with pytest.raises(MaterialVlmError, match=r"\[0, 1\]"):
+        run_material_vote(
+            out,
+            [{"name": "widget", "crops": [b"crop"]}],
+            client=client,
+            checkpoint=tmp_path / "absent.npz",
+        )
+    assert not (out / "material_vote.json").exists()
+    assert not (out / "manifest.json").exists()
+
+
+class _OfflineResponse:
+    def __init__(self, status, body):
+        self.status = status
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def _vote_json_body():
+    text = '{"material_class": "wood", "confidence": 0.4}'
+    payload = {"candidates": [{"content": {"parts": [{"text": text}]}}]}
+    return json.dumps(payload).encode("utf-8")
+
+
+def test_generate_content_url_does_not_include_the_api_key(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    seen = {}
+
+    def _capture(request, timeout=None):
+        seen["url"] = request.full_url
+        seen["data"] = request.data
+        return _OfflineResponse(200, _vote_json_body())
+
+    monkeypatch.setattr(urllib.request, "urlopen", _capture)
+    parsed = GeminiFlashMaterialClient(FAKE_KEY).classify_crops([b"crop"])
+    assert ":generateContent" in seen["url"]
+    assert FAKE_KEY not in seen["url"]
+    assert FAKE_KEY.encode() not in (seen["data"] or b"")
+    assert parsed == {"class": "wood", "confidence": 0.4}
+
+
+def test_scrubbed_transport_error_does_not_log_the_key(monkeypatch, caplog, capsys):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    caplog.set_level(logging.DEBUG)
+
+    def _offline(*_args, **_kwargs):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _offline)
+    with pytest.raises(MaterialVlmError) as caught:
+        GeminiFlashMaterialClient(FAKE_KEY).classify_crops([b"crop"])
+    captured = capsys.readouterr()
+    blob = "\n".join(
+        [
+            caplog.text,
+            captured.out,
+            captured.err,
+            str(caught.value),
+            traceback.format_exc(),
+        ]
+    )
+    assert FAKE_KEY not in blob
+
+
+def test_vote_failure_artifacts_do_not_contain_the_key(
+    tmp_path, monkeypatch, caplog, capsys
+):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    caplog.set_level(logging.DEBUG)
+
+    def _offline(*_args, **_kwargs):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _offline)
+    out = tmp_path / "fail"
+    exc_text = ""
+    try:
+        run_material_vote(
+            out,
+            [{"name": "apple", "crops": [b"crop"]}],
+            checkpoint=tmp_path / "absent.npz",
+        )
+    except MaterialVlmError as exc:
+        exc_text = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+    else:
+        raise AssertionError("the transport failure must raise")
+    artifacts = []
+    if out.exists():
+        for path in out.rglob("*"):
+            if path.is_file():
+                artifacts.append(path.read_text(encoding="utf-8", errors="replace"))
+    captured = capsys.readouterr()
+    blob = "\n".join([caplog.text, captured.out, captured.err, exc_text, *artifacts])
+    assert FAKE_KEY not in blob
 
 
 def test_parse_vlm_vote_rejects_a_non_class_without_echoing_the_body():

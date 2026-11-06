@@ -8,6 +8,7 @@ with the published weighted vote:
     y* = argmax_y  sum_v  w_v * 1[y_v = y]
 
 A proposal whose class is ``unknown`` has its weight multiplied by 0.4.
+That scale is equation (2) on page 9 of the paper, not a local choice.
 A tie returns no class. The keyword proposal is passed in by the caller.
 Mass and density, when a caller supplies them in kilograms, are stored as
 natural logs. A value that is already a logarithm is written with

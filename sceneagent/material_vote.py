@@ -18,13 +18,16 @@ The three sources are the physics prior, the VLM, and keywords.
   file). It is then loaded only through ``vote_loaded_prior``. A missing
   file is a null source: not a zero vector and not a default class. This
   module does not write or ship that npz. The catalog MLP row stays missing.
-* The VLM weight is the crop confidence. ``unknown`` is scaled by 0.4.
-* The keyword weight is ``taxonomy.DEFAULT_KEYWORD_WEIGHT``. The paper says
-  keyword priors use a fixed weight and does not publish the number.
+* The VLM weight is the crop confidence, and only when that confidence is
+  inside ``[0, 1]``. ``unknown`` is scaled by 0.4 (§3.4 page 9).
+* The keyword weight is ``taxonomy.DEFAULT_KEYWORD_WEIGHT`` (1.0). That
+  number is a SimFoundry choice, not published: the paper says keyword
+  priors use a fixed weight and does not give the number.
 
-The VLM client calls ``GEMINI_FLASH_MODEL_ID``. The paper names Gemini 2.5
-Flash; that id returns HTTP 404 for this key, so Flash 3.8 is our choice.
-The key is read only from ``os.environ['GEMINI_API_KEY']``.
+The material-vote VLM is ``GEMINI_FLASH_MODEL_ID`` (``gemini-3.8-flash``).
+That model id is our configuration. The PDF's Gemini 2.5 Flash sentence is
+the section 3.8 Meshy route, not this vote. The key is read only from
+``os.environ['GEMINI_API_KEY']``.
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from typing import Any
 
 from sceneagent.gemini_client import GeminiClient, redact
 from sceneagent.mlp.apply import decode_mean, vote_loaded_prior
+from sceneagent.mlp.prior import PhysicsPrior
 from sceneagent.physics import UNKNOWN_WEIGHT_SCALE, scaled_weight, vote_material
 from sceneagent.taxonomy import (
     DEFAULT_KEYWORD_WEIGHT,
@@ -49,9 +53,8 @@ from sceneagent.taxonomy import (
 
 logger = logging.getLogger(__name__)
 
-# Paper §3.4 names Gemini 2.5 Flash. That id is PAPER_MODEL_ID in
-# gemini_client.py and answers HTTP 404 here. The vote calls Flash 3.8.
-# This model id is our choice, not a weight the paper publishes.
+# Our configuration for the material vote. The PDF's Gemini 2.5 Flash
+# sentence is the section 3.8 Meshy route, not this vote.
 GEMINI_FLASH_MODEL_ID = "gemini-3.8-flash"
 
 
@@ -218,6 +221,13 @@ def run_material_vote(
     if prior_path.is_file():
         for obj in objects:
             _require_prior_inputs(obj.get("features"), obj.get("mask"))
+        # Load only after every object has features and a mask. A missing
+        # row must keep the existing error, and a bad file must not call
+        # the VLM.
+        PhysicsPrior.load(prior_path)
+        for obj in objects:
+            if not _mask_selects_a_gaussian(obj.get("mask")):
+                raise ValueError("physics prior mask selects no Gaussian")
     resolved = open_vlm_client(client=client, client_factory=client_factory)
     counted = _CountedVlm(resolved)
     votes = [
@@ -271,6 +281,7 @@ def _vote_one(name, crops, features, mask, checkpoint, client):
     prior_path = configured_prior_checkpoint(checkpoint)
     if prior_path.is_file():
         _require_prior_inputs(features, mask)
+        _require_usable_prior(prior_path, mask)
     reply = client.classify_crops(crops)
     if (
         not isinstance(reply, Mapping)
@@ -372,6 +383,25 @@ def _class_source(source, material, raw_confidence, weight_before_scale):
     }
 
 
+def _require_usable_prior(path: Path, mask: Any) -> None:
+    """Load the npz and require a selected Gaussian before any VLM call."""
+
+    PhysicsPrior.load(path)
+    if not _mask_selects_a_gaussian(mask):
+        raise ValueError("physics prior mask selects no Gaussian")
+
+
+def _mask_selects_a_gaussian(mask: Any) -> bool:
+    try:
+        items = iter(mask)
+    except TypeError:
+        return bool(mask)
+    for item in items:
+        if item:
+            return True
+    return False
+
+
 def _require_prior_inputs(features, mask) -> None:
     """Refuse a prior vote that has no Gaussian features or mask.
 
@@ -400,12 +430,15 @@ def _null_source(source: str) -> dict[str, Any]:
 
 
 def _confidence(value: Any) -> float:
+    """Accept a finite confidence in ``[0, 1]``. Do not clamp."""
+
     try:
         number = float(value)
     except (TypeError, ValueError):
         raise MaterialVlmError("VLM confidence was not a number") from None
-    if not math.isfinite(number) or number < 0.0:
-        raise MaterialVlmError("VLM confidence must be a non-negative finite number")
+    # Reject values outside the closed interval. Clamping would turn 5 into 1.
+    if not math.isfinite(number) or number < 0.0 or number > 1.0:
+        raise MaterialVlmError("VLM confidence must be a finite number in [0, 1]")
     return number
 
 
