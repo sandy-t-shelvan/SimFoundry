@@ -126,7 +126,7 @@ Section 3.3 follows LangSplat's approach of attaching features to Gaussians. SAM
 |---|---|---|
 | Splat views | Section 3.2 training, section 3.3 inspection renders | Produced. `ns-train splatfacto-big` wrote `step-000001999.ckpt` and render `0002.jpg`, then a 30000-iteration run wrote `step-000029999.ckpt` (268015 means). Catalog splatfacto row is done. |
 | Masks | Section 3.3, every tenth view | Produced. SAM vit_h masked every 10th frame of the 15-frame Fruits sample: `0001.jpg` (33 masks) and `0011.jpg` (19 masks). Catalog row is done. |
-| Features | Section 3.3, OpenCLIP 512-d and DINOv2 ViT-S/14 | Produced. OpenCLIP ViT-B-16 (512-d) and DINOv2 ViT-S/14 (384-d) are in `/workspace/fruits-features/features.json`. Do not substitute DINOv3. Catalog rows are done. |
+| Features | Section 3.3, OpenCLIP 512-d and DINOv2 ViT-S/14 | Partial. OpenCLIP ViT-B-16 (512-d) and DINOv2 ViT-S/14 crop vectors are in `/workspace/fruits-features/features.json`. The per-Gaussian feature file is still missing. Do not substitute DINOv3. |
 | Meshes | Section 3.3, SAM3D | Produced. SAM 3D wrote `/workspace/fruits-features/sam3d/0001.glb`. Hunyuan, TRELLIS.2, and Pixal3D in stage 7 are not SAM3D. Catalog row is done. |
 
 ### SAM, GroundingDINO, OpenCLIP, DINOv2, LangSplat

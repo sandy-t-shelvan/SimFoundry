@@ -180,20 +180,20 @@ const BLOCKS: Block[] = [
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: each masked crop is a 512-d vector. It is a physics-prior input, not the Gaussian assignment.",
-        plan: "EXPANSION_PLAN forbids substituting another CLIP. The evaluation table records the OpenCLIP vectors in features.json. Catalog row is done.",
+        plan: "EXPANSION_PLAN forbids substituting another CLIP. The section 3.3 Features row is partial: the 512-d crop vectors are in features.json, and the per-Gaussian feature file is still missing.",
         changelog: "512-d vectors for 0001.jpg and 0011.jpg. No new checkpoint download.",
         ran: "openai weights, stored in /workspace/fruits-features/features.json.",
-        miss: "Two crop vectors, not a feature on every Gaussian.",
+        miss: "Partial. Two crop vectors are in features.json. The per-Gaussian feature file is still missing.",
       },
       {
         sub: "DINOv2 ViT-S/14",
         status: "done",
         addressed: "still open",
         paper: "Section 3.3: DINOv2 ViT-S/14 is the other physics-prior feature. It does not assign Gaussians.",
-        plan: "Explicit rule: do not substitute DINOv3. The evaluation table records the DINOv2 ViT-S/14 vectors. Catalog row is done.",
+        plan: "Explicit rule: do not substitute DINOv3. The section 3.3 Features row is partial: the ViT-S/14 crop vectors are in features.json, and the per-Gaussian feature file is still missing.",
         changelog: "dinov2_vits14, 384-d, checkpoint already on disk. Not DINOv3.",
         ran: "384-d vectors for 0001.jpg and 0011.jpg in features.json.",
-        miss: "The forbidden DINOv3 swap was not made. The vectors are still one crop each, not the per-Gaussian MLP input in section 3.4.",
+        miss: "Partial. Do not substitute DINOv3. The vectors are still one crop each. The per-Gaussian feature file is still missing.",
       },
       {
         sub: "LangSplat-style codebook",
@@ -1019,7 +1019,7 @@ export default function SceneAgentPaperGaps() {
       </Grid>
 
       <Callout tone="warning" title="The gap matrix does not lag the catalog">
-        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). DESIGN.md’s opening counts match catalog.py: 17 done, 11 partial, 14 missing, 42 rows. Its block-map table is still an earlier snapshot and is not regenerated. EXPANSION_PLAN records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA, and its section 3.3 table records the SAM masks, OpenCLIP and DINOv2 features, and the SAM 3D mesh. skills.py lists SCENEAGENT-INSPECT-ISAAC as stage_opened. No coding model wrote a fix report.
+        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). DESIGN.md’s opening counts match catalog.py: 17 done, 11 partial, 14 missing, 42 rows. Its block-map table is still an earlier snapshot and is not regenerated. EXPANSION_PLAN records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. Its section 3.3 table records the SAM masks and the SAM 3D mesh as produced. The Features row is partial: crop vectors exist and the per-Gaussian feature file is missing. skills.py lists SCENEAGENT-INSPECT-ISAAC as stage_opened. No coding model wrote a fix report.
       </Callout>
 
       <MissedFruitsPass />
@@ -1351,7 +1351,7 @@ export default function SceneAgentPaperGaps() {
           ["Agent plan / manifest / ledger", "/workspace/fruits-agent. Repair accepted MJCF, SAM 3D, PartSAM, inspector, ICP file, aligned USDA, and one failed hull rollout.", "3.1 loop done"],
           ["CUDA COLMAP 4.2.1", "15/15 images, 603 points, mean reprojection 0.867273 px. Runner still 1 fps and a 16-frame cap.", "3.2 partial"],
           ["splatfacto-big", "2000 steps, not 30000. step-000001999.ckpt. 13 train renders. Cameras from this COLMAP are not in the train.", "3.2 done"],
-          ["SAM, OpenCLIP, DINOv2", "vit_h every 10th frame: 0001 has 33 masks, 0011 has 19. OpenCLIP 512-d. DINOv2 ViT-S/14 384-d. Not DINOv3.", "3.3 done"],
+          ["SAM, OpenCLIP, DINOv2", "vit_h every 10th frame: 0001 has 33 masks, 0011 has 19. OpenCLIP 512-d and DINOv2 ViT-S/14 384-d crop vectors are in features.json. Not DINOv3. The per-Gaussian feature file is still missing.", "masks done; features partial"],
           ["Association", "Equation (1) kept 27548/84993 Gaussians.", "3.3 done"],
           ["SAM 3D + ICP", "0001.glb, overlay, gaussian ply. Trimmed ICP median 0.04999262711481225. Ours iteration-1 gate rejects: coverage 0.146 and silhouette None.", "mesh done, ICP partial"],
           ["Aligned USDA", "phase1_aligned_mesh.usda, 5,339,577 bytes, 8095 faces. Isaac opened=True, 4 prims.", "3.7 done"],
@@ -1362,7 +1362,7 @@ export default function SceneAgentPaperGaps() {
           ["Material vote", "gemini-2.5-flash HTTP 404. gemini-3.8-flash class wood. Unpublished MLP not started.", "vote done, VLM partial, MLP missing"],
           ["Sisters and place grid", "box.json and bowl.json only. +5% box does not fit. Wilson 0/1 is 0–0.7934506856227626.", "sisters done, grid partial"],
         ]}
-        rowTone={["success", "warning", "success", "success", "success", "warning", "success", "warning", "success", "danger", "warning", "warning", "warning"]}
+        rowTone={["success", "warning", "success", "warning", "success", "warning", "success", "warning", "success", "danger", "warning", "warning", "warning"]}
         striped
         stickyHeader
       />
@@ -1421,7 +1421,7 @@ export default function SceneAgentPaperGaps() {
       <H2>Plan and design misses</H2>
       <Stack gap={10}>
         <Callout tone="warning" title="1. Opening counts match the catalog; two snapshots remain">
-          EXPANSION_PLAN section 3.3 records the splat, SAM masks, OpenCLIP, DINOv2, and the SAM 3D mesh. Section 3.1 records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s opening counts match catalog.py (17 done, 11 partial, 14 missing, 42 rows). Its block-map table is still an earlier snapshot and is not regenerated. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
+          EXPANSION_PLAN section 3.3 records the splat, the SAM masks, and the SAM 3D mesh. The Features row is partial: OpenCLIP and DINOv2 crop vectors exist, and the per-Gaussian feature file is missing. Section 3.1 records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s opening counts match catalog.py (17 done, 11 partial, 14 missing, 42 rows). Its block-map table is still an earlier snapshot and is not regenerated. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
         </Callout>
         <Callout tone="warning" title="2. Two done-rules disagree on the splat">
           The splatfacto row is done at 2000 steps because a checkpoint and one render exist. The COLMAP row is done only when a full-rate sequence feeds splatfacto. Catalog says those cameras are not in the train, the runner is still 1 fps with a 16-frame cap, and nerfstudio’s default 30000 was not used. Marking one done and the other partial hides that the scene in section 3.2 was not built.
