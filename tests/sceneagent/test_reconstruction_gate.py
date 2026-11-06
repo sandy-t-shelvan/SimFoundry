@@ -487,6 +487,59 @@ def test_nonfinite_observation_is_unparsable(tmp_path):
     json.loads(stored)
 
 
+@pytest.mark.parametrize("inputs", [1, 2, 3, 4, 5, 15])
+def test_observation_overflow_is_unparsed_on_the_chosen_model(tmp_path, inputs):
+    """``1e309`` matches the numeric label and is not a finite observation.
+
+    The token ``nan`` never reaches that parser. Registered images and
+    reprojection otherwise clear the bar, including when the floor of 10
+    is the registered threshold (inputs 1 through 5).
+    """
+    result = _evaluate(
+        tmp_path,
+        inputs,
+        [_passing(registered=15, observations="1e309", reprojection="1.0")],
+    )
+    rule = _bar(result)["mean_obs_per_image"]
+    assert result["pass"] is False
+    assert result["document"]["chosen_model"] == "0"
+    assert rule["value"] is None
+    assert rule["pass"] is False
+    assert _bar(result)["registered"]["pass"] is True
+    assert _bar(result)["mean_reproj_err_px"]["pass"] is True
+    assert "mean_obs_per_image fails or missing" in _bar(result)["fail_reasons"]
+    stored = json.loads(
+        (result["evidence"] / EVIDENCE_JSON_NAME).read_text(encoding="utf-8")
+    )
+    assert stored["quality_bar"]["mean_obs_per_image"]["value"] is None
+
+
+@pytest.mark.parametrize("inputs", [1, 2, 3, 4, 5, 15])
+def test_reprojection_overflow_is_unparsed_on_the_chosen_model(tmp_path, inputs):
+    """``-1e309px`` matches the numeric label and is not a finite error.
+
+    A negative overflow compares as less than 4 px unless the parser
+    drops it. Registered images and observations otherwise clear the bar.
+    """
+    result = _evaluate(
+        tmp_path,
+        inputs,
+        [_passing(registered=15, observations="40.000000", reprojection="-1e309")],
+    )
+    rule = _bar(result)["mean_reproj_err_px"]
+    assert result["pass"] is False
+    assert result["document"]["chosen_model"] == "0"
+    assert rule["value"] is None
+    assert rule["pass"] is False
+    assert _bar(result)["registered"]["pass"] is True
+    assert _bar(result)["mean_obs_per_image"]["pass"] is True
+    assert "mean_reproj_err_px fails or missing" in _bar(result)["fail_reasons"]
+    stored = json.loads(
+        (result["evidence"] / EVIDENCE_JSON_NAME).read_text(encoding="utf-8")
+    )
+    assert stored["quality_bar"]["mean_reproj_err_px"]["value"] is None
+
+
 @pytest.mark.parametrize("inputs", [None, 0, True, "15"])
 def test_missing_input_count_fails_closed(tmp_path, inputs):
     result = _evaluate(tmp_path, inputs, [_passing(registered=15, points=400)])
