@@ -121,6 +121,7 @@ def rgb_image_problem(path: Path) -> str | None:
 
     A palette image counts when any palette entry is not gray. Grayscale and
     LA do not count: a roughness or alpha map must not be kept as the photo.
+    A 16-bit grayscale+alpha PNG is LA even though Pillow reports RGBA.
     """
 
     problem = _container_problem(path, kind="image")
@@ -133,6 +134,12 @@ def rgb_image_problem(path: Path) -> str | None:
             image.load()
             width, height = image.size
             mode = image.mode
+            if mode == "RGBA" and _is_png_16bit_grayscale_alpha(path):
+                # Pillow has no 16-bit LA mode, so IHDR color type 4 at bit
+                # depth 16 (raw mode LA;16B) is opened as RGBA. The pixels
+                # are the gray channel copied into R, G, and B, which is not
+                # a color photo. 8-bit LA is already mode LA.
+                mode = "LA"
             if mode == "P":
                 mode = "RGB" if _palette_has_color(image) else "L"
     except (UnidentifiedImageError, OSError, ValueError) as exc:
@@ -339,6 +346,28 @@ def _container_problem(path: Path, *, kind: str) -> str | None:
 def _has_glb_magic(path: Path) -> bool:
     with path.open("rb") as handle:
         return handle.read(4) == b"glTF"
+
+
+def _is_png_16bit_grayscale_alpha(path: Path) -> bool:
+    """Return whether ``path`` is a 16-bit grayscale+alpha PNG.
+
+    PNG color type 4 is grayscale with alpha. Only bit depth 16 is special:
+    Pillow maps that file to mode RGBA. Bit depth 8 is mode LA already.
+    IHDR is the first chunk, so the color type sits at a fixed offset.
+    """
+
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(26)
+    except OSError:
+        return False
+    if len(header) < 26 or not header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    if header[12:16] != b"IHDR":
+        return False
+    bit_depth = header[24]
+    color_type = header[25]
+    return bit_depth == 16 and color_type == 4
 
 
 def _palette_has_color(image: Image.Image) -> bool:
