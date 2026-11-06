@@ -14,6 +14,5 @@
   "status": "running",
   "ssh_direct_port": 52396,
   "remote_path": "/workspace/sceneagent-simfoundry",
-  "existing_instance_left_alone": 58357498,
   "note": "Connection facts only. The Vast API key is not in this file."
 }

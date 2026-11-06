@@ -169,6 +169,9 @@ def _entry(step_id, attempt, result, repair):
         "review",
         "returncode",
         "links_match",
+        "forced_for",
+        "completion_needed",
+        "diffusers_version",
     ):
         if key in detail:
             entry[key] = detail[key]

@@ -15,8 +15,12 @@ any negative signal code, is a ledger fail.
 
 from __future__ import annotations
 
+import hashlib
+import importlib
 import inspect
 import json
+import logging
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -45,6 +49,17 @@ ROPE_CRASH = (
 # Shells report SIGSEGV as 128 + 11. subprocess reports that signal as a
 # negative code, for example -11. Either form is a crashed review.
 MOTION_REVIEW_SEGV_EXIT = 139
+# SF-10 dc1 is the only force token. The stored VLM flag is not rewritten.
+SF10_DC1_FORCE = "SF-10 dc1"
+REQUIRED_DIFFUSERS_VERSION = "0.39.0"
+PARTNET_ASSET_ID = "25959"
+
+logger = logging.getLogger(__name__)
+
+
+class DiffusersVersionError(Exception):
+    """Installed diffusers is not 0.39.0. CubePart inference was not started."""
+
 
 # Listing from the Quebec zip. The download is not started by this module.
 ARTICULATE_UNCOMPRESSED_BYTES = 15_616_309_082
@@ -543,6 +558,90 @@ def cubepart_mesh_result(part_mesh_path):
     }
 
 
+def installed_diffusers_version(lookup=None):
+    """Return the installed diffusers version.
+
+    ``lookup`` is a callable used by tests. The default import happens only
+    when no lookup is passed, so CPU CI does not need diffusers installed.
+    """
+    if lookup is not None:
+        return str(lookup())
+    module = importlib.import_module("diffusers")
+    version = getattr(module, "__version__", None)
+    if not isinstance(version, str) or not version:
+        raise DiffusersVersionError(
+            "diffusers is installed but has no version. "
+            "CubePart inference was not started."
+        )
+    return version
+
+
+def require_diffusers_039(lookup=None):
+    """Log the installed version. Raise unless it is exactly 0.39.0."""
+    version = installed_diffusers_version(lookup)
+    logger.info("installed diffusers version %s", version)
+    if version != REQUIRED_DIFFUSERS_VERSION:
+        raise DiffusersVersionError(
+            f"diffusers {version} is installed. "
+            "CubePart inference requires 0.39.0 and was not started."
+        )
+    return version
+
+
+def run_cubepart(
+    out_dir, completion_needed, force=None, infer=None, version_lookup=None
+):
+    """Run CubePart from the stored VLM flag, or skip it.
+
+    ``completion_needed`` is the stored flag. This function does not write a
+    new VLM reply. The default skips when the flag is not true. ``force``
+    must be ``SF-10 dc1`` to run anyway, and the ledger then records that
+    token plus the stored flag. The version check runs before inference.
+    """
+    stored = completion_needed
+    forced_for = SF10_DC1_FORCE if force == SF10_DC1_FORCE else None
+    if forced_for is None and stored is not True:
+        result = {
+            "ok": False,
+            "artifact": None,
+            "reason": (
+                "CubePart skipped because the stored completion_needed flag "
+                "is not true."
+            ),
+            "detail": {
+                "completion_needed": stored,
+                "forced_for": None,
+                "ran": False,
+                "kind": "cubepart_mesh",
+            },
+        }
+        entry = append_step(out_dir, "cubepart", result)
+        return {
+            "ran": False,
+            "entries": [entry],
+            "completion_needed": stored,
+            "forced_for": None,
+        }
+    version = require_diffusers_039(version_lookup)
+    if infer is None:
+        raise RuntimeError(
+            "CubePart inference runner was not provided. Inference was not started."
+        )
+    produced = infer()
+    mesh_result = cubepart_mesh_result(produced)
+    mesh_result["detail"]["completion_needed"] = stored
+    mesh_result["detail"]["forced_for"] = forced_for
+    mesh_result["detail"]["ran"] = True
+    mesh_result["detail"]["diffusers_version"] = version
+    entry = append_step(out_dir, "cubepart", mesh_result)
+    return {
+        "ran": True,
+        "entries": [entry],
+        "completion_needed": stored,
+        "forced_for": forced_for,
+    }
+
+
 def partsam_link_names(parts):
     """URDF link tokens for PartSAM parts. Empty input is refused."""
     names = []
@@ -614,7 +713,7 @@ def run_partsam_articulation(out_dir, parts, part_mesh=None, propose=None, revie
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    names = partsam_link_names(parts)
+    records = part_records(parts)
     spec_path = out / "partsam_parts.json"
     urdf_path = out / "mobility.urdf"
     review_dir = out / "motion_review"
@@ -622,7 +721,7 @@ def run_partsam_articulation(out_dir, parts, part_mesh=None, propose=None, revie
         json.dumps(
             {
                 "source": "partsam",
-                "parts": [{"name": name} for name in names],
+                "parts": records,
                 "note": (
                     "Propose joints for these PartSAM links. "
                     "A retrieved PartNet table is not this object."
@@ -640,7 +739,7 @@ def run_partsam_articulation(out_dir, parts, part_mesh=None, propose=None, revie
     if part_mesh is not None:
         entries.append(append_step(out, "cubepart", cubepart_mesh_result(part_mesh)))
     outcome = _articulation_outcome(
-        names,
+        records,
         urdf_path,
         spec_path,
         propose,
@@ -675,7 +774,7 @@ def run_partsam_articulation(out_dir, parts, part_mesh=None, propose=None, revie
 
 
 def _articulation_outcome(
-    names,
+    records,
     urdf_path,
     spec_path,
     propose,
@@ -698,7 +797,7 @@ def _articulation_outcome(
             "command": propose_command,
             "spec_path": spec_path,
             "urdf_path": urdf_path,
-            "parts": names,
+            "parts": records,
         },
     )
     propose_code, _stdout, stderr = _completed_io(proposed)
@@ -735,36 +834,35 @@ def _articulation_outcome(
     )
     code, stdout, review_err = _completed_io(reviewed)
     verdict = classify_motion_review(code, stdout, review_err)
-    links_match = _links_match(urdf_path, names)
     if verdict == "fail":
         return {
             "ok": False,
             "review": "fail",
             "returncode": code,
-            "links_match": links_match,
+            "links_match": False,
             "reason": (
                 f"Motion review crashed with return code {code}. "
                 "Exit 139 or a signal is fail, not a pass."
             ),
         }
-    if verdict == "accept" and links_match:
+    # Provenance runs before a URDF is allowed to count. A crash above is
+    # already fail, so this reject cannot hide one.
+    provenance = check_urdf_provenance(urdf_path, records)
+    if not provenance["ok"]:
+        return {
+            "ok": False,
+            "review": "reject",
+            "returncode": code,
+            "links_match": False,
+            "reason": provenance["reason"],
+        }
+    if verdict == "accept":
         return {
             "ok": True,
             "review": "accept",
             "returncode": code,
             "links_match": True,
             "reason": "",
-        }
-    if not links_match:
-        return {
-            "ok": False,
-            "review": "reject",
-            "returncode": code,
-            "links_match": False,
-            "reason": (
-                "URDF links are not the PartSAM parts. "
-                f"The motion review said {verdict}. That URDF is not accepted."
-            ),
         }
     return {
         "ok": False,
@@ -786,12 +884,148 @@ def _crashed(returncode):
     return classify_motion_review(returncode) == "fail"
 
 
-def _links_match(urdf_path, names):
+def part_records(parts):
+    """PartSAM link records. Mesh path and SHA-256 are kept when the caller set them."""
+    names = partsam_link_names(parts)
+    records = []
+    for name, part in zip(names, parts):
+        record = {"name": name}
+        if isinstance(part, dict):
+            mesh = part.get("mesh")
+            digest = part.get("sha256")
+            if mesh:
+                record["mesh"] = str(mesh)
+            if digest:
+                record["sha256"] = str(digest)
+        records.append(record)
+    return records
+
+
+def check_urdf_provenance(urdf_path, parts):
+    """Accept a URDF only when it is exactly these PartSAM parts.
+
+    Link count must equal the part count. Every link mesh must match a part
+    by path or SHA-256. A PartNet path or id, including 25959, is a reject.
+    The reason names which of those checks failed.
+    """
+    path = Path(urdf_path)
     try:
-        links = urdf_link_names(urdf_path)
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return _provenance_fail(f"URDF could not be read ({exc}).")
+    partnet = _partnet_reference(text)
+    if partnet:
+        return _provenance_fail(partnet)
+    try:
+        links = _links_with_meshes(path)
     except ET.ParseError:
+        return _provenance_fail(
+            "URDF could not be parsed, so it is not a PartSAM articulation."
+        )
+    records = part_records(parts)
+    if len(links) != len(records):
+        return _provenance_fail(
+            f"URDF link count {len(links)} is not the PartSAM part count {len(records)}."
+        )
+    unused = list(records)
+    for link in links:
+        matched = _take_matching_part(path, link, unused)
+        if matched is None:
+            label = link["name"] or "(unnamed)"
+            return _provenance_fail(
+                f"Link {label} mesh does not match a PartSAM part by path or SHA-256."
+            )
+        unused.remove(matched)
+    return {"ok": True, "reason": "", "links_match": True}
+
+
+def _provenance_fail(reason):
+    return {"ok": False, "reason": reason, "links_match": False}
+
+
+def _partnet_reference(text):
+    if re.search(rf"(?<!\d){PARTNET_ASSET_ID}(?!\d)", text):
+        return f"URDF references PartNet asset {PARTNET_ASSET_ID}."
+    if re.search(r"partnet", text, re.IGNORECASE):
+        return "URDF references a PartNet asset."
+    return None
+
+
+def _links_with_meshes(path):
+    links = []
+    for node in ET.parse(path).getroot().iter():
+        if _local_tag(node) != "link":
+            continue
+        filenames = []
+        for child in node.iter():
+            if child is node or _local_tag(child) != "mesh":
+                continue
+            filename = child.get("filename")
+            if filename:
+                filenames.append(filename)
+        links.append({"name": node.get("name") or "", "meshes": filenames})
+    return links
+
+
+def _local_tag(node):
+    return node.tag.rsplit("}", 1)[-1]
+
+
+def _take_matching_part(urdf_path, link, unused):
+    for filename in link["meshes"]:
+        for part in unused:
+            if _mesh_matches(urdf_path, filename, part):
+                return part
+    return None
+
+
+def _mesh_matches(urdf_path, filename, part):
+    resolved = _resolve_mesh(urdf_path, filename)
+    mesh = part.get("mesh")
+    if mesh and _paths_match(filename, resolved, mesh):
+        return True
+    digest = part.get("sha256")
+    file_digest = _file_sha256(resolved)
+    if digest and file_digest == digest:
+        return True
+    return bool(
+        mesh
+        and file_digest
+        and Path(mesh).is_file()
+        and file_digest == _file_sha256(mesh)
+    )
+
+
+def _paths_match(filename, resolved, mesh):
+    wanted = Path(mesh)
+    if filename == mesh or str(resolved) == str(wanted):
+        return True
+    try:
+        if (
+            wanted.exists()
+            and resolved.exists()
+            and resolved.resolve() == wanted.resolve()
+        ):
+            return True
+    except OSError:
         return False
-    return set(names) <= set(links)
+    return False
+
+
+def _resolve_mesh(urdf_path, filename):
+    candidate = Path(filename)
+    if candidate.is_absolute():
+        return candidate
+    return Path(urdf_path).parent / candidate
+
+
+def _file_sha256(path):
+    file_path = Path(path)
+    if not file_path.is_file():
+        return None
+    digest = hashlib.sha256()
+    digest.update(file_path.read_bytes())
+    return digest.hexdigest()
 
 
 def urdf_link_names(path):

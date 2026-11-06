@@ -152,7 +152,7 @@ python -m sceneagent examples/phase1_place_scene.json --out runs/phase1_place
 - No invented friction, mass, modulus, or ICP thresholds.
 - No GraspClutter6D, MessyKitchens, or 4DCodeBench scores.
 - No pi0.5, GR00T, or real-robot loop.
-- No edit to the running Vast pipeline on instance `58357498`.
+- No Vast instance other than `58301075`.
 
 ## Risks
 
