@@ -615,6 +615,28 @@ def load_stored_sam3d_pose(path, glb_path):
     }
 
 
+def _score_silhouette(result, rendered_masks, observed_masks, mesh):
+    """Silhouette of the refined similarity, not the pre-ICP vertices.
+
+    The gate judges the pose ICP finished on. A mesh is rasterized only after
+    ``apply_similarity`` with that scale, rotation, and translation. Supplied
+    masks cannot stand in for the mesh: they may be a render of the export
+    frame, and using them would skip the refined transform.
+    """
+    if mesh is not None:
+        scored = dict(mesh)
+        scored["vertices"] = apply_similarity(
+            mesh["vertices"],
+            result["scale"],
+            result["rotation"],
+            result["translation"],
+        )
+        rendered = _rendered_masks(None, observed_masks, scored)
+    else:
+        rendered = _rendered_masks(rendered_masks, observed_masks, None)
+    return silhouette_agreement(rendered, observed_masks)
+
+
 def _rendered_masks(rendered_masks, observed_masks, mesh):
     if rendered_masks is not None:
         return list(rendered_masks)
@@ -658,6 +680,12 @@ def _pose_initialization(pose, result):
         if translation is None
         else [float(item) for item in translation],
         "translation_source": pose["translation_source"],
+        "scored_pose": "post_icp",
+        "silhouette_transform": {
+            "scale": float(result["scale"]),
+            "rotation": np.asarray(result["rotation"], dtype=np.float64).tolist(),
+            "translation": np.asarray(result["translation"], dtype=np.float64).tolist(),
+        },
     }
 
 
@@ -722,12 +750,11 @@ def write_alignment_residual(
     """Align from the stored SAM 3D pose and write the residual JSON.
 
     The pose sidecar has to exist and its ``glb_sha256`` has to be the SHA-256
-    of ``glb_path`` before ICP runs. The residual carries numeric normalized
-    median, p90, and coverage, and a numeric silhouette when at least one view
-    has a non-empty raster union. An empty union leaves silhouette null and
-    the ledger reason is ``silhouette_undefined``. A measured 0 rejects on the
-    ordinary below-minimum line. This function does not change the gate's
-    cutoffs.
+    of ``glb_path`` before ICP runs. Silhouette is measured after ICP, on the
+    refined scale, rotation, and translation. An empty union leaves silhouette
+    null and the ledger reason is ``silhouette_undefined``. A measured 0
+    rejects on the ordinary below-minimum line. This function does not change
+    the gate's cutoffs.
     """
     if glb_path is None:
         raise PoseSidecarHashMissingError(
@@ -736,8 +763,6 @@ def write_alignment_residual(
     pose = load_stored_sam3d_pose(pose_path, glb_path)
     if observed_masks is None:
         raise ValueError("silhouette needs observed masks")
-    rendered = _rendered_masks(rendered_masks, observed_masks, mesh)
-    agreement = silhouette_agreement(rendered, observed_masks)
     result = trimmed_similarity_icp(
         source,
         target,
@@ -748,6 +773,7 @@ def write_alignment_residual(
     )
     if result["seeds_searched"] != 1 or result["pose_source"] != "stored_sam3d":
         raise RuntimeError("ICP did not start from the stored SAM 3D pose")
+    agreement = _score_silhouette(result, rendered_masks, observed_masks, mesh)
     residuals = measure_residuals(result, target, silhouette=agreement["silhouette"])
     pose_info = _pose_initialization(pose, result)
     body = dict(residuals)

@@ -636,3 +636,90 @@ def test_icp_step_gate_reject_exits_zero_and_bad_measures_do_not(tmp_path):
     cli_entry = json.loads((tmp_path / "cli" / "ledger.json").read_text(encoding="utf-8"))["entries"][0]
     assert cli_entry["decision"] == "reject"
     assert main(["--pose", str(pose_path)]) == 2
+
+
+def _shifted_square(tmp_path):
+    """A square ICP must slide by 0.6 m. The initial raster and the refined one differ."""
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [2.0, 2.0, 0.0],
+            [0.0, 2.0, 0.0],
+        ]
+    )
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    shift = np.array([0.6, 0.0, 0.0])
+    observed = rasterize_orthographic_silhouette(vertices + shift, faces, width=4, height=4)
+    initial = rasterize_orthographic_silhouette(vertices, faces, width=4, height=4)
+    pose_path, glb = _sidecar(
+        tmp_path,
+        rotation=[0.0, 0.0, 0.0],
+        translation=[0.0, 0.0, 0.0],
+        scale=1.0,
+    )
+    mesh = {"vertices": vertices, "faces": faces, "width": 4, "height": 4}
+    return vertices, faces, observed, initial, pose_path, glb, mesh
+
+
+def test_silhouette_is_the_refined_pose_not_the_pre_icp_pose(tmp_path):
+    vertices, _faces, observed, initial, pose_path, glb, mesh = _shifted_square(tmp_path)
+    initial_iou = silhouette_iou(initial, observed)
+    assert initial_iou == pytest.approx(1.0 / 3.0)
+    written = write_alignment_residual(
+        vertices,
+        vertices + np.array([0.6, 0.0, 0.0]),
+        pose_path,
+        tmp_path / "residual.json",
+        observed_masks=[observed],
+        mesh=mesh,
+        ledger_dir=tmp_path / "ledger",
+        glb_path=glb,
+    )
+    assert written["residuals"]["silhouette"] == pytest.approx(1.0)
+    assert written["residuals"]["silhouette"] != pytest.approx(initial_iou)
+    transform = written["pose_initialization"]["silhouette_transform"]
+    assert written["pose_initialization"]["scored_pose"] == "post_icp"
+    assert transform["scale"] == pytest.approx(1.0, abs=1e-6)
+    np.testing.assert_allclose(transform["translation"], [0.6, 0.0, 0.0], atol=1e-6)
+    np.testing.assert_allclose(transform["rotation"], np.eye(3), atol=1e-6)
+    refined = apply_similarity(
+        vertices,
+        transform["scale"],
+        transform["rotation"],
+        transform["translation"],
+    )
+    refined_iou = silhouette_iou(
+        rasterize_orthographic_silhouette(refined, mesh["faces"], width=4, height=4),
+        observed,
+    )
+    assert written["residuals"]["silhouette"] == pytest.approx(refined_iou)
+    entry = json.loads((tmp_path / "ledger" / "ledger.json").read_text(encoding="utf-8"))["entries"][0]
+    assert entry["pose_initialization"]["scored_pose"] == "post_icp"
+    assert entry["pose_initialization"]["silhouette_transform"]["translation"] == pytest.approx(
+        [0.6, 0.0, 0.0], abs=1e-6
+    )
+    assert entry["residuals"]["silhouette"] == pytest.approx(1.0)
+
+
+def test_mesh_fallback_uses_the_refined_transform_not_a_stale_mask(tmp_path):
+    vertices, _faces, observed, initial, pose_path, glb, mesh = _shifted_square(tmp_path)
+    stale_iou = silhouette_iou(initial, observed)
+    assert stale_iou == pytest.approx(1.0 / 3.0)
+    written = write_alignment_residual(
+        vertices,
+        vertices + np.array([0.6, 0.0, 0.0]),
+        pose_path,
+        tmp_path / "residual.json",
+        rendered_masks=[initial],
+        observed_masks=[observed],
+        mesh=mesh,
+        ledger_dir=tmp_path / "ledger",
+        glb_path=glb,
+    )
+    assert written["residuals"]["silhouette"] == pytest.approx(1.0)
+    assert written["residuals"]["silhouette"] != pytest.approx(stale_iou)
+    assert written["pose_initialization"]["scored_pose"] == "post_icp"
+    entry = json.loads((tmp_path / "ledger" / "ledger.json").read_text(encoding="utf-8"))["entries"][0]
+    assert entry["pose_initialization"]["scored_pose"] == "post_icp"
+    assert entry["residuals"]["silhouette"] == pytest.approx(1.0)
