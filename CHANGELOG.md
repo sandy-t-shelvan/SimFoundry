@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The sceneagent ruff job also runs `ruff format --check sceneagent`. `sceneagent/` was reformatted with `ruff format` only. The pull request template now has `goal`, a `done_criteria` section, and `proof links`, alongside the existing review fields.
 - Sceneagent CI (`.github/workflows/sceneagent-ci.yml`) is three CPU jobs: ruff 0.17.4, mypy 2.4.1 on `sceneagent`, and `pytest tests/sceneagent -m "not gpu"`. `pytest.ini` registers the `gpu` marker and errors on unknown markers. No current test under `tests/sceneagent` needs a GPU, so none is marked. Pins are in `requirements-sceneagent-ci.txt`. numpy is 2.4.6 because 2.5 requires Python 3.12 and this job stays on 3.11.
 - The MLP download check already accepts an RGB or RGBA photo and a color palette, and it rejects grayscale and LA. `test_rgba_image_passes` was failing because the sample source stayed `ycb` while the manifest said `gso`. The sample source now matches that manifest. An RGBA photo does not waive a source mismatch.
 - Added a `sceneagent` package on the SimFoundry fork. It does not change pipelines A, B, or C.

@@ -8,7 +8,7 @@ How changes land in this tree. The product phases are in `docs/DESIGN.md`.
 2. **Design.** New behavior goes in `sceneagent/` or in a patch under `patches/` if OmniGibson itself must change. `scripts/pipeline/A_reconstruction`, `B_augmentation`, and `C_application` keep their current contracts. Scene JSON from SimFoundry stays compatible with `AGENTS.md`: additive keys only, no rewritten USD to move an object.
 3. **Implement.** Phase-1 code is CPU-only. GPU reconstruction, Isaac, and learned policies wait for a later phase and a machine that can hold them.
 4. **Test.** `python -m pytest tests/sceneagent -q` passes locally before a change is called done. Tests call the formulas and the pipeline. A test that only asserts `True` is not a test.
-5. **Release.** `main` is the integration branch. Feature work can sit on a branch and merge by pull request. CI on push and pull request runs `.github/workflows/sceneagent-ci.yml` on `ubuntu-latest` with Python 3.11. Three jobs: `ruff` (`ruff check sceneagent`), `mypy` (`mypy sceneagent`), and `pytest unit` (`compileall` on `sceneagent`, then `pytest tests/sceneagent -m "not gpu"`). Pins are in `requirements-sceneagent-ci.txt`. The jobs are CPU-only. They do not install OmniGibson, CUDA, or checkpoints. A test that needs a GPU is marked `gpu` and is not collected by the pytest job. Unknown markers fail collection (`--strict-markers`).
+5. **Release.** `main` is the integration branch. Feature work can sit on a branch and merge by pull request. CI on push and pull request runs `.github/workflows/sceneagent-ci.yml` on `ubuntu-latest` with Python 3.11. Three jobs: `ruff` (`ruff check sceneagent` and `ruff format --check sceneagent`), `mypy` (`mypy sceneagent`), and `pytest unit` (`compileall` on `sceneagent`, then `pytest tests/sceneagent -m "not gpu"`). Pins are in `requirements-sceneagent-ci.txt`. The jobs are CPU-only. They do not install OmniGibson, CUDA, or checkpoints. A test that needs a GPU is marked `gpu` and is not collected by the pytest job. Unknown markers fail collection (`--strict-markers`).
 
 ## Out of scope
 
@@ -36,7 +36,7 @@ Workflow: `.github/workflows/sceneagent-ci.yml`.
 
 Three jobs, each on `ubuntu-latest` and Python 3.11. Versions are pinned in `requirements-sceneagent-ci.txt`.
 
-- **ruff** runs `ruff check sceneagent`.
+- **ruff** runs `ruff check sceneagent`, then `ruff format --check sceneagent`.
 - **mypy** runs `mypy sceneagent`. numpy, trimesh, and Pillow are installed so those boundaries are typed. Optional stacks (torch, scipy, MuJoCo, SAM) are not installed.
 - **pytest unit** compiles `sceneagent`, then runs `pytest tests/sceneagent -m "not gpu"`.
 

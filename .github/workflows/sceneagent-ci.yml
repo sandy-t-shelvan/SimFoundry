@@ -17,6 +17,8 @@ jobs:
         run: python -m pip install -r requirements-sceneagent-ci.txt
       - name: Ruff
         run: python -m ruff check sceneagent
+      - name: Ruff format
+        run: python -m ruff format --check sceneagent
 
   mypy:
     name: mypy
