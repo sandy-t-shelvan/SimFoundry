@@ -25,31 +25,31 @@ network | tests/test_remote_model_cache.py::test_gpt_image_cache_write_and_repla
 network | tests/test_remote_model_cache.py::test_orchestrator_fast_stage_cache_and_test_modes | needs network/service
 network | tests/test_remote_model_cache.py::test_test_mode_cache_miss_fails_before_remote_call | needs network/service
 
-torch | tests/test_frame_selection.py::test_score_frame_measures_objects_standing_on_the_support_plane | needs torch, not installed in CPU CI
-torch | tests/test_frame_selection.py::test_score_frame_rejects_a_frame_whose_objects_run_off_the_edge | needs torch, not installed in CPU CI
-torch | tests/test_frame_selection.py::test_score_frame_rejects_a_frame_with_no_support_surface | needs torch, not installed in CPU CI
+torch | tests/test_frame_selection.py::test_score_frame_measures_objects_standing_on_the_support_plane | needs torch, shapely, torchvision, supervision; not installed in CPU CI
+torch | tests/test_frame_selection.py::test_score_frame_rejects_a_frame_whose_objects_run_off_the_edge | needs torch, shapely, torchvision, supervision; not installed in CPU CI
+torch | tests/test_frame_selection.py::test_score_frame_rejects_a_frame_with_no_support_surface | needs torch, shapely, torchvision, supervision; not installed in CPU CI
 torch | tests/test_ground_plane_application.py | needs torch, not installed in CPU CI
 torch | tests/test_placement_utils.py | needs torch, not installed in CPU CI
 torch | tests/test_task_geometry.py::TestXYOverlapFraction::test_works_with_torch_tensors | needs torch, not installed in CPU CI
 
-skip | tests/test_faiss_gpu_policy.py | needs torch and faiss, not installed in CPU CI
-skip | tests/test_mesh_generator_registry.py | Collection imports simfoundry.models.mesh_generator, which imports imageio and torch. This job does not install torch or model checkpoints.
-skip | tests/test_pipeline_refactor_utils.py | Collection imports depth_backends (hydra) and stage_utils. stage_utils imports processing_utils, which imports torch, cv2, torchvision, and supervision. This job does not install that stack.
-skip | tests/test_pipeline_reference_data_e2e.py | Both tests skip unless SIMFOUNDRY_TEST_DATA_ROOT holds generated reference scenes (droid_desk_1, droid_desk_2). Those captures are not in CI. A skip is not a pass.
-skip | tests/test_propose_scene_tasks_predicates.py | Every test loads the stage module, which importorskips simfoundry.models.vlm. That import pulls openai and torch. This job does not install them, so every test would skip. A skip is not a pass.
+skip | tests/test_faiss_gpu_policy.py | needs torch, faiss; not installed in CPU CI
+skip | tests/test_mesh_generator_registry.py | needs imageio, torch; not installed in CPU CI
+skip | tests/test_pipeline_refactor_utils.py | needs hydra, torch, shapely, torchvision, supervision; not installed in CPU CI
+skip | tests/test_pipeline_reference_data_e2e.py | Skips unless Data/droid_desk_1 and Data/droid_desk_2 exist. Those reference captures are not in CI.
+skip | tests/test_propose_scene_tasks_predicates.py | needs openai, torch; not installed in CPU CI
 skip | tests/test_stage11_sim_ready.py | The file's own pytestmark skips every test: stage 11 refactor (discover_sim_ready_jobs / ConversionTask) is not in this release. A skip is not a pass.
 skip | tests/test_stage13_usd_import.py | The file's own pytestmark skips every test: stage 13 refactor (import_usd_asset) is not in this release. A skip is not a pass.
-skip | tests/test_stage5_iteration_gaps.py | Collection imports stage_utils, which imports processing_utils (torch, cv2, torchvision, supervision). This job does not install that stack.
-skip | tests/test_stage7_modularization.py | The test loads stage 7, which imports hydra and simfoundry.models.mesh_generator (imageio and torch). This job does not install hydra or torch.
-skip | tests/test_stage9_articulation_policy.py | Each test loads stage 9, which imports processing_utils (torch and the vision stack) and simfoundry.models.vlm (openai and torch). This job does not install that stack.
-skip | tests/test_stream_subsequence.py | Collection imports stream_subsequence, which imports stage_utils, which imports processing_utils (torch, cv2, torchvision, supervision). This job does not install that stack.
-skip | tests/test_task_aabb_predicates.py | Collection imports torch and omnigibson.object_states.aabb. OmniGibson is out of scope for this job.
-skip | tests/test_atomic_artifact_publish.py::test_watcher_ignores_a_partial_artifact | Imports discover_ready_indices from stream_subsequence, which imports stage_utils and then processing_utils (torch, cv2, torchvision, supervision). This job does not install that stack.
-skip | tests/test_atomic_artifact_publish.py::test_watcher_ignores_a_partial_json_whose_suffix_still_matches | Imports discover_ready_indices from stream_subsequence, which imports stage_utils and then processing_utils (torch, cv2, torchvision, supervision). This job does not install that stack.
+skip | tests/test_stage5_iteration_gaps.py | needs torch, shapely, torchvision, supervision; not installed in CPU CI
+skip | tests/test_stage7_modularization.py | needs hydra, imageio, torch, shapely, torchvision, supervision; not installed in CPU CI
+skip | tests/test_stage9_articulation_policy.py | needs hydra, openai, torch, shapely, torchvision, supervision; not installed in CPU CI
+skip | tests/test_stream_subsequence.py | needs torch, shapely, torchvision, supervision; not installed in CPU CI
+skip | tests/test_task_aabb_predicates.py | needs torch, omnigibson; not installed in CPU CI
+skip | tests/test_atomic_artifact_publish.py::test_watcher_ignores_a_partial_artifact | needs torch, shapely, torchvision, supervision; not installed in CPU CI
+skip | tests/test_atomic_artifact_publish.py::test_watcher_ignores_a_partial_json_whose_suffix_still_matches | needs torch, shapely, torchvision, supervision; not installed in CPU CI
 skip | tests/test_domain_randomization.py::TestBaseLibraryDiscovery | All five tests skip unless ~/Downloads/NVIDIA_Materials/Materials/Base exists (unittest.skipUnless). That NVIDIA material library is not in CI. A skip is not a pass.
 skip | tests/test_domain_randomization.py::TestHDRIDiscovery | All five tests skip unless assets/hdr_backgrounds exists. That directory is not in this checkout. A skip is not a pass.
 skip | tests/test_domain_randomization.py::TestVMaterialsDiscovery | All nine tests skip unless /opt/nvidia/mdl/vMaterials_2 exists (unittest.skipUnless). That NVIDIA material library is not in CI. A skip is not a pass.
 skip | tests/test_front_canonicalization.py::test_canonicalize_front_rotates_red_bin | Skips unless Data/CubeInMail/s7_mesh/textured_mesh/hunyuan/iter_0_mesh.glb is present. That capture is not in CI. A skip is not a pass.
-skip | tests/test_object_removal_order.py::test_real_droid_desk_1 | Needs the droid_desk_1 capture under Data/ plus cv2 and SAM3. Reference data is not in this job. The test skips when the fixture is missing, and a skip is not a pass.
-skip | tests/test_object_removal_order.py::test_real_droid_desk_2 | Needs the droid_desk_2 capture under Data/ plus cv2 and SAM3. Reference data is not in this job. The test skips when the fixture is missing, and a skip is not a pass.
+skip | tests/test_object_removal_order.py::test_real_droid_desk_1 | Skips because Data/droid_desk_1 is missing s1_video/frames_subsampled_15. That reference capture is not in CI.
+skip | tests/test_object_removal_order.py::test_real_droid_desk_2 | Skips because Data/droid_desk_2 is missing s1_video/frames_subsampled_15. That reference capture is not in CI.
 skip | tests/test_pipeline_orchestrator.py::test_reconstruction_stage_plan_can_insert_articulation | skipif when articulation_available() is false. That needs deps/articulate-anything and one of the articulate conda envs, which this job does not install. A skip is not a pass.
