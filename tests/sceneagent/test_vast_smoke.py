@@ -29,7 +29,9 @@ from sceneagent.vast_smoke import (
     classify_status,
     collect_artifact_manifest,
     endpoint_for,
+    ephemeral_key_record,
     list_attached_ssh_keys,
+    load_ssh_key_fingerprints,
     main,
     mask_secret,
     parse_instance_id,
@@ -1233,7 +1235,7 @@ def test_run_smoke_ssh_failure_publishes_only_the_failure_manifest(
     assert "publickey" in manifest["failure_reason"]
     assert manifest["ssh"]["key_id_returned"] is False
     assert manifest["ssh"]["detach"] == "skipped"
-    assert manifest["attached_ssh_keys"]["detach_leftover_keys"] is False
+    assert manifest["detach_leftover_keys"] is False
     captured = capsys.readouterr()
     assert secret not in captured.out
     assert secret not in captured.err
@@ -1263,24 +1265,20 @@ def test_listing_attached_ssh_keys_is_show_only_and_does_not_detach():
         if method == "DELETE":
             raise AssertionError("detach")
         assert method == "GET"
-        assert url.endswith("/58301075/?owner=me")
-        assert "/ssh/" not in url
-        return 200, {"instances": _texas("running", ssh_keys=[_sample_ssh_key()])}
+        assert url == "https://console.vast.ai/api/v0/instances/58301075/ssh/"
+        assert body is None
+        return 200, {"success": True, "ssh_keys": json.dumps([_sample_ssh_key()])}
 
     report = list_attached_ssh_keys(request, "test-key", sleep=lambda _seconds: None)
     assert calls and all(method == "GET" for method, _url, _body in calls)
-    assert report["source"] == "show"
-    assert report["present_in_show"] is True
-    assert report["detach_leftover_keys"] is False
+    assert report["count"] == 1
+    assert report["fingerprints"] == [_fingerprint(PUBLIC_KEY)]
+    assert "keys" not in report
     assert DETACH_LEFTOVER_KEYS is False
-    recorded = report["keys"][0]
-    assert recorded["id"] == "77"
-    assert recorded["comment"] == "sf4-smoke"
-    assert recorded["created"] == "2026-11-01T00:00:00Z"
-    assert recorded["fingerprint"] == _fingerprint(PUBLIC_KEY)
     blob = json.dumps(report)
     assert PUBLIC_KEY.split()[1] not in blob
     assert "PRIVATE" not in blob
+    assert "77" not in blob
 
 
 def test_show_ssh_keys_json_string_drops_the_public_key():
@@ -1302,20 +1300,12 @@ def test_show_body_without_keys_records_absence_and_makes_no_detach():
 
     report = list_attached_ssh_keys(request, "test-key", sleep=lambda _seconds: None)
     assert calls == ["GET"]
-    assert report["present_in_show"] is False
-    assert report["keys"] == []
-    assert report["detach_leftover_keys"] is False
+    assert report == {"count": 0, "fingerprints": []}
     direct = attached_ssh_keys_from_show(_texas("running"))
     assert direct["keys"] == []
 
 
 def test_allowlist_still_rejects_ssh_list_and_instance_mutations():
-    with pytest.raises(InstanceNotApproved):
-        assert_request_allowed(
-            "GET",
-            "https://console.vast.ai/api/v0/instances/58301075/ssh/",
-            None,
-        )
     for kind in ("create", "rent", "resize", "destroy", "search"):
         with pytest.raises(InstanceNotApproved):
             endpoint_for(kind, 58301075)
@@ -1355,8 +1345,168 @@ def test_run_smoke_records_show_ssh_keys_and_does_not_detach(tmp_path):
     manifest = json.loads(
         (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
     )
-    recorded = manifest["attached_ssh_keys"]["keys"][0]
-    assert recorded["id"] == "77"
-    assert recorded["comment"] == "sf4-smoke"
-    assert manifest["attached_ssh_keys"]["detach_leftover_keys"] is False
+    assert "attached_ssh_keys" not in manifest
     assert PUBLIC_KEY.split()[1] not in json.dumps(manifest)
+
+
+PINNED_SSH_LIST = "https://console.vast.ai/api/v0/instances/58301075/ssh/"
+
+
+def test_pinned_ssh_list_get_is_allowed():
+    method, url, body = endpoint_for("show_ssh_keys", 58301075)
+    assert method == "GET"
+    assert url == PINNED_SSH_LIST
+    assert body is None
+    assert_request_allowed(method, url, body)
+    with pytest.raises(InstanceNotApproved):
+        endpoint_for("show_ssh_keys", 58357498)
+
+
+@pytest.mark.parametrize(
+    ("method", "url", "body"),
+    [
+        ("POST", PINNED_SSH_LIST, None),
+        ("POST", PINNED_SSH_LIST, {}),
+        ("POST", PINNED_SSH_LIST, {"ssh_key": PUBLIC_KEY, "extra": True}),
+        ("PUT", PINNED_SSH_LIST, None),
+        ("PUT", PINNED_SSH_LIST, {"ssh_key": PUBLIC_KEY}),
+        ("DELETE", PINNED_SSH_LIST, None),
+        ("GET", PINNED_SSH_LIST + "?owner=me", None),
+        ("GET", "https://console.vast.ai/api/v0/ssh/", None),
+        ("GET", "https://console.vast.ai/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/1/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58357498/ssh/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/extra/", None),
+        (
+            "POST",
+            "https://console.vast.ai/api/v0/instances/58301075/ssh/1/",
+            {"ssh_key": PUBLIC_KEY},
+        ),
+        ("PUT", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/", None),
+        (
+            "DELETE",
+            "https://console.vast.ai/api/v0/instances/58301075/ssh/1/extra/",
+            None,
+        ),
+    ],
+)
+def test_other_ssh_paths_and_methods_are_refused(method, url, body):
+    with pytest.raises(InstanceNotApproved):
+        assert_request_allowed(method, url, body)
+
+
+def test_ssh_list_manifest_has_count_and_fingerprints_only(tmp_path):
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        assert url == PINNED_SSH_LIST
+        assert body is None
+        listed = {
+            "id": 77,
+            "name": "sf4-smoke",
+            "public_key": PUBLIC_KEY,
+            "fingerprint": "SHA256:from-the-server",
+            "created_at": "2026-11-01T00:00:00Z",
+        }
+        return 200, {"success": True, "ssh_keys": json.dumps([listed])}
+
+    summary = load_ssh_key_fingerprints(request, "test-key", lambda _seconds: None)
+    assert summary == {"count": 1, "fingerprints": [_fingerprint(PUBLIC_KEY)]}
+    published = publish_failure_manifest(
+        tmp_path / "sf4-artifacts",
+        api_key="test-key",
+        instance_id=ALLOWED_INSTANCE_ID,
+        failure_reason="ssh list",
+        ssh_keys=summary,
+    )
+    assert published["ssh_keys"] == summary
+    text = json.dumps(published)
+    assert PUBLIC_KEY.split()[1] not in text
+    assert "from-the-server" not in text
+    assert "sf4-smoke" not in text
+    assert "77" not in text
+    assert "2026-11-01" not in text
+
+
+def test_ssh_list_response_key_does_not_leak_into_artifacts(tmp_path, capsys):
+    secret = "sf4-planted-key"
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        assert url == PINNED_SSH_LIST
+        poisoned = {
+            "note": secret,
+            "ssh_keys": json.dumps(
+                [
+                    {
+                        "id": 9,
+                        "name": secret,
+                        "public_key": PUBLIC_KEY,
+                        "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n" + secret,
+                        "fingerprint": "SHA256:from-the-server",
+                    },
+                    {"public_key": f"ssh-ed25519 {secret} leaked"},
+                ]
+            ),
+        }
+        return 200, poisoned
+
+    summary = list_attached_ssh_keys(request, secret, sleep=lambda _seconds: None)
+    dirty = {
+        "count": 99,
+        "fingerprints": summary["fingerprints"],
+        "public_key": PUBLIC_KEY,
+        "private_key": secret,
+        "note": secret,
+    }
+    artifacts = tmp_path / "sf4-artifacts"
+    publish_failure_manifest(
+        artifacts,
+        api_key=secret,
+        instance_id=ALLOWED_INSTANCE_ID,
+        failure_reason="ssh list",
+        ssh_keys=dirty,
+    )
+    files = [path for path in artifacts.rglob("*") if path.is_file()]
+    assert [path.name for path in files] == ["manifest.json"]
+    text = files[0].read_text(encoding="utf-8")
+    assert secret not in text
+    assert PUBLIC_KEY.split()[1] not in text
+    assert "BEGIN" not in text
+    assert "from-the-server" not in text
+    assert summary["fingerprints"][0] in text
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+
+
+def test_ephemeral_fingerprint_is_checked_against_the_post_attach_list():
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append((method, url, body))
+        assert method == "GET"
+        assert url == PINNED_SSH_LIST
+        assert body is None
+        if len(calls) == 1:
+            return 200, {"success": True, "ssh_keys": "[]"}
+        listed = {"id": 3, "public_key": PUBLIC_KEY, "name": "sf4-smoke"}
+        return 200, {"success": True, "ssh_keys": json.dumps([listed])}
+
+    before = load_ssh_key_fingerprints(request, "test-key", lambda _seconds: None)
+    after = load_ssh_key_fingerprints(request, "test-key", lambda _seconds: None)
+    record = ephemeral_key_record(PUBLIC_KEY, after)
+    missing = ephemeral_key_record(PUBLIC_KEY, before)
+    assert before == {"count": 0, "fingerprints": []}
+    assert after["count"] == 1
+    assert record["fingerprint"] == _fingerprint(PUBLIC_KEY)
+    assert record["listed_after_attach"] is True
+    assert missing["listed_after_attach"] is False
+    assert len(calls) == 2
+    assert all(method == "GET" and body is None for method, _url, body in calls)
+    blob = json.dumps({"ssh_keys": after, "ephemeral_ssh_key": record})
+    assert PUBLIC_KEY.split()[1] not in blob
+    assert "BEGIN" not in blob
+    assert DETACH_LEFTOVER_KEYS is False
