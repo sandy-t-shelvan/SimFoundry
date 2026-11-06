@@ -91,6 +91,37 @@ class GpuBudgetError(EvidenceError):
     """The explicit free-memory budget is missing or the reading is short."""
 
 
+# run_poses sizes 180s and 900s for its 16-frame default. A native sequence
+# gets one of those ceilings per 16 frames. This is a ceiling, not a measured runtime.
+SHORT_RUN_FRAMES = 16
+SHORT_RUN_FFMPEG_TIMEOUT_S = 180
+SHORT_RUN_COLMAP_TIMEOUT_S = 900
+
+
+def native_timeouts(frame_count: int) -> dict[str, int]:
+    """Step ceilings for a native-frame COLMAP run.
+
+    The 16-frame sample keeps 180s for ffmpeg and 900s for each COLMAP step.
+    A longer sequence is allowed that budget once per 16 frames, rounded up.
+    """
+    if isinstance(frame_count, bool) or not isinstance(frame_count, int) or frame_count <= 0:
+        raise EvidenceError("frame count for the step ceiling is missing")
+    blocks = (frame_count + SHORT_RUN_FRAMES - 1) // SHORT_RUN_FRAMES
+    return {
+        "ffmpeg_timeout_s": SHORT_RUN_FFMPEG_TIMEOUT_S * blocks,
+        "colmap_timeout_s": SHORT_RUN_COLMAP_TIMEOUT_S * blocks,
+    }
+
+
+def calibration_outcome(poses: dict[str, Any]) -> str:
+    """Distinguish a disabled calibration from one that ran and failed."""
+    if not poses.get("color_calibrate"):
+        return "off"
+    if "color_calibration" not in poses:
+        return "failed"
+    return "present"
+
+
 def evidence_kwargs() -> dict[str, Any]:
     """The only extract configuration this package will run."""
     return {
@@ -785,12 +816,17 @@ def execute(request: dict[str, Any]) -> int:
                 )
             return reading
 
+        timeouts = native_timeouts(int(probed["frames"]))
+        document["config"]["ffmpeg_timeout_s"] = timeouts["ffmpeg_timeout_s"]
+        document["config"]["colmap_timeout_s"] = timeouts["colmap_timeout_s"]
         poses = run_poses(
             video,
             output / "colmap",
             before_gpu_stage=before_gpu_stage,
             on_gpu_sample=on_gpu_sample,
             sample_interval_s=GPU_SAMPLE_INTERVAL_S,
+            ffmpeg_timeout_s=timeouts["ffmpeg_timeout_s"],
+            colmap_timeout_s=timeouts["colmap_timeout_s"],
             **evidence_kwargs(),
         )
         document["exit_statuses"] = _step_statuses(poses)
@@ -809,8 +845,13 @@ def execute(request: dict[str, Any]) -> int:
             raise EvidenceError("extracted frame count is not 452")
         if len(frames) <= 16 and dry_run:
             raise EvidenceError("dry run extracted too few frames to show there is no cap")
-        if not poses.get("color_calibrate") or "color_calibration" not in poses:
+        outcome = calibration_outcome(poses)
+        if outcome == "off":
             raise EvidenceError("color calibration was off")
+        if outcome == "failed":
+            document["failed_step"] = poses.get("failed_step") or "color_calibration"
+            document["reason"] = poses.get("reason") or "color calibration produced no report"
+            return _finish(prefix, kind="reject", document=document)
         evidence = evidence_dir_for(output)
         if not evidence_path_allowed(output, evidence):
             raise EvidenceError("evidence path is not under this run")

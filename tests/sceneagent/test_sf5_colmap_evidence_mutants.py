@@ -223,6 +223,18 @@ MUTANTS = (
         '"retries": 1,',
     ),
     (
+        "native_timeout_stays_at_16_frames",
+        "package",
+        '"colmap_timeout_s": SHORT_RUN_COLMAP_TIMEOUT_S * blocks,',
+        '"colmap_timeout_s": SHORT_RUN_COLMAP_TIMEOUT_S,',
+    ),
+    (
+        "calibration_failure_called_off",
+        "package",
+        '    if "color_calibration" not in poses:\n        return "failed"',
+        '    if "color_calibration" not in poses:\n        return "off"',
+    ),
+    (
         "native_extract_becomes_fps",
         "colmap",
         '"-fps_mode",\n            "passthrough",',
@@ -303,6 +315,15 @@ def _oracle_package(mod) -> None:
     assert mod.summarize_free_samples([7000, 6100])["exact_true_peak"] is False
     assert mod.summarize_free_samples([7000, 6100])["lowest_free_mib_observed"] == 6100
     assert mod.summarize_free_samples([])["retries"] == 0
+    assert mod.native_timeouts(452)["colmap_timeout_s"] == 900 * 29
+    assert mod.native_timeouts(16)["colmap_timeout_s"] == 900
+    assert (
+        mod.calibration_outcome(
+            {"color_calibrate": True, "failed_step": "color_calibration"}
+        )
+        == "failed"
+    )
+    assert mod.calibration_outcome({"color_calibrate": False}) == "off"
     assert mod.path_is_forbidden("/workspace/sceneagent-simfoundry/secret") is True
     assert mod.path_is_forbidden("/tmp/fitted_splat/a") is True
     assert mod.path_is_forbidden("/workspace/fruits-fullrate-colmap/sparse/0") is True
@@ -403,4 +424,4 @@ def test_every_mutant_is_killed():
                 continue
             survived.append(name)
     assert survived == []
-    assert len(MUTANTS) == 36
+    assert len(MUTANTS) == 38

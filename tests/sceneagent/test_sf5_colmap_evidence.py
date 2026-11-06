@@ -690,6 +690,63 @@ def test_during_stage_samples_use_the_ten_second_interval():
     assert calls == [10.0, 20.0]
 
 
+def test_native_timeout_keeps_the_16_frame_ceiling_and_scales():
+    import inspect
+
+    signature = inspect.signature(run_poses)
+    assert signature.parameters["ffmpeg_timeout_s"].default == 180
+    assert signature.parameters["colmap_timeout_s"].default == 900
+    from sceneagent.sf5_colmap_evidence import native_timeouts
+
+    assert native_timeouts(16) == {"ffmpeg_timeout_s": 180, "colmap_timeout_s": 900}
+    assert native_timeouts(452)["colmap_timeout_s"] == 900 * 29
+    assert native_timeouts(452)["ffmpeg_timeout_s"] == 180 * 29
+    assert native_timeouts(452)["colmap_timeout_s"] > 900
+
+
+def test_native_run_passes_the_scaled_timeout(tmp_path, monkeypatch):
+    from sceneagent.sf5_colmap_evidence import native_timeouts
+
+    video, digest = _synthetic_video(tmp_path)
+    probed = _ffprobe(video)
+    seen = {}
+
+    def fake_run_poses(*_args, **kwargs):
+        seen.update(kwargs)
+        raise EvidenceError("stop after reading the timeout")
+
+    monkeypatch.setattr("sceneagent.sf5_colmap_evidence.run_poses", fake_run_poses)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(tmp_path / "timeout" / "run")))
+    assert code == 2
+    assert seen["colmap_timeout_s"] == native_timeouts(probed["frames"])["colmap_timeout_s"]
+    assert seen["ffmpeg_timeout_s"] == native_timeouts(probed["frames"])["ffmpeg_timeout_s"]
+    assert seen["colmap_timeout_s"] > 900
+
+
+def test_calibration_failure_stays_a_reject(tmp_path, monkeypatch):
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+
+    def boom(_directory):
+        raise ValueError("calibration boom")
+
+    monkeypatch.setattr(
+        "sceneagent.colmap_stage.apply_per_image_color_calibration", boom
+    )
+    output = tmp_path / "cal" / "run"
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
+    assert code == 1
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["decision"] == "reject"
+    assert ledger["process_exit"] == 1
+    assert ledger["failed_step"] == "color_calibration"
+    assert ledger["reason"] == "calibration boom"
+    assert "was off" not in ledger["reason"]
+
+
 def test_package_source_does_not_control_other_processes():
     source = (ROOT / "sceneagent" / "sf5_colmap_evidence.py").read_text(encoding="utf-8")
     for banned in ("os.kill", "pkill", "shell=True", "query-compute-apps"):

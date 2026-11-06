@@ -308,6 +308,8 @@ def run_poses(
     before_gpu_stage=None,
     on_gpu_sample=None,
     sample_interval_s=10,
+    ffmpeg_timeout_s=180,
+    colmap_timeout_s=900,
 ):
     """Sample frames, calibrate each image, and run COLMAP.
 
@@ -398,7 +400,7 @@ def run_poses(
             max_frames=max_frames,
             native_frames=native_frames,
         ),
-        timeout_s=180,
+        timeout_s=ffmpeg_timeout_s,
     )
     frames = sorted(path.name for path in images.glob("*.jpg"))
     if extract["returncode"] != 0 or not frames:
@@ -439,12 +441,12 @@ def run_poses(
         if gpu_stage and on_gpu_sample is not None:
             steps[step_name] = _run(
                 argv,
-                timeout_s=900,
+                timeout_s=colmap_timeout_s,
                 on_gpu_sample=on_gpu_sample,
                 sample_interval_s=sample_interval_s,
             )
         else:
-            steps[step_name] = _run(argv, timeout_s=900)
+            steps[step_name] = _run(argv, timeout_s=colmap_timeout_s)
         if steps[step_name]["returncode"] != 0:
             return _result(
                 ran=True,
