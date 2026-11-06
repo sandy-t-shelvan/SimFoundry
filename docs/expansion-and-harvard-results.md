@@ -3,11 +3,11 @@
 Design of the `sceneagent` package as it exists on `sandy-t-shelvan/SimFoundry` at commit `caf16b7` (`Train the physics prior in chunks so large meshes fit in memory.`). Sections 1–8 describe that package. Section 9 is the plan for reproducing Harvard SceneAgent section 4 on top of it, driven by the canvas "SceneAgent paper versus the SimFoundry upgrade". Section 10 is the build sequence for that plan. The living status of each paper block is `docs/GAP_MATRIX.md`, generated from `sceneagent/catalog.py`. The block-by-block build notes are `docs/EXPANSION_PLAN.md`. Product phases are `docs/DESIGN.md`. Landing rules are `docs/SDLC.md`.
 
 
-## Status as of Nov 6, 2026
+## Status as of 2026-11-06 2:20 AM ET
 
-Living Cut 1 / Cut 2 progress against Jira project KAN and merges into `Main_duplicate` (tip `2a9a05c` as of ~1:05 AM America/New_York). Catalog row status words in sections 9–10 stay the canvas / `catalog.py` words; this section only records ticket and merge state. A paper gap is not closed here unless its ticket is Accepted in Jira.
+Living Cut 1 / Cut 2 progress against Jira project KAN and merges into `Main_duplicate` (tip `d99c3b6`, checked 2026-11-06 2:20 AM ET). Every status in this section is as of 2026-11-06 2:20 AM ET. Catalog row status words in sections 9–10 stay the canvas / `catalog.py` words; this section only records ticket and merge state. A paper gap is not closed here unless its ticket is Accepted in Jira.
 
-Branch note: `docs/expansion-and-harvard-results.md` and `docs/canvases/sceneagent-paper-gaps.canvas.tsx` are byte-identical on `main` and `Main_duplicate` at this check. Cut 2 epic KAN-15 is ON HOLD (comment 10166) until Cut 1 is complete.
+Branch note: `docs/expansion-and-harvard-results.md` and `docs/canvases/sceneagent-paper-gaps.canvas.tsx` are byte-identical on `main` and `Main_duplicate` at this check. Cut 2 epic KAN-15 is on hold. Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into `Main_duplicate`.
 
 ### Cut 1 ticket board
 
@@ -16,32 +16,32 @@ Branch note: `docs/expansion-and-harvard-results.md` and `docs/canvases/sceneage
 | SF-1 Fix red CI | KAN-1 | Accepted | Comment 10009; PR #5 merge `8f6756c` |
 | SF-2 CI stages | KAN-2 | Accepted | Comment 10082; PRs #8/`6b70479`, #9/`4fa621d` |
 | SF-3 Broader CPU tests | KAN-3 | Accepted | Comments 10114 (PM accepted) + 10121; PR #11 merge `1e41c38` |
-| SF-4 Vast GPU smoke | KAN-4 | Merged (part 2 CPU into Main_duplicate, GPU evidence pending) | PR #13 merged `2a9a05c` (head `6725740`); QA 10171 + PM 10172; GPU dc1–dc4 still PENDING (10175, 10177; workflow_dispatch 403) |
-| SF-5 Full-rate COLMAP + color calibration | KAN-5 | In progress | Draft PR #10; comments 10086 / 10136; dc3–dc4 wait on SF-4 GPU |
+| SF-4 Vast GPU smoke | KAN-4 | as of 2026-11-06 2:20 AM ET: Merged (part 1 into Main_duplicate; dc1 and dc2 not met) | PR #13 merged `2a9a05c` (head `6725740`); QA 10171 + PM 10172. Comment 10209 amends the run so SSH counts instead of the workflow. v4 SSH run rejected in 10215/10219: dc3 and dc4 met, dc1 and dc2 not met. CUDA COLMAP install plan approved in 10205. |
+| SF-5 Full-rate COLMAP + color calibration | KAN-5 | as of 2026-11-06 2:20 AM ET: In review: PR #10, head `37889c4` (replaced `53f87c6` after PM 10217 rulings) | PR #10, head `37889c4` (replaced `53f87c6` after PM 10217 rulings) |
 | SF-6 Hungarian past 8 | KAN-6 | Accepted | Comment 10006; PR #5 `8f6756c` |
 | SF-7 Kitchen aggregator | KAN-7 | Accepted | Comment 10007; PR #5 `8f6756c` |
-| SF-8 ICP silhouette and pose | KAN-8 | In review | PR #14 open at `6f01879` (prior PASS on `b62490c` voided by head move; 10181); GPU dc1–dc3 pending |
+| SF-8 ICP silhouette and pose | KAN-8 | as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding | Sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding |
 | SF-9 Background plane | KAN-9 | Merged (part 1 CPU into Main_duplicate, Fruits GPU image pending) | PR #16 merged `aec2c9f`. The earlier QA 10186 and PM SENT BACK 10191 at `4913e4a` are not this head. Not Accepted. |
-| SF-10 CubePart + Articulate Anything | KAN-10 | In review | PR #15 open at `e2a2245`; no QA/PM PASS yet (10183); GPU part 2 pending |
+| SF-10 CubePart + Articulate Anything | KAN-10 | as of 2026-11-06 2:20 AM ET: Merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending | Merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending |
 | SF-11 Fix docs drift | KAN-11 | Accepted | Comments 10084 (PM accepted) + 10085; PR #7 merge `136d759` |
 | SF-12 Photo check 16-bit LA PNG | KAN-12 | Accepted | Comment 10055; PR #6 merge `51a8d54` |
-| SF-14 Bot-runnable GPU smoke triggers | KAN-14 | In review | PR #17 at `dbf38aa`; rulings 10188 (dc2/dc5 → SF-14b after main merge) |
+| SF-14 Bot-runnable GPU smoke triggers | KAN-14 | as of 2026-11-06 2:20 AM ET: In review; QA FAIL 10194; no longer gates SF-4 | PR #17 at `dbf38aa`; rulings 10188 (dc2/dc5 → SF-14b after main merge); QA FAIL 10194; no longer gates SF-4 |
 | Cut 1 epic | KAN-13 | Not started (epic open) | To Do; standing full-review rule 10185 |
 
 ### Cut 1 → paper-gap map (ticket progress only)
 
 | Canvas / plan row | Catalog status (unchanged) | Cut 1 ticket progress |
 |---|---|---|
-| Alignment acceptance gate | partial | SF-8 In review (CPU part 1); not Accepted |
-| COLMAP camera poses | partial | SF-5 In progress (CPU dc1–dc2 in draft PR #10); not Accepted |
-| Trimmed similarity ICP | partial | SF-8 In review; not Accepted |
+| Alignment acceptance gate | partial | as of 2026-11-06 2:20 AM ET: SF-8 sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding; not Accepted |
+| COLMAP camera poses | partial | as of 2026-11-06 2:20 AM ET: SF-5 in review: PR #10, head `37889c4` (replaced `53f87c6` after PM 10217 rulings); not Accepted |
+| Trimmed similarity ICP | partial | as of 2026-11-06 2:20 AM ET: SF-8 sent back (10195/10196); fix in progress for Bugbot `_warp_mask` finding; not Accepted |
 | LaMa background infill | partial | SF-9 merged part 1 (`aec2c9f`); not Accepted; Fruits GPU image still open |
-| CubePart | missing | SF-10 In review; not Accepted |
-| Articulate Anything | partial | SF-10 In review; not Accepted |
+| CubePart | missing | as of 2026-11-06 2:20 AM ET: SF-10 merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending; not Accepted |
+| Articulate Anything | partial | as of 2026-11-06 2:20 AM ET: SF-10 merged part 1 (`d99c3b6`, QA 10208, PM 10210); dc1-dc3 GPU evidence pending; not Accepted |
 | F1 at 1 cm and Chamfer | partial | SF-6 Accepted unblocks matcher past 8; score file still absent → row stays partial |
 | (kitchen aggregator helper) | n/a (helper for Sec 4 kitchen file) | SF-7 Accepted; MessyKitchens inputs / score file still absent |
 | GraspClutter6D hard/000091 | missing | No Cut 1 ticket; still missing |
-| GroundingDINO / LangSplat / MLP / 4D / fracture / Meshy / Unreal / pi0.5 | missing or partial | Cut 2 (KAN-15) ON HOLD |
+| GroundingDINO / LangSplat / MLP / 4D / fracture / Meshy / Unreal / pi0.5 | missing or partial | as of 2026-11-06 2:20 AM ET: Cut 2 (KAN-15) on hold; Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into `Main_duplicate` |
 
 ### Hungarian matcher in sections 2, 9.4, and 10.1
 

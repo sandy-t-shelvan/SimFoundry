@@ -43,8 +43,10 @@ type GapRow = {
   ticketStatus?:
     | "Accepted"
     | "Merged (part 1, GPU evidence pending)"
-    | "Merged (part 2 CPU, GPU evidence pending)"
+    | "as of 2026-11-06 2:20 AM ET: Merged part 1 (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending"
     | "In review"
+    | "as of 2026-11-06 2:20 AM ET: In review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings)"
+    | "as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot _warp_mask finding"
     | "In progress"
     | "Not started"
     | "On hold (Cut 2)";
@@ -105,7 +107,7 @@ const BLOCKS: Block[] = [
         status: "partial",
         addressed: "fixed",
         ticket: "SF-8 / KAN-8",
-        ticketStatus: "In review",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot _warp_mask finding",
         paper: "Section 3.1: accept a pose only when normalized median, p90, coverage, and silhouette all pass fixed thresholds. The numbers are not published.",
         plan: "The gate ran on 55073623 and catalog marks it partial. DESIGN phase 3 says choose thresholds on a held-out set and do not present them as the paper's. Missing thresholds stay undecided.",
         changelog: "ICP residual written. accept_alignment stayed undecided. TRIM_KEEP 0.7 is this implementation's overlap, not a published threshold. Silhouette raster union was empty.",
@@ -124,7 +126,7 @@ const BLOCKS: Block[] = [
         status: "partial",
         addressed: "still open",
         ticket: "SF-5 / KAN-5",
-        ticketStatus: "In progress",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: In review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings)",
         paper: "Section 3.2: RGB sequences use COLMAP for camera poses. Agents may correct per-image color calibration.",
         plan: "Done only when model_analyzer prints a full-rate sequence and those cameras feed splatfacto. The 1 fps sample and 16-frame cap are the runner's, not the paper's.",
         changelog: "CUDA COLMAP 4.2.1 on Fruits.mp4, exit 0. Earlier Texas run was COLMAP 3.7 without CUDA. Row stays partial.",
@@ -145,7 +147,7 @@ const BLOCKS: Block[] = [
         sub: "Photogrammetry, LiDAR, generated 3DGS",
         status: "missing",
         addressed: "fixed",
-        ticket: "Cut 2",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
         ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.2 also accepts existing 3DGS, photogrammetry, LiDAR, and generated scenes (World Labs Marble, NVIDIA Lyra, Tencent HY-World). Dynamic video is section 3.6.",
         plan: "EXPANSION_PLAN adds a reader. Polycam is a capture source, not a repository. Done when one non-video asset passes the ledger.",
@@ -158,7 +160,7 @@ const BLOCKS: Block[] = [
         status: "partial",
         addressed: "still open",
         ticket: "SF-5 / KAN-5 (related)",
-        ticketStatus: "In progress",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: In review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings)",
         paper: "Section 3.2 starts from an RGB sequence.",
         plan: "sceneagent.video records byte size and mvhd duration. Partial until the splat view exists.",
         changelog: "Fruits.mp4 is 1,733,022 bytes and 15.067 s. Poses exist for the 1 fps sample.",
@@ -187,7 +189,7 @@ const BLOCKS: Block[] = [
         sub: "GroundingDINO",
         status: "missing",
         addressed: "still open",
-        ticket: "Cut 2 / KAN-15+",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
         ticketStatus: "On hold (Cut 2)",
         paper: "Not in section 3.3. The website step 02 says GroundingDINO + SAM assign semantic features to each Gaussian.",
         plan: "Named beside SAM. Masks and the two feature vectors exist. GroundingDINO did not run, and the feature-on-Gaussian file is still missing.",
@@ -219,7 +221,7 @@ const BLOCKS: Block[] = [
         sub: "LangSplat-style codebook",
         status: "missing",
         addressed: "still open",
-        ticket: "Cut 2",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
         ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.3 follows LangSplat's approach of attaching features to Gaussians. It does not say that repository is executed as-is.",
         plan: "Read the method. Do not vendor the research repo until the feature lift is specified.",
@@ -252,7 +254,7 @@ const BLOCKS: Block[] = [
         status: "partial",
         addressed: "still open",
         ticket: "SF-8 / KAN-8",
-        ticketStatus: "In review",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot _warp_mask finding",
         paper: "Section 3.3: trimmed similarity ICP, one uniform scale, initialized from the SAM3D pose, aligns the mesh to P_k.",
         plan: "A mesh file and an ICP residual file are the done condition, shared with LaMa. DESIGN says the pose stays undecided without the paper's thresholds.",
         changelog: "Residual file 2,197 bytes. Ledger icp attempt 1 accepted the file. The section 3.1 gate stays undecided.",
@@ -326,7 +328,7 @@ const BLOCKS: Block[] = [
         status: "missing",
         addressed: "still open",
         ticket: "SF-10 / KAN-10",
-        ticketStatus: "In review",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Merged part 1 (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending",
         paper: "Section 3.4: CubePart completes hidden geometry, such as a marker tip under the cap, and appends it to the mesh.",
         plan: "Phase 7, reviewed by the ledger. No scene file is specified beyond the marker example in the paper.",
         changelog: "catalog.py still says attempt 1 was rejected on disk and nothing was downloaded. That line is behind the 2 Nov log.",
@@ -338,7 +340,7 @@ const BLOCKS: Block[] = [
         status: "partial",
         addressed: "still open",
         ticket: "SF-10 / KAN-10",
-        ticketStatus: "In review",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Merged part 1 (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending",
         paper: "Section 3.4: Articulate Anything proposes URDF joints from image or text. Agents review the motion in simulation.",
         plan: "Phase 7. Do not treat SimFoundry stage 9 as this system.",
         changelog: "Attempt 1 rejected the extract. Attempt 2 accepted a PartNet table URDF. On 2 Nov 2026 attempts 3 and 4 rejected that table and a retry table for the fruit. The files were kept.",
@@ -482,7 +484,7 @@ const BLOCKS: Block[] = [
       {
         sub: "Meshy generative sisters",
         status: "missing",
-        ticket: "Cut 2",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
         ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.8 second method: Gemini 2.5 Flash splits functional components, Gemini 3 Pro Image edits one component, Meshy image-to-3D lifts it. Meshy-6 retexture keeps geometry and UVs.",
         plan: "Do not label Hunyuan as Meshy. No open repository matched Meshy-6.",
@@ -509,7 +511,7 @@ const BLOCKS: Block[] = [
       {
         sub: "Captured object in an artist scene",
         status: "missing",
-        ticket: "Cut 2",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
         ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.9 places one converted object into an artist-authored environment. The site shows kitchen, warehouse, chemistry lab, data center, and studio hybrids, often with Omniverse assets.",
         plan: "One short subsection: use the light editor after a captured mesh exists. No artist scene, no asset list, and no output file.",
@@ -1070,8 +1072,8 @@ export default function SceneAgentPaperGaps() {
         <Stat value="42" label="Catalog rows total" />
       </Grid>
 
-      <Callout tone="info" title="Status as of Nov 6, 2026 (Cut 1 / Jira KAN)">
-        Catalog dots above are 17 done / 12 partial / 13 missing after the LaMa row moved to partial. Ticket progress is separate: Accepted only when Jira status is Done. SF-1, SF-2, SF-3, SF-6, SF-7, SF-11, SF-12 are Accepted. SF-4 part 2 CPU is merged into Main_duplicate (PR #13 @ 2a9a05c) with GPU evidence still pending — not Accepted. SF-5 In progress (draft PR #10). SF-8, SF-10, SF-14 In review. SF-9 part 1 is merged into Main_duplicate (PR #16 @ aec2c9f) with the Fruits GPU image still open — not Accepted. Cut 2 epic KAN-15 is On hold until Cut 1 is complete. Per-gap ticket / ticketStatus fields below record that mapping; they do not flip a catalog row to done.
+      <Callout tone="info" title="Status as of 2026-11-06 2:20 AM ET (Cut 1 / Jira KAN)">
+        Catalog dots above are 17 done / 12 partial / 13 missing after the LaMa row moved to partial. Ticket progress is separate: Accepted only when Jira status is Done. Every ticket status here is as of 2026-11-06 2:20 AM ET, checked against Main_duplicate tip d99c3b6. SF-1, SF-2, SF-3, SF-6, SF-7, SF-11, SF-12 are Accepted. SF-4 part 1 is merged into Main_duplicate (PR #13 @ 2a9a05c). Comment 10209 counts SSH runs instead of the workflow. The v4 SSH run was rejected in 10215/10219: dc3 and dc4 met, dc1 and dc2 not met. The CUDA COLMAP install plan was approved in 10205. Not Accepted. SF-5 is in review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings). SF-8 was sent back (10195/10196); a fix is in progress for the Bugbot _warp_mask finding. SF-10 part 1 is merged (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending. Not Accepted. SF-14 QA FAIL 10194; it no longer gates SF-4. SF-9 part 1 is merged into Main_duplicate (PR #16 @ aec2c9f) with the Fruits GPU image still open. Not Accepted. Cut 2 epic KAN-15 is on hold. Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate. Per-gap ticket / ticketStatus fields below record that mapping; they do not flip a catalog row to done.
       </Callout>
 
       <Callout tone="warning" title="The gap matrix does not lag the catalog">
