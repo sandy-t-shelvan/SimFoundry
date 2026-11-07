@@ -81,6 +81,16 @@ def write_heldout_ns_eval_report(
     """
     if run is None:
         run = _run_bounded
+    # ns-eval's cwd is the train directory, not this process's cwd. Hydra's
+    # auto_bg base_dir is relative to scripts/cfg, so a relative --load-config
+    # would be resolved again against that cwd and miss the file. Export
+    # already passes load_config.resolve(); do the same for every path the
+    # child and the report writer use.
+    report_path = Path(report_path).resolve()
+    if load_config is not None:
+        load_config = Path(load_config).resolve()
+    if cwd is not None:
+        cwd = Path(cwd).resolve()
     try:
         payload = _evaluate(
             load_config=load_config,
@@ -144,7 +154,7 @@ def _evaluate(
         dir=report_path.parent,
     )
     os.close(raw_fd)
-    raw_path = Path(raw_name)
+    raw_path = Path(raw_name).resolve()
     argv = [
         *argv_prefix,
         "ns-eval",
@@ -292,11 +302,13 @@ def _run_bounded(
     capture_output: bool,
     text: bool,
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``argv`` and kill its process group when ``timeout`` expires.
+    """Run ``argv`` and kill its process group if it outlives this call.
 
     ``subprocess.run`` kills only the direct child. Stage 5 starts ``ns-eval``
     under ``mamba run``, so a timeout has to signal the whole group or the
-    eval keeps the GPU after the stage has moved on.
+    eval keeps the GPU after the stage has moved on. The new session is what
+    makes that signal safe, and it also detaches the eval from the stage's
+    own SIGINT/SIGTERM, so those have to kill the group too.
     """
     del check, text
     if not capture_output:
@@ -311,18 +323,50 @@ def _run_bounded(
         errors="replace",
         start_new_session=True,
     )
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+    previous_term = signal.getsignal(signal.SIGTERM)
+
+    def _on_term(signum, _frame):
         _kill_process_group(proc)
+        signal.signal(signal.SIGTERM, previous_term)
+        os.kill(os.getpid(), signum)
+
+    handler_installed = False
+    try:
+        signal.signal(signal.SIGTERM, _on_term)
+        handler_installed = True
+    except ValueError:
+        # signal.signal only works on the main thread. The except below
+        # still reaps the group if this call is interrupted from Python.
+        handler_installed = False
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except BaseException as exc:
+            out, err = _reap(proc)
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise subprocess.TimeoutExpired(
+                    proc.args,
+                    timeout,
+                    output=out,
+                    stderr=err,
+                ) from None
+            raise
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    finally:
+        if handler_installed:
+            signal.signal(signal.SIGTERM, previous_term)
+        if proc.poll() is None:
+            _reap(proc)
+
+
+def _reap(proc: subprocess.Popen[str]) -> tuple[str | None, str | None]:
+    """Kill the eval process group and wait so it cannot keep the GPU."""
+    _kill_process_group(proc)
+    try:
         stdout, stderr = proc.communicate()
-        raise subprocess.TimeoutExpired(
-            proc.args,
-            timeout,
-            output=stdout,
-            stderr=stderr,
-        )
-    return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    except Exception:
+        return None, None
+    return stdout, stderr
 
 
 def _kill_process_group(proc: subprocess.Popen[str]) -> None:

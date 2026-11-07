@@ -8,8 +8,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -70,10 +72,13 @@ def _assert_eval_argv(argv: list[str], config: Path, prefix: list[str]) -> None:
     assert argv[: len(prefix)] == prefix
     rest = argv[len(prefix) :]
     assert rest[0] == "ns-eval"
-    assert rest[1:4] == ["--load-config", str(config), "--output-path"]
+    assert rest[1] == "--load-config"
+    assert Path(rest[2]).resolve() == Path(config).resolve()
+    assert rest[3] == "--output-path"
+    assert Path(rest[4]).is_absolute()
     assert "--render-output-path" not in argv
     assert "train" not in argv
-    assert Path(rest[4]) != config.parent / "ns_eval.json"
+    assert Path(rest[4]) != (config.parent / "ns_eval.json").resolve()
 
 
 def _success_run(config: Path, prefix: list[str] | None = None):
@@ -314,6 +319,140 @@ def test_unexpected_runner_error_still_writes_a_report(tmp_path):
     assert payload["ok"] is False
     assert "RuntimeError" in payload["error"]
     assert _read(tmp_path / "ns_eval.json")["ok"] is False
+
+
+def test_relative_config_and_cwd_are_absolute_when_ns_eval_runs(tmp_path, monkeypatch):
+    """Hydra's auto_bg base_dir is relative to scripts/cfg. ns-eval's cwd is that
+    directory, so a relative --load-config would be resolved a second time and miss.
+    """
+    monkeypatch.chdir(tmp_path)
+    config = Path("splat") / "outputs" / "run" / "config.yml"
+    config.parent.mkdir(parents=True)
+    config.write_text("eval_mode: fraction\n", encoding="utf-8")
+    seen: dict = {}
+
+    def run(argv, **kwargs):
+        seen["argv"] = list(argv)
+        seen["cwd"] = kwargs["cwd"]
+        _write_raw(list(argv), _NS_EVAL_JSON)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    payload = write_heldout_ns_eval_report(
+        load_config=config,
+        report_path=Path("splat") / "ns_eval.json",
+        argv_prefix=["mamba", "run", "-n", "nerfstudio_simfoundry"],
+        cwd=Path("splat"),
+        env=None,
+        run=run,
+    )
+    assert payload["ok"] is True
+    load_arg = seen["argv"][seen["argv"].index("--load-config") + 1]
+    out_arg = seen["argv"][seen["argv"].index("--output-path") + 1]
+    assert Path(load_arg).is_absolute()
+    assert Path(load_arg) == config.resolve()
+    assert Path(seen["cwd"]).is_absolute()
+    assert Path(seen["cwd"]) == Path("splat").resolve()
+    assert Path(out_arg).is_absolute()
+    assert (Path("splat") / "ns_eval.json").resolve().is_file()
+
+
+def test_keyboard_interrupt_kills_the_eval_group(monkeypatch):
+    killed: list[tuple[int, int]] = []
+
+    class _Proc:
+        def __init__(self):
+            self.pid = 5151
+            self.args = ["ns-eval"]
+            self.returncode = None
+            self.calls = 0
+
+        def communicate(self, timeout=None):
+            del timeout
+            self.calls += 1
+            if self.calls == 1:
+                raise KeyboardInterrupt()
+            return "", ""
+
+        def poll(self):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
+
+    proc = _Proc()
+
+    def popen(*_args, **kwargs):
+        assert kwargs["start_new_session"] is True
+        return proc
+
+    def killpg(pid, sig):
+        killed.append((pid, sig))
+        proc.returncode = -9
+
+    monkeypatch.setattr(ns_eval_report.subprocess, "Popen", popen)
+    monkeypatch.setattr(ns_eval_report.os, "killpg", killpg)
+    with pytest.raises(KeyboardInterrupt):
+        ns_eval_report._run_bounded(
+            ["ns-eval"],
+            cwd=None,
+            env=None,
+            timeout=5,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    assert killed == [(5151, signal.SIGKILL)]
+    assert proc.returncode == -9
+
+
+def test_sigterm_kills_the_eval_group(tmp_path):
+    pidfile = tmp_path / "child.pid"
+    child_code = (
+        "import os, time\n"
+        f"open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
+        "time.sleep(30)\n"
+    )
+    stage_code = (
+        "from simfoundry.pipeline.ns_eval_report import _run_bounded\n"
+        "_run_bounded(\n"
+        f"    [{sys.executable!r}, '-c', {child_code!r}],\n"
+        "    cwd=None, env=None, timeout=20, check=False,\n"
+        "    capture_output=True, text=True,\n"
+        ")\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    stage = subprocess.Popen([sys.executable, "-c", stage_code], cwd=str(ROOT), env=env)
+    child = None
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline and not pidfile.exists():
+            if stage.poll() is not None:
+                raise AssertionError(f"stage exited early: {stage.returncode}")
+            time.sleep(0.05)
+        assert pidfile.is_file()
+        child = int(pidfile.read_text(encoding="utf-8"))
+        os.kill(stage.pid, signal.SIGTERM)
+        stage.wait(timeout=5)
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            try:
+                os.kill(child, 0)
+            except ProcessLookupError:
+                child = None
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("eval child survived SIGTERM to the stage")
+    finally:
+        if stage.poll() is None:
+            stage.kill()
+            stage.wait(timeout=5)
+        if child is not None:
+            try:
+                os.kill(child, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 def test_discard_removes_only_an_existing_report(tmp_path):
