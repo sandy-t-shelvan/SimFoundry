@@ -64,3 +64,25 @@ jobs:
         # `-m "not gpu and not network"`. ci/cpu-test-skips.txt lists every
         # deselected test and omitted file. A skip inside the job fails the run.
         run: python scripts/ci/run_cpu_tests.py
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned actionlint 1.7.12
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          : "${ACTIONLINT_VERSION:?}"
+          : "${ACTIONLINT_SHA256:?}"
+          curl -sSLf -o actionlint.tar.gz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          sudo mv actionlint /usr/local/bin/actionlint
+          actionlint -version
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: actionlint
+        run: actionlint -color

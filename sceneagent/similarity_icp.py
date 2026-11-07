@@ -7,14 +7,58 @@ overlap, not a number published by SceneAgent.
 
 The section 3.1 gate still needs the unpublished acceptance thresholds.
 A residual file records the measured distances. It does not accept the pose.
+``write_alignment_residual`` asks ``accept_alignment`` with the unchanged
+``ours_iteration_1`` cutoffs and records that decision on the ledger.
 """
 
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
+import math
+import numbers
+import sys
+from pathlib import Path
+
 import numpy as np
+
+from sceneagent.agent_loop import append_step
+from sceneagent.alignment import RESIDUAL_NAMES, accept_alignment
 
 # Closest-pair fraction retained each iteration. Not a SceneAgent threshold.
 TRIM_KEEP = 0.7
+
+# Not a published SceneAgent reduction and not an acceptance cutoff.
+# An empty union on every view stays null so the gate can reject it.
+SILHOUETTE_DEFINITION = (
+    "mean Jaccard index of the rendered silhouette and the observed mask "
+    "over views whose raster union is non-empty; null when every union is empty"
+)
+
+# Ledger reason for a null silhouette. A measured 0 keeps the below-minimum
+# reason from the iteration-1 gate. KAN-8 comment 10152, ruling 2.
+SILHOUETTE_UNDEFINED_REASON = "silhouette_undefined"
+
+
+class PoseSidecarError(Exception):
+    """The stored SAM 3D pose cannot start ICP."""
+
+
+class PoseSidecarMissingError(PoseSidecarError):
+    """The pose sidecar file is not there. Identity is not a substitute."""
+
+
+class PoseSidecarHashMissingError(PoseSidecarError):
+    """The sidecar does not record the GLB SHA-256."""
+
+
+class PoseSidecarHashMismatchError(PoseSidecarError):
+    """The sidecar SHA-256 is not the hash of the GLB on disk."""
+
+
+class PoseSidecarRotationMissingError(PoseSidecarError):
+    """The sidecar matches the GLB and stores no rotation."""
 
 
 def umeyama(source, target):
@@ -67,14 +111,95 @@ def _rodrigues(axis, angle):
 def rotation_seeds():
     """Export-frame identity plus quarter-turns about the coordinate axes.
 
-    The stored SAM 3D rotation vector is absent, so these seeds are the
-    search. They are not acceptance thresholds.
+    These seeds are the search only when the caller did not pass a stored
+    SAM 3D pose. They are not that pose, and they are not acceptance
+    thresholds. ``write_alignment_residual`` does not use them, and it does
+    not fill a missing rotation with identity.
     """
     seeds = [np.eye(3)]
     for axis in np.eye(3):
         for turn in (1, 2, 3):
             seeds.append(_rodrigues(axis, turn * np.pi / 2.0))
     return seeds
+
+
+def rotation_matrix_from_vector(vector):
+    """Rodrigues rotation vector to a 3x3 matrix. A zero vector is identity."""
+    vector = np.asarray(vector, dtype=np.float64).reshape(3)
+    if not np.isfinite(vector).all():
+        raise ValueError("rotation vector must be finite")
+    angle = float(np.linalg.norm(vector))
+    if angle < 1e-12:
+        return np.eye(3)
+    return _rodrigues(vector / angle, angle)
+
+
+def quaternion_xyzw_to_matrix(quaternion):
+    """XYZW quaternion to a rotation matrix. The scene frame uses XYZW."""
+    quat = np.asarray(quaternion, dtype=np.float64).reshape(4)
+    if not np.isfinite(quat).all():
+        raise ValueError("quaternion must be finite")
+    norm = float(np.linalg.norm(quat))
+    if norm < 1e-12:
+        raise ValueError("quaternion has zero length")
+    x, y, z, w = quat / norm
+    return np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+
+
+def rotation_vector_from_matrix(rotation):
+    """3x3 rotation to a Rodrigues vector. Identity is ``[0, 0, 0]``."""
+    matrix = np.asarray(rotation, dtype=np.float64)
+    if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+        raise ValueError("rotation matrix must be a finite 3x3")
+    if float(np.linalg.det(matrix)) < 0.0:
+        raise ValueError("rotation matrix must have a positive determinant")
+    cosine = float(np.clip((np.trace(matrix) - 1.0) * 0.5, -1.0, 1.0))
+    angle = float(math.acos(cosine))
+    if angle < 1e-8:
+        return np.zeros(3, dtype=np.float64)
+    if math.pi - angle < 1e-6:
+        axis = _axis_from_pi_rotation(matrix)
+        return axis * angle
+    axis = np.array(
+        [
+            matrix[2, 1] - matrix[1, 2],
+            matrix[0, 2] - matrix[2, 0],
+            matrix[1, 0] - matrix[0, 1],
+        ],
+        dtype=np.float64,
+    )
+    axis = axis / np.linalg.norm(axis)
+    return axis * angle
+
+
+def _axis_from_pi_rotation(matrix):
+    """Unit axis of a rotation near 180 degrees.
+
+    The skew-symmetric part vanishes at 180 degrees, so the axis has to come
+    from the diagonal. The largest diagonal entry is the stable one. The other
+    components are read from that row, which carries their signs.
+    """
+    axis_index = int(np.argmax(np.diag(matrix)))
+    axis = np.zeros(3, dtype=np.float64)
+    diagonal = float(matrix[axis_index, axis_index])
+    axis[axis_index] = math.sqrt(max((diagonal + 1.0) * 0.5, 0.0))
+    if axis[axis_index] < 1e-8:
+        raise ValueError("rotation near 180 degrees has no axis")
+    for other in range(3):
+        if other == axis_index:
+            continue
+        axis[other] = float(matrix[axis_index, other]) / (2.0 * axis[axis_index])
+    length = float(np.linalg.norm(axis))
+    if length < 1e-8:
+        raise ValueError("rotation near 180 degrees has no axis")
+    return axis / length
 
 
 def _nearest(query, target, tree):
@@ -121,16 +246,45 @@ def initial_similarity(source, target):
     return scale, rotation, translation
 
 
-def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
+def trimmed_similarity_icp(
+    source,
+    target,
+    trim_keep=TRIM_KEEP,
+    iterations=30,
+    initial_rotation=None,
+    initial_scale=None,
+    initial_translation=None,
+):
     """Refine a similarity from the source frame onto the target points.
 
     ``trim_keep`` is the fraction of nearest pairs retained. The paper does
-    not publish this overlap.
+    not publish this overlap. Pass ``initial_rotation`` to start from a stored
+    SAM 3D pose. That path searches that one rotation. Omitting it falls back
+    to ``rotation_seeds``, which is not the paper's initial pose.
     """
     source = np.asarray(source, dtype=np.float64)
     target = np.asarray(target, dtype=np.float64)
     if not 0 < float(trim_keep) <= 1:
         raise ValueError("trim_keep must be in (0, 1]")
+    if initial_rotation is None:
+        seeds = rotation_seeds()
+        pose_source = "rotation_seeds"
+    else:
+        seed = np.asarray(initial_rotation, dtype=np.float64)
+        if seed.shape != (3, 3) or not np.isfinite(seed).all():
+            raise ValueError("initial_rotation must be a finite 3x3 matrix")
+        seeds = [seed]
+        pose_source = "stored_sam3d"
+    if initial_translation is not None:
+        initial_translation = np.asarray(initial_translation, dtype=np.float64).reshape(
+            3
+        )
+        if not np.isfinite(initial_translation).all():
+            raise ValueError("initial_translation must be finite")
+    if initial_scale is not None:
+        initial_scale = float(initial_scale)
+        if not math.isfinite(initial_scale) or initial_scale <= 0.0:
+            raise ValueError("initial_scale must be a positive finite number")
     tree = None
     try:
         from scipy.spatial import cKDTree
@@ -141,10 +295,14 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
     base_scale, _, _ = initial_similarity(source, target)
     keep_count = max(3, round(float(trim_keep) * len(source)))
     best = None
-    for seed_index, seed in enumerate(rotation_seeds()):
-        scale = base_scale
+    for seed_index, seed in enumerate(seeds):
+        scale = base_scale if initial_scale is None else initial_scale
         rotation = np.asarray(seed, dtype=np.float64)
-        translation = target.mean(axis=0) - scale * (rotation @ source.mean(axis=0))
+        if initial_translation is None:
+            translation = target.mean(axis=0) - scale * (rotation @ source.mean(axis=0))
+        else:
+            translation = np.asarray(initial_translation, dtype=np.float64)
+        started = np.asarray(rotation, dtype=np.float64).copy()
         for _ in range(int(iterations)):
             transformed = apply_similarity(source, scale, rotation, translation)
             distance, index = _nearest(transformed, target, tree)
@@ -163,6 +321,7 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
                 "scale": float(scale),
                 "rotation": np.asarray(rotation, dtype=np.float64),
                 "translation": np.asarray(translation, dtype=np.float64),
+                "initial_rotation": started,
                 "distance": distance,
                 "inlier_index": chosen,
                 "target_index": index,
@@ -186,16 +345,20 @@ def trimmed_similarity_icp(source, target, trim_keep=TRIM_KEEP, iterations=30):
         "target_index": best["target_index"],
         "inlier_distance": inlier_distance,
         "aligned": best["aligned"],
+        "initial_rotation": best["initial_rotation"],
+        "seeds_searched": len(seeds),
+        "pose_source": pose_source,
     }
 
 
-def measure_residuals(result, target):
+def measure_residuals(result, target, silhouette=None):
     """Measured residuals. No pass/fail cutoff is applied.
 
     ``normalized_median`` divides the median nearest distance by the target
     cloud's RMS size. ``coverage`` is the fraction of target points that are
-    the neighbor of at least one trimmed inlier. ``silhouette`` is filled by
-    the caller when a camera is available; this function leaves it null.
+    the neighbor of at least one trimmed inlier. ``silhouette`` stays null
+    unless the caller passes a score from ``silhouette_agreement``. A null
+    score is what an empty raster union produces. It is not a pass.
     """
     target = np.asarray(target, dtype=np.float64)
     distance = np.asarray(result["distance"], dtype=np.float64)
@@ -220,6 +383,664 @@ def measure_residuals(result, target):
         "normalizer_definition": "RMS distance of the target points from their centroid",
         "coverage": covered / float(len(target)),
         "coverage_definition": "fraction of target points chosen by at least one trimmed inlier",
-        "silhouette": None,
+        "silhouette": _recorded_silhouette(silhouette),
+        "silhouette_definition": SILHOUETTE_DEFINITION,
         "thresholds_published": False,
     }
+
+
+def _recorded_silhouette(silhouette):
+    if silhouette is None:
+        return None
+    value = float(silhouette)
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError("silhouette must be a finite number in [0, 1]")
+    return value
+
+
+def _edge(ax, ay, bx, by, px, py):
+    return (px - ax) * (by - ay) - (py - ay) * (bx - ax)
+
+
+def rasterize_orthographic_silhouette(
+    vertices, faces, width, height, origin=(0.0, 0.0), pixel_size=1.0
+):
+    """Binary mask of a mesh under an orthographic camera looking along +Z.
+
+    Pixel ``(row, col)`` is covered when its center falls inside a triangle.
+    The center is ``origin + (col + 0.5, row + 0.5) * pixel_size`` in world
+    x, y. This is a CPU raster for a silhouette score. It is not a GPU render
+    of a SAM 3D GLB.
+    """
+    vertices = np.asarray(vertices, dtype=np.float64)
+    faces = np.asarray(faces, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError("vertices must be Nx3")
+    if faces.ndim != 2 or faces.shape[1] != 3:
+        raise ValueError("faces must be Mx3")
+    if faces.size and (int(faces.min()) < 0 or int(faces.max()) >= len(vertices)):
+        raise ValueError("face index out of range")
+    width = int(width)
+    height = int(height)
+    if width < 1 or height < 1:
+        raise ValueError("silhouette raster must have a positive size")
+    pixel = float(pixel_size)
+    if not math.isfinite(pixel) or pixel <= 0.0:
+        raise ValueError("pixel_size must be positive")
+    origin = np.asarray(origin, dtype=np.float64).reshape(2)
+    cols = origin[0] + (np.arange(width, dtype=np.float64) + 0.5) * pixel
+    rows = origin[1] + (np.arange(height, dtype=np.float64) + 0.5) * pixel
+    grid_x, grid_y = np.meshgrid(cols, rows)
+    mask = np.zeros((height, width), dtype=bool)
+    for face in faces:
+        xs = vertices[face, 0]
+        ys = vertices[face, 1]
+        area = float(_edge(xs[0], ys[0], xs[1], ys[1], xs[2], ys[2]))
+        if not math.isfinite(area) or abs(area) < 1e-15:
+            continue
+        w0 = _edge(xs[1], ys[1], xs[2], ys[2], grid_x, grid_y)
+        w1 = _edge(xs[2], ys[2], xs[0], ys[0], grid_x, grid_y)
+        w2 = _edge(xs[0], ys[0], xs[1], ys[1], grid_x, grid_y)
+        if area < 0.0:
+            w0, w1, w2 = -w0, -w1, -w2
+        mask |= (w0 >= 0.0) & (w1 >= 0.0) & (w2 >= 0.0)
+    return mask
+
+
+def silhouette_iou(rendered, observed):
+    """Jaccard index of two masks. An empty union returns None.
+
+    None is the first Fruits residual's outcome: the raster union was empty,
+    so there was no score to record. Zero is a real score for disjoint masks.
+    """
+    rendered = np.asarray(rendered, dtype=bool)
+    observed = np.asarray(observed, dtype=bool)
+    if rendered.ndim != 2 or rendered.shape != observed.shape:
+        raise ValueError("silhouette masks must be matching 2D arrays")
+    intersection = int(np.logical_and(rendered, observed).sum())
+    union = int(np.logical_or(rendered, observed).sum())
+    if union == 0:
+        return None
+    return intersection / float(union)
+
+
+def silhouette_agreement(rendered_masks, observed_masks):
+    """Mean per-view Jaccard index. See ``SILHOUETTE_DEFINITION``.
+
+    Views with an empty union are counted and left out of the mean. When
+    every view is empty the score is None.
+    """
+    rendered_masks = list(rendered_masks)
+    observed_masks = list(observed_masks)
+    if not rendered_masks or len(rendered_masks) != len(observed_masks):
+        raise ValueError("silhouette needs one observed mask per rendered mask")
+    scores = []
+    empty = 0
+    for rendered, observed in zip(rendered_masks, observed_masks, strict=True):
+        score = silhouette_iou(rendered, observed)
+        if score is None:
+            empty += 1
+        else:
+            scores.append(score)
+    return {
+        "silhouette": None if not scores else float(np.mean(scores)),
+        "views": len(scores),
+        "empty_views": empty,
+        "definition": SILHOUETTE_DEFINITION,
+    }
+
+
+def _vector3(value, label):
+    array = np.asarray(value, dtype=np.float64).reshape(-1)
+    if array.shape != (3,) or not np.isfinite(array).all():
+        raise ValueError(f"{label} must be 3 finite numbers")
+    return array
+
+
+def resolve_sam3d_rotation(payload):
+    """Rotation ICP should start from.
+
+    ``rotation`` is a Rodrigues vector. ``rotation_matrix`` and
+    ``quaternion_xyzw`` are converted into that vector. The scene frame stores
+    quaternions XYZW. None of those fields is filled with identity: a sidecar
+    that matches its GLB and still has no rotation raises
+    ``PoseSidecarRotationMissingError``.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("SAM 3D pose must be a JSON object")
+    if payload.get("rotation") is not None:
+        vector = _vector3(payload["rotation"], "SAM 3D rotation vector")
+        return vector, rotation_matrix_from_vector(vector), "rotation"
+    if payload.get("rotation_matrix") is not None:
+        matrix = np.asarray(payload["rotation_matrix"], dtype=np.float64)
+        vector = rotation_vector_from_matrix(matrix)
+        return vector, rotation_matrix_from_vector(vector), "rotation_matrix"
+    if payload.get("quaternion_xyzw") is not None:
+        matrix = quaternion_xyzw_to_matrix(payload["quaternion_xyzw"])
+        vector = rotation_vector_from_matrix(matrix)
+        return vector, rotation_matrix_from_vector(vector), "quaternion_xyzw"
+    raise PoseSidecarRotationMissingError(
+        "SAM 3D pose sidecar has no rotation, rotation_matrix, or quaternion_xyzw"
+    )
+
+
+def file_sha256(path):
+    """SHA-256 hex digest of a file. Used to bind a pose sidecar to its GLB."""
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _recorded_glb_sha256(payload):
+    if "glb_sha256" not in payload or payload.get("glb_sha256") is None:
+        raise PoseSidecarHashMissingError("pose sidecar is missing glb_sha256")
+    recorded = payload["glb_sha256"]
+    if not isinstance(recorded, str) or not recorded.strip():
+        raise PoseSidecarHashMissingError("pose sidecar glb_sha256 is empty")
+    return recorded.strip().lower()
+
+
+def _require_matching_glb(payload, glb_path):
+    recorded = _recorded_glb_sha256(payload)
+    glb = Path(glb_path)
+    if not glb.is_file():
+        raise PoseSidecarHashMismatchError(f"GLB is not at {glb}")
+    actual = file_sha256(glb)
+    if actual != recorded:
+        raise PoseSidecarHashMismatchError(
+            f"pose sidecar glb_sha256 {recorded} does not match {actual}"
+        )
+    return actual
+
+
+def _optional_scale(payload):
+    if payload.get("scale") is None:
+        return None, "centroid_rms"
+    scale = float(payload["scale"])
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("SAM 3D scale must be a positive finite number")
+    return scale, "stored_sam3d"
+
+
+def _optional_translation(payload):
+    if payload.get("translation") is None:
+        return None, "centroid"
+    return _vector3(payload["translation"], "SAM 3D translation"), "stored_sam3d"
+
+
+def load_stored_sam3d_pose(path, glb_path):
+    """Read a SAM 3D pose sidecar bound to ``glb_path`` by SHA-256.
+
+    A missing sidecar, a missing ``glb_sha256``, or a hash that is not the
+    GLB's digest raises a named error. A matching sidecar with no rotation,
+    matrix, or quaternion raises ``PoseSidecarRotationMissingError``. None of
+    those paths writes an identity rotation. A matrix or XYZW quaternion is
+    converted to a Rodrigues vector and stored, because that vector was
+    derived from a rotation the sidecar already held.
+    """
+    pose_path = Path(path)
+    if not pose_path.is_file():
+        raise PoseSidecarMissingError(
+            f"SAM 3D pose sidecar is not stored at {pose_path}"
+        )
+    payload = json.loads(pose_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("SAM 3D pose must be a JSON object")
+    digest = _require_matching_glb(payload, glb_path)
+    vector, matrix, source = resolve_sam3d_rotation(payload)
+    stored = False
+    if "rotation" not in payload or payload.get("rotation") is None:
+        payload["rotation"] = [float(item) for item in vector]
+        payload["rotation_source"] = source
+        pose_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        stored = True
+    elif payload.get("rotation_source"):
+        source = str(payload["rotation_source"])
+    scale, scale_source = _optional_scale(payload)
+    translation, translation_source = _optional_translation(payload)
+    return {
+        "rotation_vector": vector,
+        "rotation": matrix,
+        "scale": scale,
+        "translation": translation,
+        "scale_source": scale_source,
+        "translation_source": translation_source,
+        "rotation_source": source,
+        "rotation_stored": stored,
+        "path": str(pose_path),
+        "glb_path": str(Path(glb_path)),
+        "glb_sha256": digest,
+    }
+
+
+def _warp_mask(mask, scale, rotation, translation, origin=(0.0, 0.0), pixel_size=1.0):
+    """Sample each destination pixel from the source mask through the inverse similarity.
+
+    Forward splatting one source pixel onto one destination cell leaves holes
+    when the scale is not 1 or the rotation is not a quarter turn. The inverse
+    of ``scale * rotation @ point + translation`` is evaluated at every
+    destination center, and the nearest source pixel is read. A sample outside
+    the mask is empty. The frame matches ``rasterize_orthographic_silhouette``.
+    """
+    mask = np.asarray(mask, dtype=bool)
+    if mask.ndim != 2:
+        raise ValueError("rendered mask must be 2D")
+    height, width = mask.shape
+    origin = np.asarray(origin, dtype=np.float64).reshape(2)
+    pixel = float(pixel_size)
+    if not math.isfinite(pixel) or pixel <= 0.0:
+        raise ValueError("pixel_size must be positive")
+    scale = float(scale)
+    if not math.isfinite(scale) or scale <= 0.0:
+        raise ValueError("scale must be a positive finite number")
+    rotation = np.asarray(rotation, dtype=np.float64)
+    translation = np.asarray(translation, dtype=np.float64).reshape(3)
+    cols = origin[0] + (np.arange(width, dtype=np.float64) + 0.5) * pixel
+    rows = origin[1] + (np.arange(height, dtype=np.float64) + 0.5) * pixel
+    grid_x, grid_y = np.meshgrid(cols, rows)
+    # Source pixels lie on z = 0. The image keeps x and y after the similarity,
+    # so the inverse solves the top two rows of the rotation. Forcing the
+    # destination onto z = 0 reverses an out-of-plane rotation.
+    delta_x = (grid_x - translation[0]) / scale
+    delta_y = (grid_y - translation[1]) / scale
+    a = float(rotation[0, 0])
+    b = float(rotation[0, 1])
+    c = float(rotation[1, 0])
+    d = float(rotation[1, 1])
+    det = a * d - b * c
+    warped = np.zeros((height, width), dtype=bool)
+    if abs(det) < 1e-8:
+        return warped
+    source_x = (d * delta_x - b * delta_y) / det
+    source_y = (-c * delta_x + a * delta_y) / det
+    col_f = (source_x - origin[0]) / pixel - 0.5
+    row_f = (source_y - origin[1]) / pixel - 0.5
+    ic = np.rint(col_f).astype(np.int64)
+    ir = np.rint(row_f).astype(np.int64)
+    inside = (ir >= 0) & (ir < height) & (ic >= 0) & (ic < width)
+    warped[inside] = mask[ir[inside], ic[inside]]
+    return warped
+
+
+def _score_silhouette(
+    result,
+    rendered_masks,
+    observed_masks,
+    mesh,
+    origin=(0.0, 0.0),
+    pixel_size=1.0,
+):
+    """Silhouette of the refined similarity, not the pre-ICP vertices.
+
+    The gate judges the pose ICP finished on. A mesh is rasterized only after
+    ``apply_similarity``. A supplied mask is warped by that same scale,
+    rotation, and translation, on the same orthographic grid the rasterizer
+    uses. A pixel is one world unit only when ``pixel_size`` is 1 and the
+    origin is zero. Neither path uses the export-frame render. A non-finite
+    origin, or a non-finite or non-positive pixel size, is an error here, so
+    a bad grid cannot become an empty mask.
+    """
+    origin, pixel_size = _finite_silhouette_grid(origin, pixel_size)
+    if mesh is not None:
+        scored = dict(mesh)
+        # A mesh that already names its grid keeps it. Otherwise the grid
+        # passed with the masks is the one the rasterizer would have used.
+        scored.setdefault("origin", origin)
+        scored.setdefault("pixel_size", pixel_size)
+        scored["origin"], scored["pixel_size"] = _finite_silhouette_grid(
+            scored["origin"], scored["pixel_size"]
+        )
+        scored["vertices"] = apply_similarity(
+            mesh["vertices"],
+            result["scale"],
+            result["rotation"],
+            result["translation"],
+        )
+        rendered = _rendered_masks(None, observed_masks, scored)
+    else:
+        if not rendered_masks:
+            raise ValueError("silhouette needs rendered masks or a mesh")
+        rendered = [
+            _warp_mask(
+                mask,
+                result["scale"],
+                result["rotation"],
+                result["translation"],
+                origin=origin,
+                pixel_size=pixel_size,
+            )
+            for mask in rendered_masks
+        ]
+    return silhouette_agreement(rendered, observed_masks)
+
+
+def _rendered_masks(rendered_masks, observed_masks, mesh):
+    if rendered_masks is not None:
+        return list(rendered_masks)
+    if mesh is None:
+        raise ValueError("silhouette needs rendered masks or a mesh")
+    observed = list(observed_masks or [])
+    if len(observed) != 1:
+        raise ValueError(
+            "an orthographic mesh silhouette is one view; pass rendered masks for more"
+        )
+    sample = np.asarray(observed[0])
+    if sample.ndim != 2:
+        raise ValueError("observed mask must be 2D")
+    height = int(mesh["height"]) if mesh.get("height") is not None else sample.shape[0]
+    width = int(mesh["width"]) if mesh.get("width") is not None else sample.shape[1]
+    rendered = rasterize_orthographic_silhouette(
+        mesh["vertices"],
+        mesh["faces"],
+        width,
+        height,
+        origin=mesh.get("origin", (0.0, 0.0)),
+        pixel_size=mesh.get("pixel_size", 1.0),
+    )
+    return [rendered]
+
+
+def _pose_initialization(pose, result):
+    translation = pose["translation"]
+    return {
+        "source": "sidecar",
+        "sidecar_path": pose["path"],
+        "glb_path": pose["glb_path"],
+        "glb_sha256": pose["glb_sha256"],
+        "rotation": [float(item) for item in pose["rotation_vector"]],
+        "rotation_source": pose["rotation_source"],
+        "rotation_stored": bool(pose["rotation_stored"]),
+        "seeds_searched": int(result["seeds_searched"]),
+        "scale": None if pose["scale"] is None else float(pose["scale"]),
+        "scale_source": pose["scale_source"],
+        "translation": None
+        if translation is None
+        else [float(item) for item in translation],
+        "translation_source": pose["translation_source"],
+        "scored_pose": "post_icp",
+        "silhouette_transform": {
+            "scale": float(result["scale"]),
+            "rotation": np.asarray(result["rotation"], dtype=np.float64).tolist(),
+            "translation": np.asarray(result["translation"], dtype=np.float64).tolist(),
+        },
+    }
+
+
+def _gate_reason(decision, residuals):
+    """Accept, ``silhouette_undefined``, or the below-minimum residual names.
+
+    A null silhouette is the empty-raster case. A numeric silhouette that
+    misses the minimum stays on the ordinary reject line.
+    """
+    if decision["decision"] == "accept":
+        return "ours_iteration_1 accept"
+    if residuals.get("silhouette") is None:
+        return SILHOUETTE_UNDEFINED_REASON
+    failed = ", ".join(decision.get("failed") or [])
+    return f"ours_iteration_1 reject: {failed}"
+
+
+def _is_finite_number(value):
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return False
+    return math.isfinite(float(value))
+
+
+def icp_step_exit_code(residuals, ledger_entry):
+    """Exit code for the separate ICP step.
+
+    0 when the ledger accepted or rejected and normalized median, p90, and
+    coverage are finite numbers. Silhouette must be a finite number, except
+    the ruled null whose ledger reason is ``silhouette_undefined``. Anything
+    else, including a missing ledger line, is 1.
+    """
+    if not isinstance(ledger_entry, dict):
+        return 1
+    if ledger_entry.get("decision") not in {"accept", "reject"}:
+        return 1
+    if not isinstance(residuals, dict):
+        return 1
+    for name in ("normalized_median", "p90", "coverage"):
+        if not _is_finite_number(residuals.get(name)):
+            return 1
+    silhouette = residuals.get("silhouette")
+    if silhouette is None:
+        if ledger_entry.get("reason") != SILHOUETTE_UNDEFINED_REASON:
+            return 1
+        return 0
+    if not _is_finite_number(silhouette):
+        return 1
+    return 0
+
+
+def write_alignment_residual(
+    source,
+    target,
+    pose_path,
+    out_path,
+    rendered_masks=None,
+    observed_masks=None,
+    mesh=None,
+    ledger_dir=None,
+    glb_path=None,
+    origin=(0.0, 0.0),
+    pixel_size=1.0,
+):
+    """Align from the stored SAM 3D pose and write the residual JSON.
+
+    The pose sidecar has to exist and its ``glb_sha256`` has to be the SHA-256
+    of ``glb_path`` before ICP runs. Silhouette is measured after ICP, on the
+    refined scale, rotation, and translation. An empty union leaves silhouette
+    null and the ledger reason is ``silhouette_undefined``. A measured 0
+    rejects on the ordinary below-minimum line. This function does not change
+    the gate's cutoffs.
+    """
+    if glb_path is None:
+        raise PoseSidecarHashMissingError(
+            "ICP needs the GLB whose hash the sidecar records"
+        )
+    pose = load_stored_sam3d_pose(pose_path, glb_path)
+    if observed_masks is None:
+        raise ValueError("silhouette needs observed masks")
+    result = trimmed_similarity_icp(
+        source,
+        target,
+        trim_keep=TRIM_KEEP,
+        initial_rotation=pose["rotation"],
+        initial_scale=pose["scale"],
+        initial_translation=pose["translation"],
+    )
+    if result["seeds_searched"] != 1 or result["pose_source"] != "stored_sam3d":
+        raise RuntimeError("ICP did not start from the stored SAM 3D pose")
+    agreement = _score_silhouette(
+        result,
+        rendered_masks,
+        observed_masks,
+        mesh,
+        origin=origin,
+        pixel_size=pixel_size,
+    )
+    residuals = measure_residuals(result, target, silhouette=agreement["silhouette"])
+    pose_info = _pose_initialization(pose, result)
+    body = dict(residuals)
+    body["silhouette_views"] = agreement["views"]
+    body["silhouette_empty_views"] = agreement["empty_views"]
+    body["pose_initialization"] = pose_info
+    body["scale"] = result["scale"]
+    body["rotation"] = result["rotation"].tolist()
+    body["translation"] = result["translation"].tolist()
+    body["trim_keep"] = result["trim_keep"]
+    destination = Path(out_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    decision = accept_alignment(
+        {name: residuals[name] for name in RESIDUAL_NAMES},
+        "ours_iteration_1",
+    )
+    constants = decision.get("constants")
+    if decision.get("gate") != "ours_iteration_1" or not isinstance(constants, dict):
+        raise RuntimeError("ours_iteration_1 did not report its constants")
+    reason = _gate_reason(decision, residuals)
+    entry = None
+    if ledger_dir is not None:
+        entry = append_step(
+            ledger_dir,
+            "icp",
+            {
+                "ok": decision["accepted"],
+                "artifact": str(destination),
+                "reason": reason,
+                "detail": {
+                    "gate": decision["gate"],
+                    "pose_initialization": pose_info,
+                    "alignment_constants": constants,
+                    "residuals": {name: residuals[name] for name in RESIDUAL_NAMES},
+                },
+            },
+        )
+    return {
+        "path": str(destination),
+        "residuals": residuals,
+        "pose_initialization": pose_info,
+        "decision": decision,
+        "reason": reason,
+        "ledger_entry": entry,
+    }
+
+
+def run_icp_step(
+    source,
+    target,
+    pose_path,
+    glb_path,
+    out_path,
+    rendered_masks=None,
+    observed_masks=None,
+    mesh=None,
+    ledger_dir=None,
+    origin=(0.0, 0.0),
+    pixel_size=1.0,
+):
+    """Entry point for the separate ICP step. Returns a process exit code.
+
+    A gate accept or reject, including ``silhouette_undefined``, is 0 and the
+    ledger records that decision. A crash, a pose-sidecar error, or a missing
+    or non-numeric measure is 1. A non-finite origin, or a non-finite or
+    non-positive pixel size, raises ``ValueError`` before that catch, so it
+    is not a gate reject and not exit 0. This step is not the Fruits smoke.
+    """
+    origin, pixel_size = _finite_silhouette_grid(origin, pixel_size)
+    try:
+        written = write_alignment_residual(
+            source,
+            target,
+            pose_path,
+            out_path,
+            rendered_masks=rendered_masks,
+            observed_masks=observed_masks,
+            mesh=mesh,
+            ledger_dir=ledger_dir,
+            glb_path=glb_path,
+            origin=origin,
+            pixel_size=pixel_size,
+        )
+    except Exception:
+        return 1
+    return icp_step_exit_code(written["residuals"], written["ledger_entry"])
+
+
+def _finite_silhouette_grid(origin, pixel_size):
+    """Origin and pixel size of the orthographic silhouette, or an error.
+
+    A non-finite origin used to warp to an empty mask and exit 0. A non-finite
+    or non-positive pixel size is the same class of bad grid. Both are a
+    failed step, not a gate reject.
+    """
+    origin = np.asarray(origin, dtype=np.float64).reshape(-1)
+    if origin.shape != (2,) or not np.isfinite(origin).all():
+        raise ValueError("origin must be two finite numbers")
+    pixel = float(pixel_size)
+    if not math.isfinite(pixel) or pixel <= 0.0:
+        raise ValueError("pixel_size must be a positive finite number")
+    return (float(origin[0]), float(origin[1])), pixel
+
+
+def main(argv=None):
+    """``python -m sceneagent.similarity_icp``. Same exit codes as ``run_icp_step``."""
+    parser = argparse.ArgumentParser(prog="python -m sceneagent.similarity_icp")
+    parser.add_argument("--pose", required=True)
+    parser.add_argument("--glb", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--ledger", required=True)
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--rendered-mask", required=True)
+    parser.add_argument("--observed-mask", required=True)
+    parser.add_argument("--mesh-vertices")
+    parser.add_argument("--mesh-faces")
+    parser.add_argument("--mesh-width", type=int)
+    parser.add_argument("--mesh-height", type=int)
+    parser.add_argument(
+        "--origin",
+        type=float,
+        nargs=2,
+        default=(0.0, 0.0),
+        metavar=("X", "Y"),
+        help="World x and y of the corner of silhouette pixel (0, 0). Default: 0 0.",
+    )
+    parser.add_argument(
+        "--pixel-size",
+        type=float,
+        default=1.0,
+        help="World length of one silhouette pixel. Default: 1.",
+    )
+    try:
+        args = parser.parse_args(argv)
+        origin, pixel_size = _finite_silhouette_grid(args.origin, args.pixel_size)
+        source = np.load(args.source)
+        target = np.load(args.target)
+        rendered = np.load(args.rendered_mask)
+        observed = np.load(args.observed_mask)
+        mesh = None
+        if args.mesh_vertices or args.mesh_faces:
+            if not args.mesh_vertices or not args.mesh_faces:
+                return 1
+            mesh = {
+                "vertices": np.load(args.mesh_vertices),
+                "faces": np.load(args.mesh_faces),
+            }
+            if args.mesh_width is not None:
+                mesh["width"] = args.mesh_width
+            if args.mesh_height is not None:
+                mesh["height"] = args.mesh_height
+            mesh["origin"] = origin
+            mesh["pixel_size"] = pixel_size
+    except SystemExit as exc:
+        code = exc.code
+        if code in (None, 0):
+            return 1
+        return code if isinstance(code, int) else 1
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    except Exception:
+        return 1
+    return run_icp_step(
+        source,
+        target,
+        args.pose,
+        args.glb,
+        args.out,
+        rendered_masks=[rendered],
+        observed_masks=[observed],
+        mesh=mesh,
+        ledger_dir=args.ledger,
+        origin=origin,
+        pixel_size=pixel_size,
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

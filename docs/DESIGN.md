@@ -2,7 +2,7 @@
 
 This document is the upgrade plan for a new tree at `sceneagent-simfoundry`. The tree is the SimFoundry fork (`sandy-t-shelvan/SimFoundry`, parent `NVlabs/SimFoundry`, commit `9e34ebe`) plus a `sceneagent` package. SceneAgent, the Harvard paper and site, is the target behavior. It is not a second codebase in this tree. No other application repository is imported.
 
-The row-by-row map is [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 11 partial, 14 missing, 42 rows. Done means this tree produced that block's artifact. A unit test of a formula is partial until the paper's output file exists. Missing means the named system has not been run. The block-by-block expansion is [`EXPANSION_PLAN.md`](EXPANSION_PLAN.md).
+The row-by-row map is [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 12 partial, 13 missing, 42 rows. Done means this tree produced that block's artifact. A unit test of a formula is partial until the paper's output file exists. Missing means the named system has not been run. The block-by-block expansion is [`EXPANSION_PLAN.md`](EXPANSION_PLAN.md).
 
 This document does not treat the SceneAgent website's demo numbers as results of this repository.
 
@@ -152,7 +152,7 @@ python -m sceneagent examples/phase1_place_scene.json --out runs/phase1_place
 - No invented friction, mass, modulus, or ICP thresholds.
 - No GraspClutter6D, MessyKitchens, or 4DCodeBench scores.
 - No pi0.5, GR00T, or real-robot loop.
-- No edit to the running Vast pipeline on instance `58357498`.
+- No Vast instance other than `59601312`. The GPU smoke does not start or stop it.
 
 ## Risks
 
@@ -169,7 +169,7 @@ Phase 1 is the agent file contract, the published association and vote math, mod
 
 ## Block map
 
-The living rows are in [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 11 partial, 14 missing, 42 rows. The table below is an earlier snapshot and is not regenerated from the catalog.
+The living rows are in [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneagent/catalog.py`. Current counts: 17 done, 12 partial, 13 missing, 42 rows. The table below is an earlier snapshot and is not regenerated from the catalog.
 
 | Block | Sub-block | Paper requirement | SimFoundry today | Status | Tool | Repo | Next action |
 |---|---|---|---|---|---|---|---|
@@ -189,7 +189,7 @@ The living rows are in [`GAP_MATRIX.md`](GAP_MATRIX.md), generated from `sceneag
 | 3.3 Object reconstruction | LaMa background infill | Section 3.3: optional LaMa texture inpainting after plane completion. | No LaMa stage. | missing | lama | https://github.com/advimman/lama | Optional after foreground Gaussians are removed. |
 | 3.4 Physics prior | Material vote | Section 3.4 equation (2), with unknown-class weights scaled by 0.4. Ten classes, six body types, eight primitives. Soft body at deformability >= 0.65. Mass and density are log targets. | Stage 11 and the articulation physics file estimate mass and friction for OmniGibson. They do not use this vote. | done | sceneagent.physics |  | Add measured proposals when they exist. Leave modulus lookups null. |
 | 3.4 Physics prior | Per-Gaussian MLP | Section 3.4: an MLP on DINOv2, OpenCLIP, and 16 geometric features, trained on VLM labels from GSO, YCB, and ABO. Weights are not released. | No such network. | missing | unreleased |  | Do not train a stand-in and call it their prior. |
-| 3.4 Physics prior | VLM material proposal | Section 3.4: a VLM is one vote source and may audit the class. Sister edits in section 3.8 name Gemini 2.5 Flash. | Gemini is already the VLM for stages 3, 5, 6, 11 and pipeline B. | partial | google-genai |  | A video run may call Gemini 2.5 Flash on one frame. That call is not the full audit. |
+| 3.4 Physics prior | VLM material proposal | Section 3.4: a VLM is one vote source and may audit the class. The material-vote model in this tree is gemini-3.8-flash, our configuration. The PDF's Gemini 2.5 Flash sentence is the section 3.8 Meshy route, not this vote. | Gemini is already the VLM for stages 3, 5, 6, 11 and pipeline B. | partial | google-genai |  | The material vote calls gemini-3.8-flash. A historical gemini-2.5-flash call returned HTTP 404 and is not this configuration. |
 | 3.4 Parts and articulation | PartSAM | Section 3.4: PartSAM decomposes each reconstructed object. | Stage 9 articulation has its own part segmentation. | missing | PartSAM | https://github.com/czvvd/PartSAM | Run only after a mesh exists. |
 | 3.4 Parts and articulation | CubePart | Section 3.4: CubePart completes hidden geometry, such as a marker tip under the cap. | No hidden-part completion stage. | missing | CubePart | https://github.com/Roblox/cube | Do not fill missing geometry with a scaled box. |
 | 3.4 Parts and articulation | Articulate Anything | Section 3.4: Articulate Anything proposes URDF joints. Agents review the motion. | Stage 9 can build articulations with --detect-articulation. It is not this VLM URDF system. | missing | Articulate Anything | https://github.com/vlongle/articulate-anything | Review joints in simulation before the ledger accepts them. |

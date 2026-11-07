@@ -1,0 +1,5 @@
+# Reviewed public host key for the direct endpoint public_ipaddr plus
+# ports 22/tcp HostPort. Fingerprint
+# SHA256:NDJOu/2d7YbJz6Wj/HgqNSraxzsNkp8Plj/QGtAShO8
+# This is not the proxy ssh_host.
+[47.186.21.5]:51823 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFqxlHMUC7xRRWryJ7y1/3LjWJiHFLhPlb9bH05FR3Nr

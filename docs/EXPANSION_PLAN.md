@@ -10,7 +10,7 @@ Two published gaps stay explicit. Section 3.4's per-Gaussian MLP weights are not
 
 ## Machine
 
-Isaac Sim 5 and Isaac Lab 2 are planned for the existing Canadian instance with a 580-series driver. No new machine is rented. Texas instance 58591955 (40 GB disk, CPU COLMAP only) does not receive this install. Estonia instance 58357498 is not the Canadian box and is left alone.
+Isaac Sim 5 and Isaac Lab 2 are planned for the existing Canadian instance with a 580-series driver. No new machine is rented. Texas instance 58591955 (40 GB disk, CPU COLMAP only) does not receive this install. The only Vast instance later SceneAgent GPU work may use is 59601312. The GPU smoke workflow does not start or stop it.
 
 Checked 1 Nov 2026 through the Vast v1 instances API. Every instance was `exited`.
 
@@ -18,8 +18,7 @@ Checked 1 Nov 2026 through the Vast v1 instances API. Every instance was `exited
 |---|---|---|---|---|---|---|
 | 55073623 | Quebec, CA | 580.82.09 | RTX 4090, 24564 MB | 250 GB allocated, API `disk_util` 173 GB (about 77 GB free) | exited | The Canadian 580 box. Install not started. |
 | 58331400 | Quebec, CA | 595.99.02 | RTX 3090 | 280 GB, API use 197 GB | exited | Canada, but not a 580 driver. |
-| 58357498 | Estonia, EE | 580.178.04 | RTX A4000 | 120 GB, API use 93 GB | exited | Left alone. |
-| 58301075 | Texas, US | 595.99.02 | RTX 4090 | 500 GB | exited | Not used. |
+| 58301075 | Texas, US | 595.99.02 | RTX 4090 | 500 GB | exited | Snapshot on 1 Nov 2026. Later GPU smoke uses 59601312 and does not start this id. |
 | 58591955 | Texas, US | 595.91.07 | RTX 4060 Ti | 40 GB | exited | Prior CPU COLMAP only. |
 
 Isaac Sim 5 plus Isaac Lab 2 needs on the order of 100 GB free. The API figure for 55073623 is about 77 GB free, and the box is stopped, so no live `df` was taken and no packages were downloaded. The next block is blocked on that instance being running with at least 100 GB free. `tools/canadian_isaac_instance.json` records the blocker. It has no API key. Isaac Sim and Isaac Lab versions are null because they were not installed.
@@ -154,7 +153,7 @@ Section 3.3 follows LangSplat's approach of attaching features to Gaussians. SAM
 - Output: a mesh file and an ICP residual file. LaMa's output is an inpainted patch.
 - Tools: https://github.com/facebookresearch/sam-3d-objects and https://github.com/advimman/lama
 - Depends on: masks, then Gaussians for the ICP.
-- Done when: a mesh file and an ICP residual file exist. LaMa is optional and stays missing until a plane-completion render shows an inpainted patch.
+- Done when: a mesh file and an ICP residual file exist. The CPU plane fit is partial. LaMa stays optional until a Fruits plane-completion render shows an inpainted patch.
 - Machine: Canadian box. SAM3D weights are large; skip if free space would drop below the Isaac reserve.
 
 ## 3.4 Physical properties, parts, and articulation
@@ -176,11 +175,11 @@ PartSAM decomposes the object. CubePart completes hidden geometry. Articulate An
 
 ### VLM proposal
 
-- Section 3.4 uses a VLM as one vote source and as the audit. Section 3.8 names Gemini 2.5 Flash for sister edits.
+- Section 3.4 uses a VLM as one vote source and as the audit. The material-vote model in this tree is `gemini-3.8-flash`, our configuration. The PDF's Gemini 2.5 Flash sentence is the section 3.8 Meshy route, not this vote.
 - SimFoundry already calls Gemini in stages 3, 5, 6, 11 and pipeline B.
 - Input: one frame from `Fruits.mp4` and the existing Gemini key. The key is not written into the repo.
-- Output: `ledger.json` entry for the material proposal, plus the class returned by Gemini 2.5 Flash.
-- Tool: Gemini 2.5 Flash. No git URL is printed in the PDF.
+- Output: `ledger.json` entry for the material proposal. The class is not attributed to Gemini 2.5 Flash.
+- Tool: `gemini-3.8-flash`, our configuration. No git URL is printed in the PDF.
 - Depends on: a decoded frame. It does not depend on the unpublished MLP weights.
 - Done when: the ledger records that call's class and the raw response is saved. Partial until that file exists.
 - Machine: Canadian box or the developer machine. The key stays in `.env.local`.

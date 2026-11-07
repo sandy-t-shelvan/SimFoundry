@@ -129,18 +129,36 @@ def _manifest(out, step_id, attempt, result):
     return str(path)
 
 
+def _ledger_decision(result, detail):
+    """Accept only a clean ok result.
+
+    A motion review of ``fail`` is a crashed process. Folding that into
+    ``reject`` would hide the crash, and ``ok`` must not turn it into accept.
+    """
+    review = detail.get("review")
+    if review == "fail":
+        return "fail"
+    if review == "reject":
+        return "reject"
+    if review == "accept":
+        return "accept" if result.get("ok") else "reject"
+    return "accept" if result.get("ok") else "reject"
+
+
 def _entry(step_id, attempt, result, repair):
     detail = result.get("detail") or {}
     entry = {
         "item": step_id,
         "section": STEP_SECTION[step_id],
-        "decision": "accept" if result.get("ok") else "reject",
+        "decision": _ledger_decision(result, detail),
         "attempt": attempt,
         "repair": repair,
         "skill": STEP_SKILL[step_id],
         "artifact": result.get("artifact"),
         "reason": result.get("reason") or "",
     }
+    # ICP puts the stored SAM 3D start and the iteration-1 constants on the
+    # ledger line. Other steps leave these keys out of their detail.
     for key in (
         "model_id",
         "paper_model_id",
@@ -148,6 +166,20 @@ def _entry(step_id, attempt, result, repair):
         "paper_http_status",
         "material_class",
         "used_paper_model",
+        "gate",
+        "pose_initialization",
+        "alignment_constants",
+        "residuals",
+        "part_mesh",
+        "urdf",
+        "review",
+        "returncode",
+        "links_match",
+        "forced_for",
+        "completion_needed",
+        "diffusers_version",
+        "propose_returncode",
+        "urdf_guard",
     ):
         if key in detail:
             entry[key] = detail[key]

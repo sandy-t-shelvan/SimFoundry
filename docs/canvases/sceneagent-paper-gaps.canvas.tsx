@@ -38,6 +38,18 @@ type GapRow = {
   ran: string;
   miss: string;
   addressed?: "fixed" | "still open";
+  /** Cut 1 / Cut 2 ticket progress. Catalog `status` is unchanged unless the ticket is Accepted and closes the paper gap. */
+  ticket?: string;
+  ticketStatus?:
+    | "Accepted"
+    | "Merged (part 1, GPU evidence pending)"
+    | "as of 2026-11-06 2:20 AM ET: Merged part 1 (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending"
+    | "In review"
+    | "as of 2026-11-06 2:20 AM ET: In review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings)"
+    | "as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot _warp_mask finding"
+    | "In progress"
+    | "Not started"
+    | "On hold (Cut 2)";
 };
 
 type Block = {
@@ -94,6 +106,8 @@ const BLOCKS: Block[] = [
         sub: "Alignment acceptance gate",
         status: "partial",
         addressed: "fixed",
+        ticket: "SF-8 / KAN-8",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot _warp_mask finding",
         paper: "Section 3.1: accept a pose only when normalized median, p90, coverage, and silhouette all pass fixed thresholds. The numbers are not published.",
         plan: "The gate ran on 55073623 and catalog marks it partial. DESIGN phase 3 says choose thresholds on a held-out set and do not present them as the paper's. Missing thresholds stay undecided.",
         changelog: "ICP residual written. accept_alignment stayed undecided. TRIM_KEEP 0.7 is this implementation's overlap, not a published threshold. Silhouette raster union was empty.",
@@ -111,6 +125,8 @@ const BLOCKS: Block[] = [
         sub: "COLMAP camera poses",
         status: "partial",
         addressed: "still open",
+        ticket: "SF-5 / KAN-5",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: In review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings)",
         paper: "Section 3.2: RGB sequences use COLMAP for camera poses. Agents may correct per-image color calibration.",
         plan: "Done only when model_analyzer prints a full-rate sequence and those cameras feed splatfacto. The 1 fps sample and 16-frame cap are the runner's, not the paper's.",
         changelog: "CUDA COLMAP 4.2.1 on Fruits.mp4, exit 0. Earlier Texas run was COLMAP 3.7 without CUDA. Row stays partial.",
@@ -131,6 +147,8 @@ const BLOCKS: Block[] = [
         sub: "Photogrammetry, LiDAR, generated 3DGS",
         status: "missing",
         addressed: "fixed",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
+        ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.2 also accepts existing 3DGS, photogrammetry, LiDAR, and generated scenes (World Labs Marble, NVIDIA Lyra, Tencent HY-World). Dynamic video is section 3.6.",
         plan: "EXPANSION_PLAN adds a reader. Polycam is a capture source, not a repository. Done when one non-video asset passes the ledger.",
         changelog: "Not shipped. The unreleased list does not claim these importers.",
@@ -141,6 +159,8 @@ const BLOCKS: Block[] = [
         sub: "Example video metadata",
         status: "partial",
         addressed: "still open",
+        ticket: "SF-5 / KAN-5 (related)",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: In review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings)",
         paper: "Section 3.2 starts from an RGB sequence.",
         plan: "sceneagent.video records byte size and mvhd duration. Partial until the splat view exists.",
         changelog: "Fruits.mp4 is 1,733,022 bytes and 15.067 s. Poses exist for the 1 fps sample.",
@@ -169,6 +189,8 @@ const BLOCKS: Block[] = [
         sub: "GroundingDINO",
         status: "missing",
         addressed: "still open",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
+        ticketStatus: "On hold (Cut 2)",
         paper: "Not in section 3.3. The website step 02 says GroundingDINO + SAM assign semantic features to each Gaussian.",
         plan: "Named beside SAM. Masks and the two feature vectors exist. GroundingDINO did not run, and the feature-on-Gaussian file is still missing.",
         changelog: "Not shipped.",
@@ -199,6 +221,8 @@ const BLOCKS: Block[] = [
         sub: "LangSplat-style codebook",
         status: "missing",
         addressed: "still open",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
+        ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.3 follows LangSplat's approach of attaching features to Gaussians. It does not say that repository is executed as-is.",
         plan: "Read the method. Do not vendor the research repo until the feature lift is specified.",
         changelog: "Not shipped.",
@@ -229,6 +253,8 @@ const BLOCKS: Block[] = [
         sub: "Trimmed similarity ICP",
         status: "partial",
         addressed: "still open",
+        ticket: "SF-8 / KAN-8",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Sent back (10195/10196); fix in progress for Bugbot _warp_mask finding",
         paper: "Section 3.3: trimmed similarity ICP, one uniform scale, initialized from the SAM3D pose, aligns the mesh to P_k.",
         plan: "A mesh file and an ICP residual file are the done condition, shared with LaMa. DESIGN says the pose stays undecided without the paper's thresholds.",
         changelog: "Residual file 2,197 bytes. Ledger icp attempt 1 accepted the file. The section 3.1 gate stays undecided.",
@@ -237,13 +263,15 @@ const BLOCKS: Block[] = [
       },
       {
         sub: "LaMa background infill",
-        status: "missing",
+        status: "partial",
         addressed: "still open",
+        ticket: "SF-9 / KAN-9",
+        ticketStatus: "Merged (part 1, GPU evidence pending)",
         paper: "Section 3.3: after foreground Gaussians are removed, detected planes complete the background, with optional LaMa texture inpainting.",
-        plan: "Optional. Stays missing until a plane-completion render shows an inpainted patch.",
-        changelog: "Not shipped.",
-        ran: "Not started. No plane-completion image.",
-        miss: "Not started. Plane completion itself, which LaMa is optional on top of, also has no artifact.",
+        plan: "sceneagent.infill.fit_plane fits the background on CPU. LaMa stays optional and off by default. Partial until the Fruits background image exists.",
+        changelog: "CPU plane fit and hole fill are tested on synthetic points. Counts are 17 done, 12 partial, 13 missing (17 / 12 / 13), 42 rows.",
+        ran: "No Fruits render yet. Synthetic CPU renders are produced by complete_background and are not stored as fixtures.",
+        miss: "LaMa weights are not installed. Instance 58301075 has not run the Fruits background. The row stays partial.",
       },
     ],
   },
@@ -267,6 +295,8 @@ const BLOCKS: Block[] = [
         sub: "Per-Gaussian MLP",
         status: "missing",
         addressed: "still open",
+        ticket: "out of Cut 1 (Sandeep trains MLP)",
+        ticketStatus: "Not started",
         paper: "Section 3.4: an MLP on DINOv2, OpenCLIP, and 16 geometric features, trained on VLM labels from GSO, YCB, and ABO. Nine numerical properties. Weights are not released. Targets are VLM labels, not measurements.",
         plan: "Do not train a stand-in and call it their prior. DESIGN repeats the 16 geometric features and leaves the weights unreleased.",
         changelog: "Listed under 'Not in this tree.'",
@@ -297,6 +327,8 @@ const BLOCKS: Block[] = [
         sub: "CubePart",
         status: "missing",
         addressed: "still open",
+        ticket: "SF-10 / KAN-10",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Merged part 1 (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending",
         paper: "Section 3.4: CubePart completes hidden geometry, such as a marker tip under the cap, and appends it to the mesh.",
         plan: "Phase 7, reviewed by the ledger. No scene file is specified beyond the marker example in the paper.",
         changelog: "catalog.py still says attempt 1 was rejected on disk and nothing was downloaded. That line is behind the 2 Nov log.",
@@ -307,6 +339,8 @@ const BLOCKS: Block[] = [
         sub: "Articulate Anything",
         status: "partial",
         addressed: "still open",
+        ticket: "SF-10 / KAN-10",
+        ticketStatus: "as of 2026-11-06 2:20 AM ET: Merged part 1 (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending",
         paper: "Section 3.4: Articulate Anything proposes URDF joints from image or text. Agents review the motion in simulation.",
         plan: "Phase 7. Do not treat SimFoundry stage 9 as this system.",
         changelog: "Attempt 1 rejected the extract. Attempt 2 accepted a PartNet table URDF. On 2 Nov 2026 attempts 3 and 4 rejected that table and a retry table for the fruit. The files were kept.",
@@ -323,6 +357,8 @@ const BLOCKS: Block[] = [
       {
         sub: "Warp, Blast, Newton",
         status: "missing",
+        ticket: "out of Cut 1 (fracture deferred)",
+        ticketStatus: "Not started",
         paper: "Section 3.5: parchment uses NVIDIA Warp cohesive fracture. Ceramics use NVIDIA Blast. Section 3.6 and the site use Newton for jelly and watermelon. These examples are authored scenes, not automatic USD export. Parameters are engineering estimates.",
         plan: "Phase 8: explicit example scenes only. 'Do not put fracture in the USD contract.' No input scene, no output file, and no split between Warp, Blast, and Newton.",
         changelog: "Not shipped.",
@@ -339,6 +375,8 @@ const BLOCKS: Block[] = [
       {
         sub: "Dynamic scene and build script",
         status: "missing",
+        ticket: "out of Cut 1 (no 4D)",
+        ticketStatus: "Not started",
         paper: "Section 3.6 extends S to (K, E, G, {d_m}) with equation (3). Solvers are MPM, FLIP, and fracture models. A build script regenerates frames, meshes, and trajectories without reading the video. Section 4.2 scores B_09, Z_06, and Z_12. Figure 4 token stages are S0–S6.",
         plan: "One missing row tied to section 4.2. 'Do not report the paper's 99.09% dynamic IoU as our score.' The S0–S6 stage list and the regenerable build script are not artifacts in the plan.",
         changelog: "Not shipped. The 99.09% figure is called out as not this repo's score.",
@@ -401,6 +439,8 @@ const BLOCKS: Block[] = [
       {
         sub: "Unreal Engine",
         status: "missing",
+        ticket: "out of Cut 1",
+        ticketStatus: "Not started",
         paper: "Section 3.7 names Unreal as a third target. The paper says the scenes were tested there.",
         plan: "Confirm a USD load only after a person does it. No loader and no scene list.",
         changelog: "Not shipped.",
@@ -444,6 +484,8 @@ const BLOCKS: Block[] = [
       {
         sub: "Meshy generative sisters",
         status: "missing",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
+        ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.8 second method: Gemini 2.5 Flash splits functional components, Gemini 3 Pro Image edits one component, Meshy image-to-3D lifts it. Meshy-6 retexture keeps geometry and UVs.",
         plan: "Do not label Hunyuan as Meshy. No open repository matched Meshy-6.",
         changelog: "Not shipped. Pipeline B cousins stay the SimFoundry path.",
@@ -469,6 +511,8 @@ const BLOCKS: Block[] = [
       {
         sub: "Captured object in an artist scene",
         status: "missing",
+        ticket: "KAN-15 on hold: Sandeep 2:00 AM ET starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate",
+        ticketStatus: "On hold (Cut 2)",
         paper: "Section 3.9 places one converted object into an artist-authored environment. The site shows kitchen, warehouse, chemistry lab, data center, and studio hybrids, often with Omniverse assets.",
         plan: "One short subsection: use the light editor after a captured mesh exists. No artist scene, no asset list, and no output file.",
         changelog: "Not shipped. Do not claim the hybrid videos were rebuilt.",
@@ -504,6 +548,8 @@ const BLOCKS: Block[] = [
       {
         sub: "pi0 / pi0.5 fine-tune",
         status: "missing",
+        ticket: "out of Cut 1",
+        ticketStatus: "Not started",
         paper: "Section 4.4 fine-tunes pi0.5 with LoRA on simulated demonstrations. The eggplant table, including 40 episodes at 57/200 sim and 24/50 real, is the paper's result.",
         plan: "Phase 9. Report only runs we execute. Do not copy the eggplant table. Tool named as the public pi0 code.",
         changelog: "Not shipped.",
@@ -520,6 +566,7 @@ const BLOCKS: Block[] = [
       {
         sub: "F1 at 1 cm and Chamfer",
         status: "partial",
+        ticket: "SF-6 / KAN-6 Accepted (matcher past 8); SF-7 / KAN-7 Accepted (kitchen aggregator); Sec 4 score file still open",
         paper: "Section 4.1 equations (4) and (5), tau = 1 cm, Hungarian match, unmatched F1 = 0. The kitchen is MessyKitchens. The bin is GraspClutter6D hard/000091, 13 views, 20 YCB objects.",
         plan: "Functions are tested on synthetic clouds. DESIGN phase 1 says no GraspClutter6D and no MessyKitchens scores.",
         changelog: "An early bullet groups this with association as partial. The functions stay partial. No score file.",
@@ -529,6 +576,8 @@ const BLOCKS: Block[] = [
       {
         sub: "GraspClutter6D hard/000091",
         status: "missing",
+        ticket: "none in Cut 1",
+        ticketStatus: "Not started",
         paper: "Section 4.1 compares harnesses and SimFoundry on that bin. Their best F1 is 60.75%. SimFoundry in the paper is 6.9% F1 and 4.29 cm Chamfer. Figure 6 token stages are S0–S7.",
         plan: "Score only after meshes exist. Their 60.75% and 6.9% stay theirs. Figure 6's S0–S7 list is not a plan.",
         changelog: "Not scored.",
@@ -788,11 +837,13 @@ function BlockDetails() {
               </Text>
             ) : null}
             <Table
-              headers={
-                block.rows.some((row) => row.addressed)
+              headers={(() => {
+                const headers = block.rows.some((row) => row.addressed)
                   ? ["Sub-block", "Paper requires", "Plan and design", "Changelog", "What ran", "Specific miss", "This pass"]
-                  : ["Sub-block", "Paper requires", "Plan and design", "Changelog", "What ran", "Specific miss"]
-              }
+                  : ["Sub-block", "Paper requires", "Plan and design", "Changelog", "What ran", "Specific miss"];
+                if (block.rows.some((row) => row.ticket || row.ticketStatus)) headers.push("Ticket progress");
+                return headers;
+              })()}
               columnAlign={
                 block.rows.some((row) => row.addressed)
                   ? ["left", "left", "left", "left", "left", "left", "left"]
@@ -801,6 +852,9 @@ function BlockDetails() {
               rows={rows.map((row) => {
                 const cells = [row.sub, row.paper, row.plan, row.changelog, row.ran, row.miss];
                 if (block.rows.some((item) => item.addressed)) cells.push(row.addressed ?? "");
+                if (block.rows.some((item) => item.ticket || item.ticketStatus)) {
+                  cells.push([row.ticket, row.ticketStatus].filter(Boolean).join(" — ") || "");
+                }
                 return cells;
               })}
               rowTone={rows.map((row) => TONE[row.status])}
@@ -835,13 +889,13 @@ function MissedFruitsPass() {
         </Text>
       </Row>
       <Grid columns={4} gap={16}>
-        <Stat value="17 / 11 / 14" label="catalog.py on this read" tone="warning" />
+        <Stat value="17 / 12 / 13" label="catalog.py on this read" tone="warning" />
         <Stat value="partial" label="Articulate Anything now" tone="warning" />
         <Stat value="missing" label="CubePart, no part mesh" tone="danger" />
         <Stat value="0 / 6" label="Figure 5 harnesses called" tone="danger" />
       </Grid>
       <Callout tone="info" title="Counts match catalog.py">
-        catalog.py, the GAP_MATRIX.md header, and this canvas count 17 done, 11 partial, and 14 missing. Articulate Anything is partial: a PartNet URDF was accepted and the motion review failed.
+        catalog.py, the GAP_MATRIX.md header, and this canvas count 17 done, 12 partial, and 13 missing. Articulate Anything is partial: a PartNet URDF was accepted and the motion review failed. The LaMa row is partial: the CPU plane fit is tested, and the Fruits background has not been run.
       </Callout>
       <Text size="small" tone="secondary">
         Live page checked in the browser on 2 Nov 2026. Paper text is arXiv:2610.34745v1. Run status is sceneagent/catalog.py. A local file, runs/section34_pass/vlm_pass.json, is cited only where it is newer than that catalog row.
@@ -1004,7 +1058,7 @@ export default function SceneAgentPaperGaps() {
       <Stack gap={8}>
         <H1>SceneAgent paper versus the SimFoundry upgrade</H1>
         <Text>
-          The expansion plan covers sections 3.1–3.10 and section 4, but the paper’s agent is a coding harness on a model API, and this tree’s agent is two Gemini generateContent calls plus local Python. Fracture, 4D, hybrid scenes, Unreal, Meshy, and the policy loop are only named. catalog.py and GAP_MATRIX.md agree: 17 done, 11 partial, 14 missing. That “done” on the agent loop means the ledger files exist.
+          The expansion plan covers sections 3.1–3.10 and section 4, but the paper’s agent is a coding harness on a model API, and this tree’s agent is two Gemini generateContent calls plus local Python. Fracture, 4D, hybrid scenes, Unreal, Meshy, and the policy loop are only named. catalog.py and GAP_MATRIX.md agree: 17 done, 12 partial, 13 missing. That “done” on the agent loop means the ledger files exist.
         </Text>
         <Text size="small" tone="secondary">
           Catalog status is the catalog.py field. A done row is an artifact this tree produced, not a paper metric. The This pass column on sections 3.1–3.4 is separate: fixed means this code or a real run does that paper requirement. Quebec evidence is instance 55073623, RTX 4090. Paper: Hollis, Fan, and Yang, arXiv:2610.34745v1. Site text checked against the saved extract and the live page: section 3.3 does not name GroundingDINO or SAM 2; website step 02 says GroundingDINO + SAM. Quebec SSH on 2 Nov 2026 connected. The RTX 4090 was not idle: articulate.py held 834 MiB, so GroundingDINO, SAM 2, full-rate COLMAP, and a 30000-step splat were not started.
@@ -1018,8 +1072,12 @@ export default function SceneAgentPaperGaps() {
         <Stat value="42" label="Catalog rows total" />
       </Grid>
 
+      <Callout tone="info" title="Status as of 2026-11-06 2:20 AM ET (Cut 1 / Jira KAN)">
+        Catalog dots above are 17 done / 12 partial / 13 missing after the LaMa row moved to partial. Ticket progress is separate: Accepted only when Jira status is Done. Every ticket status here is as of 2026-11-06 2:20 AM ET, checked against Main_duplicate tip d99c3b6. SF-1, SF-2, SF-3, SF-6, SF-7, SF-11, SF-12 are Accepted. SF-4 part 1 is merged into Main_duplicate (PR #13 @ 2a9a05c). Comment 10209 counts SSH runs instead of the workflow. The v4 SSH run was rejected in 10215/10219: dc3 and dc4 met, dc1 and dc2 not met. The CUDA COLMAP install plan was approved in 10205. Not Accepted. SF-5 is in review: PR #10, head 37889c4 (replaced 53f87c6 after PM 10217 rulings). SF-8 was sent back (10195/10196); a fix is in progress for the Bugbot _warp_mask finding. SF-10 part 1 is merged (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending. Not Accepted. SF-14 QA FAIL 10194; it no longer gates SF-4. SF-9 part 1 is merged into Main_duplicate (PR #16 @ aec2c9f) with the Fruits GPU image still open. Not Accepted. Cut 2 epic KAN-15 is on hold. Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into Main_duplicate. Per-gap ticket / ticketStatus fields below record that mapping; they do not flip a catalog row to done.
+      </Callout>
+
       <Callout tone="warning" title="The gap matrix does not lag the catalog">
-        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). DESIGN.md’s opening counts match catalog.py: 17 done, 11 partial, 14 missing, 42 rows. Its block-map table is still an earlier snapshot and is not regenerated. EXPANSION_PLAN records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. Its section 3.3 table records the SAM masks and the SAM 3D mesh as produced. The Features row is partial: crop vectors exist and the per-Gaussian feature file is missing. skills.py lists SCENEAGENT-INSPECT-ISAAC as stage_opened. No coding model wrote a fix report.
+        GAP_MATRIX.md matches catalog.py on the ICP row (partial), the aligned USDA (done), and the mesh MJCF inside the MuJoCo row (done, 327 vertices, 650 faces). DESIGN.md’s opening counts match catalog.py: 17 done, 12 partial, 13 missing, 42 rows. Its block-map table is still an earlier snapshot and is not regenerated. EXPANSION_PLAN records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. Its section 3.3 table records the SAM masks and the SAM 3D mesh as produced. The Features row is partial: crop vectors exist and the per-Gaussian feature file is missing. skills.py lists SCENEAGENT-INSPECT-ISAAC as stage_opened. No coding model wrote a fix report.
       </Callout>
 
       <MissedFruitsPass />
@@ -1327,7 +1385,7 @@ export default function SceneAgentPaperGaps() {
 
       <H2>Catalog rows by paper block</H2>
       <Text size="small" tone="secondary">
-        Vertical axis: paper block. Horizontal axis: number of catalog.py rows. Stacked series are done, partial, and missing. Source: sceneagent/catalog.py status field, same 17 / 11 / 14 split as GAP_MATRIX.md. Quebec run 1 Nov 2026. The Sec 4 bar is the two section 4.1 rows plus the official-release row. Section 4.2 is the 3.6 bar, not a second count.
+        Vertical axis: paper block. Horizontal axis: number of catalog.py rows. Stacked series are done, partial, and missing. Source: sceneagent/catalog.py status field, same 17 / 12 / 13 split as GAP_MATRIX.md. Quebec run 1 Nov 2026. The Sec 4 bar is the two section 4.1 rows plus the official-release row. Section 4.2 is the 3.6 bar, not a second count.
       </Text>
       <BarChart
         horizontal
@@ -1414,14 +1472,14 @@ export default function SceneAgentPaperGaps() {
 
       <H2>Every paper block against the plan, the changelog, and the run</H2>
       <Text>
-        Each row is one catalog.py entry. The dot is that entry’s status. Open a block for the five-way comparison. Filter pills hide rows; they do not change the 17 / 11 / 14 counts.
+        Each row is one catalog.py entry. The dot is that entry’s status. Open a block for the five-way comparison. Filter pills hide rows; they do not change the 17 / 12 / 13 counts.
       </Text>
       <BlockDetails />
 
       <H2>Plan and design misses</H2>
       <Stack gap={10}>
         <Callout tone="warning" title="1. Opening counts match the catalog; two snapshots remain">
-          EXPANSION_PLAN section 3.3 records the splat, the SAM masks, and the SAM 3D mesh. The Features row is partial: OpenCLIP and DINOv2 crop vectors exist, and the per-Gaussian feature file is missing. Section 3.1 records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s opening counts match catalog.py (17 done, 11 partial, 14 missing, 42 rows). Its block-map table is still an earlier snapshot and is not regenerated. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
+          EXPANSION_PLAN section 3.3 records the splat, the SAM masks, and the SAM 3D mesh. The Features row is partial: OpenCLIP and DINOv2 crop vectors exist, and the per-Gaussian feature file is missing. Section 3.1 records that the alignment gate ran and that the Isaac inspector opened the Fruits USDA. The dependency order still says splatfacto is waiting on disk. DESIGN.md’s opening counts match catalog.py (17 done, 12 partial, 13 missing, 42 rows). Its block-map table is still an earlier snapshot and is not regenerated. The early CHANGELOG bullets that leave association partial, MuJoCo missing, and SAM 3D missing are superseded by later bullets; catalog.py is the status to use.
         </Callout>
         <Callout tone="warning" title="2. Two done-rules disagree on the splat">
           The splatfacto row is done at 2000 steps because a checkpoint and one render exist. The COLMAP row is done only when a full-rate sequence feeds splatfacto. Catalog says those cameras are not in the train, the runner is still 1 fps with a 16-frame cap, and nerfstudio’s default 30000 was not used. Marking one done and the other partial hides that the scene in section 3.2 was not built.
@@ -1444,7 +1502,7 @@ export default function SceneAgentPaperGaps() {
 
       <H2>Next phases from the run</H2>
       <Text>
-        These are the remaining phases that already have an input or a measured blocker. They are not DESIGN.md phases 1–9, several of which describe work that has since run. No unpublished threshold and no paper score is filled in here.
+        These are the remaining phases that already have an input or a measured blocker. They are not DESIGN.md phases 1–9, several of which describe work that has since run. No unpublished threshold and no paper score is filled in here. As of Nov 6, 2026 the top three still open against Cut 1 are: (1) Alignment gate → SF-8, (2) Full-rate COLMAP + color calibration → SF-5, (3) CubePart then Articulate → SF-10. LaMa → SF-9 is fourth. Cut 2 stays on hold.
       </Text>
       <Table
         headers={["Phase", "Input already on disk", "Output", "Blocker"]}

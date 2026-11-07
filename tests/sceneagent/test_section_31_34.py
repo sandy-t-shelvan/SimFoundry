@@ -387,6 +387,7 @@ def test_lama_refuses_without_forging_an_image(tmp_path):
         assert painted["emitted"] is True
         assert Path(painted["artifact"]).is_file()
         assert Path(painted["artifact"]).stat().st_size > 0
+        _assert_inpaint_is_not_the_input(hole, painted["artifact"])
     empty = complete_background(association=None, hole_image=None, out_path=tmp_path / "none.png", use_lama=True)
     assert empty["plane_completion"] == "missing"
     assert empty["emitted"] is False
@@ -408,6 +409,22 @@ def test_lama_refuses_without_forging_an_image(tmp_path):
     assert followed["forged"] is False
     if followed.get("status") == "weights_absent":
         assert not (tmp_path / "lama_out.png").exists()
+    else:
+        assert followed["status"] == "inpainted"
+        assert followed["emitted"] is True
+        assert Path(followed["artifact"]).is_file()
+        _assert_inpaint_is_not_the_input(placeholder["artifact"], followed["artifact"])
+
+
+def _assert_inpaint_is_not_the_input(source, produced_path):
+    """A real inpaint matches the request size and is not a copy of the input."""
+    import numpy as np
+    from PIL import Image
+
+    produced = np.asarray(Image.open(produced_path).convert("RGB"))
+    original = np.asarray(Image.open(source).convert("RGB"))
+    assert produced.shape == original.shape
+    assert not np.array_equal(produced, original)
 
 
 def test_material_properties_parse_without_calling(tmp_path):
