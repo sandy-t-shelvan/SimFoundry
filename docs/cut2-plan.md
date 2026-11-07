@@ -78,11 +78,11 @@ something usable on its own.
 | Remove the old QA/PM gate code and slim the GPU workflow | `gpu_smoke_trigger.py` gate lines, workflow lines 72–90, `docs/GPU_SMOKE_TRIGGERS.md` and their tests are gone; gpu-smoke runs on push with a path filter |
 | KAN-29: GPU query timeout is a resource exit (3), not an identity exit (2) | Test for the exit code |
 | Refresh stale facts in the plan of record (no status word changes; the canvas was refreshed with this plan) | Section 1's `caf16b7` branch and Windows paths; "CI installs only numpy and pytest" (now ruff, mypy, two pytest jobs, actionlint); LaMa row's instance 58301075 (now 59601312); "color calibration is still undone" (code exists in `ingest_assets`, the live run is what's pending) |
-| Close KAN-30 | Superseded: PR #26 made SSH direct-only |
+| Close KAN-30 | Done 2026-11-07: superseded, PR #26 made SSH direct-only |
 
 After this phase, PRs target `main` and `Main_duplicate` retires (agreed 2026-11-07).
 
-## Phase 1: benchmark and scorer (2 points, new ticket SF-28)
+## Phase 1: benchmark and scorer (2 points, SF-28 / KAN-31)
 
 | Item | Done when | GPU |
 |---|---|---|
@@ -120,7 +120,7 @@ grouping, which the canvas lists as not exercised).
 
 | Ticket | Done when | GPU |
 |---|---|---|
-| SF-29 (new): SAM 3D on 59601312 and a per-object wrapper | Install pinned and recorded; one `.glb` per grouped object; nothing else substituted | yes |
+| SF-29 (KAN-32): SAM 3D on 59601312 and a per-object wrapper | Install pinned and recorded; one `.glb` per grouped object; nothing else substituted | yes |
 | SF-8 part 2 (KAN-8): `similarity_icp` per object from its stored SAM 3D pose, with the silhouette filled | Residuals per object; this is the GPU package comment 10318 held until SF-15 and the SAM 3D ticket exist | yes |
 | Place and score: one similarity to the GT frame and `score_reconstruction` | The score file, named with point counts, alignment rule and matcher | yes |
 
@@ -165,12 +165,12 @@ GPU package, which can be pulled in if a phase finishes early. (SF-8 part 2 is i
 - **Shared GPU.** Interactive work on the box can make a gpu-smoke run refuse to start. The memory check
   refuses instead of crashing.
 
-## Decisions needed
+## Decisions (2026-11-07)
 
-1. **Retarget Cut 2** from "Fruits pipeline stages" to "first bin score", using the existing KAN-15
-   tickets plus SF-28 and SF-29. Recommended.
-2. **If COLMAP can't register the 13 photos:** use the dataset's camera poses and record that as a
-   deviation in the score file, or stop and report? Recommended: use them, and label the result.
-3. **Masks:** install SAM vit_h (matches the plan of record), or accept SAM 2 from Grounded-SAM2?
-   Recommended: SAM vit_h.
-4. **Jira:** may I create SF-28 and SF-29 under KAN-15 and close KAN-30?
+1. **Target: the bin score.** Recommended; awaiting Sandeep's explicit OK after the GraspClutter6D
+   explanation.
+2. **If COLMAP can't register the 13 photos:** use the dataset's camera poses, and record that as a
+   deviation in the score file. Decided.
+3. **Masks:** SAM vit_h (matches the plan of record; SAM 2 would leave the paper's mask row open).
+   Decided.
+4. **Jira:** done. SF-28 is KAN-31, SF-29 is KAN-32, and KAN-30 is closed as superseded by PR #26.
