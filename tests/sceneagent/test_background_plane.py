@@ -283,9 +283,25 @@ def test_ledger_records_plane_inlier_scale_and_color_method(tmp_path):
     assert second["color_method"] == "nearest_plane_sample"
 
 
-def test_absent_lama_weights_keep_method_plane_and_write_no_copy(tmp_path):
-    """Weights absent stays plane. A copied PNG at the inpaint path is a forge."""
-    assert infill._lama_backend()[0] is None
+def test_absent_lama_weights_keep_method_plane_and_write_no_copy(tmp_path, monkeypatch):
+    """Weights absent stays plane. A copied PNG at the inpaint path is a forge.
+
+    Absence is the import failing. It is not this machine happening to lack
+    simple-lama-inpainting. An installed package used to fail the check below
+    before the plane was even fitted.
+    """
+    import sys
+
+    real_import = builtins.__import__
+
+    def blocked(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.split(".", 1)[0] == "simple_lama_inpainting":
+            raise ImportError("blocked")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.delitem(sys.modules, "simple_lama_inpainting", raising=False)
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    assert infill._lama_backend() == (None, "LaMa weights are not installed")
     points, colors, hole, expected = _scene()
     destination = tmp_path / "inpaint.png"
     result = complete_background(
@@ -302,7 +318,9 @@ def test_absent_lama_weights_keep_method_plane_and_write_no_copy(tmp_path):
         "entries"
     ][0]
     assert result["method"] == "plane"
+    assert result["lama"] == "weights_absent"
     assert entry["method"] == "plane"
+    assert entry["outputs"]["lama"] == "weights_absent"
     assert entry["plane_inlier_scale"] == 0.05
     assert entry["color_method"] == "nearest_plane_sample"
     assert not destination.exists()
@@ -509,6 +527,10 @@ def test_requested_lama_imports_and_does_not_forge_when_weights_are_absent(
         assert Path(result["artifact"]).is_file()
         assert entry["method"] == "lama"
         assert entry["outputs"]["plane_artifact"] == str(plane_path)
+        produced = np.asarray(Image.open(result["artifact"]).convert("RGB"))
+        plane = np.asarray(Image.open(plane_path).convert("RGB"))
+        assert produced.shape == plane.shape
+        assert not np.array_equal(produced, plane)
     else:
         assert result["method"] == "plane"
         assert result["lama"] == "weights_absent"
@@ -517,3 +539,116 @@ def test_requested_lama_imports_and_does_not_forge_when_weights_are_absent(
         assert entry["method"] == "plane"
         assert entry["outputs"]["artifact"] == str(plane_path)
         assert entry["outputs"]["lama"] == "weights_absent"
+
+
+def test_lama_backend_follows_whether_the_package_imports():
+    """The reported backend is the import, with or without the package."""
+    try:
+        import simple_lama_inpainting  # noqa: F401
+    except ImportError:
+        installed = False
+    else:
+        installed = True
+    backend, why = infill._lama_backend()
+    if installed:
+        assert (backend, why) == ("simple_lama_inpainting", "")
+    else:
+        assert (backend, why) == (None, "LaMa weights are not installed")
+
+
+def test_lama_pad_is_only_the_sides_that_become_a_one_pixel_map():
+    """Sides fed at 8 are padded to 16. Sides already fed at 16 or more stay."""
+    tiny = Image.new("RGB", (4, 5), (9, 8, 7))
+    for y in range(5):
+        tiny.putpixel((3, y), (4, 5, 6))
+    mask = Image.new("L", (4, 5), 0)
+    mask.putpixel((1, 2), 255)
+    image, padded_mask, padded = infill._pad_to_lama_minimum(tiny, mask)
+    assert padded is True
+    assert image.size == (infill._LAMA_MIN_SIDE, infill._LAMA_MIN_SIDE) == (16, 16)
+    assert padded_mask.size == (16, 16)
+    assert image.getpixel((0, 0)) == (9, 8, 7)
+    assert image.getpixel((3, 0)) == (4, 5, 6)
+    assert image.getpixel((15, 0)) == (4, 5, 6)
+    assert padded_mask.getpixel((1, 2)) == 255
+    assert padded_mask.getpixel((4, 0)) == 0
+    assert padded_mask.getpixel((0, 5)) == 0
+
+    square8 = Image.new("RGB", (8, 8), (1, 1, 1))
+    _image8, _mask8, did8 = infill._pad_to_lama_minimum(
+        square8, Image.new("L", (8, 8), 0)
+    )
+    assert did8 is True
+    assert _image8.size == (16, 16)
+
+    square9 = Image.new("RGB", (9, 9), (1, 1, 1))
+    same, same_mask, did9 = infill._pad_to_lama_minimum(
+        square9, Image.new("L", (9, 9), 0)
+    )
+    assert did9 is False
+    assert same.size == (9, 9)
+    assert same_mask.size == (9, 9)
+
+    wide = Image.new("RGB", (4, 20), (2, 2, 2))
+    wide_image, wide_mask, did_wide = infill._pad_to_lama_minimum(
+        wide, Image.new("L", (4, 20), 0)
+    )
+    assert did_wide is True
+    assert wide_image.size == (16, 20)
+    assert wide_mask.size == (16, 20)
+    assert wide_mask.getpixel((4, 0)) == 0
+
+    already = Image.new("RGB", (16, 16), (0, 0, 0))
+    kept, kept_mask, did_kept = infill._pad_to_lama_minimum(
+        already, Image.new("L", (16, 16), 0)
+    )
+    assert did_kept is False
+    assert kept.size == (16, 16)
+    assert kept_mask.size == (16, 16)
+
+    larger = Image.new("RGB", (20, 22), (1, 1, 1))
+    kept_large, kept_large_mask, did_large = infill._pad_to_lama_minimum(
+        larger, Image.new("L", (20, 22), 0)
+    )
+    assert did_large is False
+    assert kept_large.size == (20, 22)
+    assert kept_large_mask.size == (20, 22)
+
+
+def test_run_lama_crops_its_own_pad_and_keeps_the_library_size(monkeypatch):
+    """The wrapper crops only the pad it added. A fake stands in for SimpleLama."""
+    import sys
+    import types
+
+    seen: list[tuple[int, int]] = []
+
+    class _FakeLama:
+        def __call__(self, image, mask):
+            seen.append(image.size)
+            width, height = image.size
+            fed = (
+                width if width % 8 == 0 else (width // 8 + 1) * 8,
+                height if height % 8 == 0 else (height // 8 + 1) * 8,
+            )
+            if fed == image.size:
+                return image.copy()
+            canvas = Image.new("RGB", fed, image.getpixel((0, 0)))
+            canvas.paste(image, (0, 0))
+            return canvas
+
+    module = types.ModuleType("simple_lama_inpainting")
+    module.SimpleLama = _FakeLama
+    monkeypatch.setitem(sys.modules, "simple_lama_inpainting", module)
+
+    tiny = Image.new("RGB", (4, 5), (9, 8, 7))
+    tiny_mask = Image.new("L", (4, 5), 0)
+    tiny_mask.putpixel((1, 1), 255)
+    cropped = infill._run_lama(tiny, tiny_mask)
+    assert seen[-1] == (16, 16)
+    assert cropped.size == (4, 5)
+    assert cropped.getpixel((0, 0)) == (9, 8, 7)
+
+    wide = Image.new("RGB", (20, 22), (3, 2, 1))
+    kept = infill._run_lama(wide, Image.new("L", (20, 22), 0))
+    assert seen[-1] == (20, 22)
+    assert kept.size == (24, 24)
