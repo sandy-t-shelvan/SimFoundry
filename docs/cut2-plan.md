@@ -154,6 +154,15 @@ orientation; SF-25 sisters; SF-26 scripted expert; pi0.5 LoRA; 4D (section 3.6);
 Unreal; hybrid scenes; CubePart and Articulate Anything (canvas phase 3, SF-10); the SF-9 background-plane
 GPU package, which can be pulled in if a phase finishes early. (SF-8 part 2 is in phase 4.)
 
+## Other example videos
+
+`docs/assets/example_videos/` holds five captures besides Fruits, all 1920×1080: `Mailbox.mp4`
+(19.9 s, 60 fps; a door to articulate), `PutCupInBowl.mp4` (15.3 s), `PutMarkerInCup.mp4` (14.9 s),
+`ThrowAwayTrash.mp4` (17.9 s, 60 fps) and `ThrowAwayTrashCousin.mp4` (31.2 s). None has ground truth, so
+none can give a section 4 score. Each Cut 2 stage (masks, grouping, meshes) can also run on them with the
+300-frame rule. They are the inputs for Cut 3: Mailbox for articulation (SF-10), and the cup, marker and
+trash videos for pick-and-place (SF-26, the scripted expert, and the policy work).
+
 ## Risks
 
 - **13 photos.** COLMAP and splatfacto may do poorly on sparse views. Mitigation: exhaustive matching,
