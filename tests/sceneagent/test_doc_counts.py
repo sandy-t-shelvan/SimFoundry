@@ -94,33 +94,11 @@ def test_expansion_plan_drops_the_named_stale_sentences():
     assert "All missing" not in section
 
 
-def _sceneagent_ci_pins():
-    """Package pins installed by sceneagent CI, ignoring comments."""
-    text = (ROOT / "requirements-sceneagent-ci.txt").read_text(encoding="utf-8")
-    pins = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            pins.append(stripped)
-    return pins
-
-
-def test_sdlc_dependency_list_matches_sceneagent_ci():
-    pins = _sceneagent_ci_pins()
-    assert [pin.split("==", 1)[0] for pin in pins] == [
-        "ruff",
-        "mypy",
-        "numpy",
-        "pytest",
-        "trimesh",
-        "pillow",
-        "py7zr",
-        "scipy",
-    ]
+def test_sceneagent_ci_installs_its_requirements_file():
+    # The pins live only in requirements-sceneagent-ci.txt; docs point there.
     workflow = (ROOT / ".github" / "workflows" / "sceneagent-ci.yml").read_text(encoding="utf-8")
     assert workflow.count("python -m pip install -r requirements-sceneagent-ci.txt") == 3
     assert "pip install numpy pytest trimesh pillow" not in workflow
     sdlc = (ROOT / "docs" / "SDLC.md").read_text(encoding="utf-8")
-    for pin in pins:
-        assert pin in sdlc
+    assert "requirements-sceneagent-ci.txt" in sdlc
     assert "numpy` and `pytest` only" not in sdlc

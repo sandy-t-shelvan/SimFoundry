@@ -11,7 +11,6 @@ from sceneagent.gpu_smoke_trigger import (
     LABEL_ACTORS,
     REQUEST_FIELDS,
     REQUEST_FILE,
-    REQUIRE_QA_PM_PASS,
     check_push_diff,
     classify_push_diff,
     _job_if,
@@ -62,7 +61,6 @@ def _label(**overrides: object) -> tuple[bool, str]:
         "head_repo": THIS_REPO,
         "repository": THIS_REPO,
         "actor": "cursor[bot]",
-        "pr_labels": ["run-gpu-smoke"],
     }
     payload.update(overrides)
     return label_trigger_allowed(**payload)  # type: ignore[arg-type]
@@ -92,19 +90,6 @@ def test_label_requires_the_exact_name_and_an_allowlisted_actor():
     assert _label(event_name="pull_request")[0] is False
     allowed, reason = _label()
     assert reason == "gpu-smoke actor=cursor[bot]"
-
-
-def test_qa_pm_gate_defaults_off_and_can_be_required():
-    assert REQUIRE_QA_PM_PASS is False
-    assert _label(pr_labels=["run-gpu-smoke"])[0] is True
-    refused, reason = _label(pr_labels=["run-gpu-smoke"], require_qa_pm_pass=True)
-    assert refused is False
-    assert "QA and PM PASS" in reason
-    allowed, _reason = _label(
-        pr_labels=["run-gpu-smoke", "qa-pass", "pm-pass"],
-        require_qa_pm_pass=True,
-    )
-    assert allowed is True
 
 
 def test_near_miss_request_paths_are_refused():
@@ -401,7 +386,7 @@ def test_label_cleanup_does_not_run_for_a_different_label():
     assert not label_cleanup_runs(
         expression,
         smoke_result="cancelled",
-        event_label="qa-pass",
+        event_label="some-other-label",
     )
 
 
