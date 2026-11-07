@@ -728,11 +728,14 @@ def rsync_invocations(
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
     scene = checkout / "sceneagent"
     excludes = _rsync_exclude_args()
+    # --mkpath: a fresh box has no /workspace/sf4-smoke, and rsync otherwise
+    # creates only the last path component (run4, 2026-11-07).
     return [
         (
             [
                 "rsync",
                 "-a",
+                "--mkpath",
                 *excludes,
                 "-e",
                 ssh_e,
@@ -742,7 +745,17 @@ def rsync_invocations(
             checkout,
         ),
         (
-            ["rsync", "-a", "-R", *excludes, "-e", ssh_e, FRUITS_RELATIVE, remote],
+            [
+                "rsync",
+                "-a",
+                "-R",
+                "--mkpath",
+                *excludes,
+                "-e",
+                ssh_e,
+                FRUITS_RELATIVE,
+                remote,
+            ],
             checkout,
         ),
     ]
