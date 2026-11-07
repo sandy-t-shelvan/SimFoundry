@@ -81,7 +81,8 @@ FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
 BOOT_TIMEOUT_S = 600.0
-REMOTE_TIMEOUT_S = 3300.0
+# Room for run4.STEP_TIMEOUT_S["mapper"] (5400 s) inside the 120 min job.
+REMOTE_TIMEOUT_S = 6600.0
 POLL_SECONDS = 15.0
 # Run 42162484354 was refused ~0.7s after attach. Vast's banner says the key
 # can take a few seconds. The cap and the deadline both stop the loop.

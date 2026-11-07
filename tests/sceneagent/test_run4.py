@@ -21,7 +21,13 @@ from sceneagent.gpu_headroom import (
     require_gpu_headroom,
 )
 from sceneagent.gpu_smoke_trigger import workflow_safety_findings
-from sceneagent.run4 import main, run_colmap_on_images, run_run4
+from sceneagent.run4 import (
+    STEP_TIMEOUT_S,
+    main,
+    run_colmap_on_images,
+    run_colmap_step,
+    run_run4,
+)
 from sceneagent.run4_report import registered_image_names, unregistered_frame_report
 from sceneagent.run4_sampling import (
     BIN_COUNT,
@@ -311,6 +317,58 @@ def test_sequential_matcher_is_unchanged_and_points_do_not_gate(tmp_path):
     assert result["gate_document"]["quality_bar"]["pass"] is True
     assert "0015.jpg" not in result["registered_names"]["0"]
     assert len(result["registered_names"]["0"]) == 14
+
+
+def test_mapper_gets_the_long_timeout_and_other_steps_keep_900(monkeypatch):
+    # Run 42420122702: the mapper on 300 frames passed 900 s; the other
+    # steps had finished in about 4 minutes.
+    monkeypatch.setattr("sceneagent.run4.stage_environment", dict)
+    seen = {}
+
+    class Done:
+        args = []
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def runner(argv, **kwargs):
+        seen[argv[1]] = kwargs["timeout"]
+        return Done()
+
+    for step in ("-h", "feature_extractor", "sequential_matcher", "mapper"):
+        run_colmap_step(["colmap", step], runner=runner)
+    assert seen["mapper"] == STEP_TIMEOUT_S["mapper"] == 5400
+    assert seen["feature_extractor"] == seen["sequential_matcher"] == 900
+    assert seen["-h"] == 900
+
+
+def test_a_step_timeout_is_a_recorded_failure_not_a_crash(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr("sceneagent.run4.stage_environment", dict)
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    for index in range(1, 4):
+        (image_dir / f"{index:04d}.jpg").write_bytes(b"")
+
+    def runner(argv, **kwargs):
+        if argv[1] == "-h":
+            return subprocess.CompletedProcess(argv, 0, "COLMAP 3.11.1", "")
+        if argv[1] == "mapper":
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"], stderr=b"partial")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    result = run_colmap_on_images(
+        image_dir,
+        tmp_path / "work",
+        gpu_check=lambda _stage: {"free_mib": 6144, "retries": 0},
+        command_runner=lambda argv: run_colmap_step(argv, runner=runner),
+    )
+    assert result["ok"] is False
+    assert result["failed_step"] == "mapper"
+    assert result["returncode"] == 124
+    assert "partial" in result["stderr"]
+    assert "mapper timed out after 5400 s" in result["stderr"]
 
 
 def test_nonfinite_observation_still_fails_the_largest_model(tmp_path):
