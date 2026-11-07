@@ -406,12 +406,19 @@ def run_poses(
     )
     frames = sorted(path.name for path in images.glob("*.jpg"))
     if extract["returncode"] != 0 or not frames:
+        if extract.get("timed_out"):
+            reason = "ffmpeg timed out"
+        elif extract.get("returncode") not in (0, None):
+            reason = "ffmpeg failed"
+        else:
+            reason = "ffmpeg wrote no frames"
         return _result(
             ran=True,
             ok=False,
             failed_step="ffmpeg",
             frames=frames,
             steps={"ffmpeg": extract},
+            reason=reason,
         )
     if after_extract is not None:
         rejection = after_extract(list(frames))

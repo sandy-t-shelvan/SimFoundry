@@ -933,6 +933,43 @@ def test_timeout_reason_is_written_on_the_ledger(tmp_path, monkeypatch):
     assert ledger["exit_statuses"]["mapper_timed_out"] is True
 
 
+def test_ffmpeg_failure_is_not_recorded_as_a_frame_count(tmp_path, monkeypatch):
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+    probed = _ffprobe(video)
+    command = ["ffmpeg", "-fps_mode", "passthrough", str(video)]
+
+    def fake_run_poses(*_args, **_kwargs):
+        return {
+            "ran": True,
+            "ok": False,
+            "failed_step": "ffmpeg",
+            "reason": "ffmpeg timed out",
+            "color_calibrate": True,
+            "frames": ["0001.jpg", "0002.jpg"],
+            "steps": {
+                "ffmpeg": {
+                    "command": command,
+                    "returncode": None,
+                    "timed_out": True,
+                }
+            },
+        }
+
+    monkeypatch.setattr("sceneagent.sf5_colmap_evidence.run_poses", fake_run_poses)
+    output = tmp_path / "ffmpeg-timeout" / "run"
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
+    assert code == 2
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["failed_step"] == "ffmpeg"
+    assert ledger["reason"] == "ffmpeg timed out"
+    assert ledger["exit_statuses"]["ffmpeg"] is None
+    assert ledger["exit_statuses"]["ffmpeg_timed_out"] is True
+    assert ledger["extracted_frames"] == 2
+    assert probed["frames"] != 2
+
+
 def test_frame_count_mismatch_stops_before_colmap(tmp_path, monkeypatch):
     video, digest = _synthetic_video(tmp_path)
     _install_stub(tmp_path / "bin")

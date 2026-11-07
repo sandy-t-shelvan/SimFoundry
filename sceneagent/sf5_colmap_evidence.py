@@ -881,6 +881,17 @@ def execute(request: dict[str, Any]) -> int:
         document["ffmpeg_command"] = [str(part) for part in command]
         frames = poses.get("frames") or []
         document["extracted_frames"] = len(frames)
+        ffmpeg_step = (poses.get("steps") or {}).get("ffmpeg") or {}
+        extract_failed = poses.get("failed_step") == "ffmpeg" or bool(
+            ffmpeg_step.get("timed_out")
+        )
+        if extract_failed:
+            document["failed_step"] = "ffmpeg"
+            if ffmpeg_step.get("timed_out"):
+                document["reason"] = poses.get("reason") or "ffmpeg timed out"
+            else:
+                document["reason"] = poses.get("reason") or "ffmpeg failed"
+            return _finish(prefix, kind="sampling", document=document)
         if poses.get("failed_step") == "frame_count" or len(frames) != probed["frames"]:
             document["failed_step"] = "frame_count"
             document["reason"] = (
