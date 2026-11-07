@@ -56,6 +56,12 @@ from sceneagent.simfoundry_python import (
 from sceneagent.video import VIDEO_SOURCE, inspect_video, video_plan_steps
 
 MATCHER = "sequential_matcher"
+# The mapper on 300 frames ran past 900 s on instance 59601312 (Actions run
+# 42420122702); extraction and matching had finished in about 4 minutes.
+# 5400 s fits inside vast_smoke.REMOTE_TIMEOUT_S and the workflow's 120 min.
+STEP_TIMEOUT_S = {"mapper": 5400}
+DEFAULT_STEP_TIMEOUT_S = 900
+TIMEOUT_RETURNCODE = 124
 _COMMIT_RE_TEXT = r"[0-9a-f]{40}"
 
 
@@ -452,22 +458,48 @@ def _default_colmap(
     def gpu_check(stage: str) -> dict[str, Any]:
         return require_gpu_headroom(stage)
 
-    def command_runner(argv: list[str]) -> dict[str, Any]:
-        import subprocess
+    return run_colmap_on_images(
+        image_dir, image_dir.parent, gpu_check=gpu_check, command_runner=run_colmap_step
+    )
 
-        completed = subprocess.run(
+
+def run_colmap_step(
+    argv: list[str], *, runner: Callable[..., Any] | None = None
+) -> dict[str, Any]:
+    """Run one COLMAP command. A timeout is a failed step, not a crash.
+
+    Without this, a timeout raised past ``run_run4`` and no ledger was
+    written, so the run reported a missing ledger instead of the timeout.
+    """
+    import subprocess
+
+    run = runner or subprocess.run
+    step = argv[1] if len(argv) > 1 else ""
+    timeout = STEP_TIMEOUT_S.get(step, DEFAULT_STEP_TIMEOUT_S)
+    try:
+        completed = run(
             argv,
             check=False,
             capture_output=True,
             text=True,
-            timeout=900,
+            timeout=timeout,
             env=stage_environment(),
         )
-        return _run_result(completed)
+    except subprocess.TimeoutExpired as exc:
+        stderr = _as_text(exc.stderr)
+        return {
+            "command": argv,
+            "returncode": TIMEOUT_RETURNCODE,
+            "stdout": _as_text(exc.stdout),
+            "stderr": f"{stderr.rstrip()}\n{step} timed out after {timeout} s".lstrip(),
+        }
+    return _run_result(completed)
 
-    return run_colmap_on_images(
-        image_dir, image_dir.parent, gpu_check=gpu_check, command_runner=command_runner
-    )
+
+def _as_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 
 def _run_result(completed: Any) -> dict[str, Any]:
