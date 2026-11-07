@@ -70,9 +70,7 @@ jobs:
   fruits_gpu_smoke:
     name: fruits-gpu-smoke
     needs: request_file_guard
-    # LABEL_SMOKE_GATE. REQUIRE_QA_PM_PASS is the false in the !false below.
-    # Flip that token to !true to also require the qa-pass and pm-pass labels.
-    # Left off: a same-repo run-gpu-smoke label from an allowlisted actor is enough.
+    # A same-repo run-gpu-smoke label from an allowlisted actor is enough.
     if: >-
       always() &&
       !cancelled() &&
@@ -87,8 +85,7 @@ jobs:
           github.event.label.name == 'run-gpu-smoke' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
           (github.event.pull_request.base.ref == 'Main_duplicate' || github.event.pull_request.base.ref == 'main') &&
-          (github.actor == 'sandy-t-shelvan' || github.actor == 'cursor[bot]') &&
-          (!false || (contains(github.event.pull_request.labels.*.name, 'qa-pass') && contains(github.event.pull_request.labels.*.name, 'pm-pass')))
+          (github.actor == 'sandy-t-shelvan' || github.actor == 'cursor[bot]')
         )
       )
     runs-on: ubuntu-latest

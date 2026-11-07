@@ -11,10 +11,6 @@ stops that instance.
 The label path is ``pull_request_target``. GitHub loads that workflow from
 the repository default branch. The request-file path is a plain ``push`` to
 ``Main_duplicate``, so it uses the workflow on that branch.
-
-``REQUIRE_QA_PM_PASS`` mirrors the workflow's ``LABEL_SMOKE_GATE``. It is
-false: ``qa-pass`` and ``pm-pass`` are not required. The workflow writes the
-same default as ``!false`` so one token can turn the requirement on.
 """
 
 from __future__ import annotations
@@ -28,9 +24,6 @@ import subprocess
 RUN_GPU_SMOKE_LABEL = "run-gpu-smoke"
 REQUEST_FILE = "ci/gpu-run-request.json"
 LABEL_ACTORS = ("sandy-t-shelvan", "cursor[bot]")
-REQUIRE_QA_PM_PASS = False
-QA_PASS_LABEL = "qa-pass"
-PM_PASS_LABEL = "pm-pass"
 REQUEST_FIELDS = ("ticket_id", "reason")
 _ZERO_SHA = "0" * 40
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -61,9 +54,7 @@ def label_trigger_allowed(
     head_repo: str,
     repository: str,
     actor: str,
-    pr_labels: list[str] | None = None,
     base_ref: str = "Main_duplicate",
-    require_qa_pm_pass: bool = REQUIRE_QA_PM_PASS,
     allowed_actors: tuple[str, ...] = LABEL_ACTORS,
 ) -> tuple[bool, str]:
     """Return whether a label event may start a run, and the log line.
@@ -74,7 +65,6 @@ def label_trigger_allowed(
     ``Main_duplicate``. Any other base would run unreviewed Python with
     the Vast secret.
     """
-    labels = list(pr_labels or [])
     if event_name != "pull_request_target" or action != "labeled":
         return False, "gpu-smoke label refused: not a pull_request_target labeled event"
     if label != RUN_GPU_SMOKE_LABEL:
@@ -85,8 +75,6 @@ def label_trigger_allowed(
         return False, "gpu-smoke label refused: base is not an integration branch"
     if actor not in allowed_actors:
         return False, "gpu-smoke label refused: actor is not allowlisted"
-    if require_qa_pm_pass and not {QA_PASS_LABEL, PM_PASS_LABEL} <= set(labels):
-        return False, "gpu-smoke label refused: QA and PM PASS labels are required"
     return True, f"gpu-smoke actor={actor}"
 
 
@@ -629,8 +617,6 @@ def workflow_safety_findings(text: str) -> list[str]:
         )
     if "--instance-id 59601312" not in text:
         findings.append("instance id must be the literal 59601312")
-    if "LABEL_SMOKE_GATE" not in text:
-        findings.append("LABEL_SMOKE_GATE comment is missing")
     actors = workflow_label_actors(text)
     if tuple(actors) != LABEL_ACTORS:
         findings.append(
@@ -647,12 +633,6 @@ def workflow_safety_findings(text: str) -> list[str]:
         )
         return findings
     smoke_if = _job_if(smoke)
-    if "!false" not in smoke_if:
-        findings.append(
-            "LABEL_SMOKE_GATE must default to !false so QA and PM PASS stay off"
-        )
-    if "!true" in smoke_if:
-        findings.append("LABEL_SMOKE_GATE expression must not require QA and PM PASS")
     for needle in (
         "github.event_name == 'pull_request_target'",
         "github.event.label.name == 'run-gpu-smoke'",
