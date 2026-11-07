@@ -1,15 +1,16 @@
 # GPU smoke for SceneAgent on Fruits.mp4.
-# The instance id is the literal 58301075. No input, label, or request file
-# can change it. The job never creates, rents, resizes, or destroys an instance.
+# The instance id is the literal 59601312. No input, label, or request file
+# can change it. The job never creates, rents, resizes, destroys, starts,
+# or stops an instance. A stopped instance is refused. Starting or stopping
+# it takes two separate user yeses outside this workflow.
 #
 # pull_request_target loads this file from the repository default branch
 # (main). A label on a pull request that targets Main_duplicate does not run
 # until main contains this file. The request-file push is a plain push, so it
 # uses the workflow committed on Main_duplicate. Once this file is on
 # Main_duplicate, that push starts a workflow run with no workflow_dispatch
-# and no click from Sandeep. It does not start a stopped instance. Only a
-# manual workflow_dispatch may start 58301075. A label and a request-file
-# trigger refuse before any start PUT.
+# and no click from Sandeep. workflow_dispatch does not start or stop the
+# instance either. No trigger sends a state PUT.
 name: sceneagent-gpu-smoke
 
 on:
@@ -93,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      group: gpu-smoke-58301075
+      group: gpu-smoke-59601312
       cancel-in-progress: false
     permissions:
       contents: read
@@ -141,18 +142,35 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Record checked-out payload commit
+        working-directory: payload
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD)
+          printf '%s\n' "$sha" | grep -Eq '^[0-9a-f]{40}$'
+          echo "CHECKED_OUT_SHA=$sha" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/sf4-artifacts"
+          printf '%s\n' "$sha" > "$GITHUB_WORKSPACE/sf4-artifacts/checked_out_commit.txt"
+
       - name: Vast GPU smoke on Fruits.mp4
         working-directory: orchestrator
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          VAST_SSH_PRIVATE_KEY: ${{ secrets.VAST_SSH_PRIVATE_KEY }}
           SMOKE_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event_name == 'pull_request_target' && 'label' || github.event_name == 'push' && 'request-file' || 'invalid' }}
           SMOKE_ACTOR: ${{ github.actor }}
-          SMOKE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          CHECKED_OUT_SHA: ${{ env.CHECKED_OUT_SHA }}
         run: |
+          set -euo pipefail
           : "${SMOKE_TRIGGER:?}"
           : "${SMOKE_ACTOR:?}"
-          : "${SMOKE_SHA:?}"
-          python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$SMOKE_SHA"
+          : "${CHECKED_OUT_SHA:?}"
+          measured=$(cat "$GITHUB_WORKSPACE/sf4-artifacts/checked_out_commit.txt")
+          if [ "$measured" != "$CHECKED_OUT_SHA" ]; then
+            echo "checked-out commit evidence does not match git rev-parse" >&2
+            exit 1
+          fi
+          python -m sceneagent.vast_smoke --instance-id 59601312 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$CHECKED_OUT_SHA" --pipeline run4
 
       - name: Upload plan, ledger, and manifest
         if: success()
@@ -165,6 +183,8 @@ jobs:
             sf4-artifacts/plan.json
             sf4-artifacts/ledger.json
             sf4-artifacts/manifest.json
+            sf4-artifacts/run4_evidence.json
+            sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.
       # A scan failure leaves the directory empty, and if-no-files-found

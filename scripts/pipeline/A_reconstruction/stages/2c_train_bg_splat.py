@@ -6,11 +6,14 @@ Run Nerfstudio video pipeline and train splatfacto-big (Gaussian Splatting).
 
 Step 1: ns-process-data video --data <video> --output-dir <processed_dir>
 Step 2: ns-train splatfacto-big (with TORCH_DYNAMO_DISABLE=1) using processed data.
-Step 3: ns-export gaussian-splat to PLY (export dir under s2c_gs).
+Step 3: ns-eval on that run's held-out eval split. Writes s2c_gs/ns_eval.json
+        (PSNR, SSIM, LPIPS). Report only: a failure does not change the verdict.
+Step 4: ns-export gaussian-splat to PLY (export dir under s2c_gs).
 
 All intermediate outputs live under Data/{scene_name}/s2c_gs/:
   - s2c_gs/processed/   <- ns-process-data output
   - s2c_gs/outputs/     <- ns-train output (created in base dir so cwd=s2c_gs)
+  - s2c_gs/ns_eval.json <- held-out PSNR/SSIM/LPIPS (report only, not a gate)
   - s2c_gs/export/      <- exported Gaussian splat PLY
 
 transforms.json only lists frames that COLMAP successfully registered. Use
@@ -35,6 +38,10 @@ logger = logging.getLogger(__name__)
 # without importing stage_utils and its image-processing dependencies into the
 # intentionally minimal Nerfstudio environment.
 from simfoundry import CFG_DIR
+from simfoundry.pipeline.ns_eval_report import (
+    discard_stale_ns_eval_report,
+    write_heldout_ns_eval_report,
+)
 
 os.chdir(CFG_DIR)
 
@@ -252,6 +259,10 @@ def main(cfg):
             logger.info("Added system include paths to CPPFLAGS, CFLAGS, CXXFLAGS, CUDAFLAGS")
     
     logger.info("Running ns-train %s (max %s iters) from %s", s2c.method, s2c.max_num_iterations, base_dir)
+    # Drop the previous report before training replaces the checkpoint. A train
+    # that never reaches ns-eval must not leave the last success in place.
+    eval_report = base_dir / "ns_eval.json"
+    discard_stale_ns_eval_report(eval_report)
     subprocess.run(
         [
             "ns-train",
@@ -267,12 +278,25 @@ def main(cfg):
     outputs_dir = base_dir / "outputs"
     logger.info("Training done. Outputs under %s", outputs_dir)
 
-    # Step 3: export Gaussian splat to PLY (latest run)
-    export_dir = base_dir / getattr(s2c, "export_dirname", "export")
     configs = sorted(outputs_dir.glob("**/config.yml"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not configs:
+    load_config = configs[0] if configs else None
+    # ns-eval scores the held-out eval split of this config. The call records
+    # its own failure and must not decide whether export below succeeds.
+    try:
+        write_heldout_ns_eval_report(
+            load_config=load_config,
+            report_path=eval_report,
+            argv_prefix=[],
+            cwd=base_dir,
+            env=env,
+        )
+    except Exception:
+        logger.exception("Held-out ns-eval report failed; stage verdict unchanged")
+    if load_config is None:
         raise FileNotFoundError(f"No training config found under {outputs_dir}")
-    load_config = configs[0]
+
+    # Step 4: export Gaussian splat to PLY (latest run)
+    export_dir = base_dir / getattr(s2c, "export_dirname", "export")
     export_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Exporting GS from %s -> %s", load_config, export_dir)
     subprocess.run(
