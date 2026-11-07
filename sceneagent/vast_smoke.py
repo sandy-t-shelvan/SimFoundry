@@ -3,12 +3,13 @@
 
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
-The only instance this module will touch is ``58301075`` in Texas. It may
-show that instance. Only an explicit ``workflow_dispatch`` may start it when
-it is stopped. A label or a request-file trigger refuses before any start
-PUT, and an unknown state refuses too. When this process was the one that
-started it, it stops the instance again. It attaches an ephemeral SSH public
-key so the runner can copy the checkout and bring the run files back.
+The only instance this module will touch is ``59601312``. It may show that
+instance when it is already running. It does not start or stop an instance.
+``workflow_dispatch``, a label, and a request-file trigger all refuse a
+stopped, starting, or unknown instance, and they send no state PUT. Starting
+or stopping the instance takes two separate user yeses outside this workflow.
+It attaches an ephemeral SSH public key so the runner can copy the checkout
+and bring the run files back.
 
 It does not create, rent, resize, or destroy an instance, and the remote
 command is only the SceneAgent video entry point. That path does not call
@@ -25,7 +26,7 @@ response does not include a key id. After attach, SSH is probed with a fixed
 attempt cap and timeout. A missing attach id is logged. The key is still
 detached when the listing has exactly one match.
 Keys already on the instance are read with one pinned GET,
-``/api/v0/instances/58301075/ssh/``, before attach. The manifest keeps the
+``/api/v0/instances/59601312/ssh/``, before attach. The manifest keeps the
 key count and a locally computed ``SHA256:`` fingerprint for each key. It
 also records the fingerprint of the ephemeral key this run generated, and
 whether that fingerprint is in a second GET of the same URL after attach.
@@ -51,7 +52,6 @@ import json
 import os
 import re
 import shlex
-import signal
 import subprocess
 import sys
 import tarfile
@@ -65,7 +65,10 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 API_ORIGIN = "https://console.vast.ai"
-ALLOWED_INSTANCE_ID = 58301075
+ALLOWED_INSTANCE_ID = 59601312
+# The remote script uses this file and no other interpreter. A missing or
+# non-executable path exits 127. PATH is not a fallback.
+REMOTE_PYTHON = "/root/miniforge3/envs/simfoundry/bin/python3"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
@@ -118,7 +121,7 @@ RequestFn = Callable[..., tuple[int, dict[str, Any]]]
 
 
 class InstanceNotApproved(ValueError):
-    """The call is outside the SF-4 allowlist for instance 58301075."""
+    """The call is outside the SF-4 allowlist for instance 59601312."""
 
 
 class SmokeError(RuntimeError):
@@ -126,7 +129,7 @@ class SmokeError(RuntimeError):
 
 
 def parse_instance_id(value: object) -> int:
-    """Return 58301075. Any other id is refused before a network call."""
+    """Return 59601312. Any other id, including 58301075, is refused."""
     parsed: int | None
     if isinstance(value, bool):
         parsed = None
@@ -257,7 +260,7 @@ def unwrap_instance(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the instance when it is 58301075 in Texas."""
+    """Return the instance when it is 59601312 in Texas."""
     row = unwrap_instance(payload)
     if row is None:
         raise InstanceNotApproved(
@@ -291,12 +294,12 @@ def public_instance_view(record: dict[str, Any]) -> dict[str, Any]:
 def classify_status(record: dict[str, Any]) -> str:
     """Map a show-instance row to running, starting, stopped, or unknown.
 
-    ``stopped`` and ``exited`` are the stopped kind. Only an explicit
-    ``workflow_dispatch`` may start them. A label or a request-file trigger
-    refuses before any start PUT. ``exited`` is what the Vast listing showed
-    for this machine when it was not running. ``offline`` and ``unknown``
-    are not started: the API docs say those states do not become
-    ``running``, and this module does not destroy the instance to replace it.
+    ``stopped`` and ``exited`` are the stopped kind. This module does not
+    start them, and ``workflow_dispatch`` does not either. ``exited`` is what
+    the Vast listing showed for the previous machine when it was not running.
+    ``offline`` and ``unknown`` are not started: the API docs say those
+    states do not become ``running``, and this module does not destroy the
+    instance to replace it.
     """
     actual = _status_text(record.get("actual_status"))
     intended = _status_text(record.get("intended_status") or record.get("cur_state"))
@@ -348,7 +351,11 @@ def _require_ssh_key_id(value: object) -> str:
 
 
 def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -> None:
-    """Reject every Vast call except show, start, stop, the pinned ssh list, attach, and detach."""
+    """Reject every Vast call except show, the pinned ssh list, attach, and detach.
+
+    A PUT that sets ``state`` to ``running`` or ``stopped`` is refused.
+    Starting and stopping the instance are outside this module.
+    """
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or parsed.netloc != "console.vast.ai":
         raise InstanceNotApproved("refusing a Vast URL outside https://console.vast.ai")
@@ -366,24 +373,15 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
     method = method.upper()
     if method == "GET" and not is_ssh and query == [("owner", "me")] and body is None:
         return
-    # One added read: GET /api/v0/instances/58301075/ssh/ and nothing else.
+    # One added read: GET /api/v0/instances/59601312/ssh/ and nothing else.
     # The id is the constant, not a caller-supplied template. No query, no
-    # body, no sub-path, and no other method on this path.
+    # body, no sub-path, and no other method on this path. No state PUT.
     if (
         method == "GET"
         and parsed.path == f"/api/v0/instances/{ALLOWED_INSTANCE_ID}/ssh/"
         and key_id is None
         and not query
         and body is None
-    ):
-        return
-    if (
-        method == "PUT"
-        and not is_ssh
-        and not query
-        and isinstance(body, dict)
-        and set(body) == {"state"}
-        and body["state"] in {"running", "stopped"}
     ):
         return
     if (
@@ -413,7 +411,7 @@ def arm_own_key_delete(key_id: str | None) -> None:
 def guard_own_key_delete(method: str, url: str) -> None:
     """Request-layer gate. DELETE is sent only for this run's single matched id.
 
-    The instance must be 58301075. Any other id, instance, or a DELETE while
+    The instance must be 59601312. Any other id, instance, or a DELETE while
     nothing is armed is refused before the transport runs. ``DETACH_LEFTOVER_KEYS``
     does not widen this. Trailing-whitespace-normalized byte match is what
     arms the id, not the attach response.
@@ -447,10 +445,6 @@ def endpoint_for(
     base = f"{API_ORIGIN}/api/v0/instances/{approved}/"
     if kind == "show":
         method, url, body = "GET", base + "?owner=me", None
-    elif kind == "start":
-        method, url, body = "PUT", base, {"state": "running"}
-    elif kind == "stop":
-        method, url, body = "PUT", base, {"state": "stopped"}
     elif kind == "show_ssh_keys":
         method, url, body = "GET", base + "ssh/", None
     elif kind == "attach_ssh":
@@ -555,7 +549,7 @@ def build_remote_command(repo_dir: str, out_dir: str) -> list[str]:
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
     fruits = f"{repo}/{FRUITS_RELATIVE}"
-    return ["python3", "-m", "sceneagent", fruits, "--out", out]
+    return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
 
 
 def host_probe_command(out_dir: str) -> str:
@@ -587,23 +581,33 @@ def host_probe_command(out_dir: str) -> str:
             "(out / 'host_probe.json').write_text(json.dumps(probe, indent=2) + '\\n')",
         ]
     )
-    return f'"$py" -c {shlex.quote(code)}'
+    return f"{shlex.quote(REMOTE_PYTHON)} -c {shlex.quote(code)}"
 
 
 def build_remote_shell(repo_dir: str, out_dir: str) -> str:
-    """Bash script that runs the video entry point with the repo on PYTHONPATH."""
+    """Bash script that runs the video entry point with the pinned interpreter.
+
+    ``REMOTE_PYTHON`` is the only Python this script runs. If that file is
+    missing or not executable, the script prints why and exits 127. It does
+    not search ``PATH`` and it does not fall back to ``python`` or ``python3``.
+    """
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
     argv = build_remote_command(repo, out)
-    quoted_args = " ".join(shlex.quote(part) for part in argv[1:])
+    quoted = " ".join(shlex.quote(part) for part in argv)
+    py = shlex.quote(REMOTE_PYTHON)
+    missing = shlex.quote("pinned interpreter missing: " + REMOTE_PYTHON)
     lines = [
         "set -eu",
+        f"if [ ! -x {py} ]; then",
+        f"  printf '%s\\n' {missing} >&2",
+        "  exit 127",
+        "fi",
         f"cd {shlex.quote(repo)}",
         f"export PYTHONPATH={shlex.quote(repo)}",
         f"mkdir -p {shlex.quote(out)}",
-        "if command -v python3 >/dev/null 2>&1; then py=python3; else py=python; fi",
         host_probe_command(out),
-        f'"$py" {quoted_args}',
+        quoted,
     ]
     script = "\n".join(lines) + "\n"
     _reject_secret_text(script)
@@ -892,15 +896,6 @@ def normalize_run_context(
     if _COMMIT_SHA_RE.fullmatch(commit_sha) is None:
         raise InstanceNotApproved("refusing commit sha")
     return {"trigger": trigger, "actor": actor, "commit_sha": commit_sha}
-
-
-def may_start_instance(trigger: str | None) -> bool:
-    """True only for an explicit ``workflow_dispatch``.
-
-    A missing trigger defaults to refuse. A label and a request-file push
-    must not start a stopped instance. That needs Sandeep's own click.
-    """
-    return trigger == "dispatch"
 
 
 def _apply_run_record(
@@ -2231,7 +2226,7 @@ def load_ssh_key_fingerprints(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    """GET ``/api/v0/instances/58301075/ssh/``. Return count and local fingerprints.
+    """GET ``/api/v0/instances/59601312/ssh/``. Return count and local fingerprints.
 
     This does not detach, and it does not return key material.
     """
@@ -2267,20 +2262,6 @@ def _show_instance(
     if status != 200:
         raise SmokeError(f"show instance {ALLOWED_INSTANCE_ID} failed (HTTP {status}).")
     return require_approved_instance(payload)
-
-
-def _change_state(
-    kind: str,
-    request: RequestFn,
-    api_key: str,
-    sleep: Callable[[float], None],
-) -> None:
-    method, url, body = endpoint_for(kind, ALLOWED_INSTANCE_ID)
-    status, payload = call_json(request, method, url, api_key, body, sleep=sleep)
-    if status != 200 or payload.get("success") is False:
-        raise SmokeError(
-            f"{kind} instance {ALLOWED_INSTANCE_ID} failed (HTTP {status})."
-        )
 
 
 def wait_until_running(
@@ -2333,16 +2314,15 @@ def run_smoke(
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
     boot_timeout_s: float = BOOT_TIMEOUT_S,
-    handle_sigterm: bool = False,
     trigger: str = "",
     actor: str = "",
     commit_sha: str = "",
 ) -> int:
-    """Run the Fruits smoke on 58301075 and restore power if this call started it.
+    """Run the Fruits smoke on 59601312 when that instance is already running.
 
     Exit 0 is a GPU accept. Exit 2 is a refusal before the instance is changed.
-    Exit 1 is a smoke that ran or started and did not pass, including a ledger
-    ``reject`` or ``deferred``.
+    Exit 1 is a smoke that ran and did not pass, including a ledger
+    ``reject`` or ``deferred``. This function does not start or stop the instance.
     """
     try:
         approved = parse_instance_id(instance_id)
@@ -2384,7 +2364,6 @@ def run_smoke(
         )
         return 2
 
-    started = False
     remote: Any = None
     code = 1
     remote_code = 0
@@ -2397,57 +2376,24 @@ def run_smoke(
     own_key: dict[str, Any] | None = None
     ssh_report: dict[str, Any] | None = None
 
-    def restore() -> bool:
-        nonlocal started
-        if not started:
-            return True
-        try:
-            _change_state("stop", request, key, sleep)
-        except (SmokeError, InstanceNotApproved) as exc:
-            _emit(str(exc), key)
-            return False
-        started = False
-        _log({"action": "stop", "instance_id": approved}, key)
-        return True
-
-    if handle_sigterm:
-
-        def _on_term(_signum: int, _frame: object) -> None:
-            restore()
-            raise SystemExit(1)
-
-        signal.signal(signal.SIGTERM, _on_term)
-
     try:
         row = _show_instance(request, key, sleep)
         shown = True
         _log({"action": "show", "instance": public_instance_view(row)}, key)
         kind = classify_status(row)
-        trigger_name = "" if context is None else context["trigger"]
         if kind == "stopped":
-            if not may_start_instance(trigger_name):
-                raise InstanceNotApproved("instance stopped; start needs Sandeep")
-            started = True
-            _change_state("start", request, key, sleep)
-            _log({"action": "start", "instance_id": approved}, key)
-            row = wait_until_running(
-                request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
-            )
-        elif kind == "starting":
-            if not may_start_instance(trigger_name):
-                raise InstanceNotApproved("instance not running; start needs Sandeep")
-            row = wait_until_running(
-                request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
-            )
-        elif kind != "running":
-            if not may_start_instance(trigger_name):
-                raise InstanceNotApproved("instance state unknown; start needs Sandeep")
-            actual = row.get("actual_status")
             raise InstanceNotApproved(
-                f"instance {approved} status {actual!r} is not running or stopped. "
-                "Not starting it, and not destroying it."
+                "instance stopped; this workflow does not start or stop instances"
             )
-        elif not row.get("ssh_host") or not row.get("ssh_port"):
+        if kind == "starting":
+            raise InstanceNotApproved(
+                "instance not running; this workflow does not start or stop instances"
+            )
+        if kind != "running":
+            raise InstanceNotApproved(
+                "instance state unknown; this workflow does not start or stop instances"
+            )
+        if not row.get("ssh_host") or not row.get("ssh_port"):
             row = wait_until_running(
                 request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
             )
@@ -2503,7 +2449,7 @@ def run_smoke(
     except InstanceNotApproved as exc:
         failure_reason = str(exc)
         _emit(failure_reason, key)
-        code = 1 if started else 2
+        code = 2
     except SmokeError as exc:
         failure_reason = str(exc)
         scan_failed = _is_key_scan_failure(exc)
@@ -2523,8 +2469,6 @@ def run_smoke(
                 remote, key_report, ephemeral_ssh_key
             )
             own_key = _remote_own_key(remote)
-        if not restore():
-            code = 1
         if (
             shown
             and code != 0
@@ -2556,7 +2500,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="SceneAgent Fruits GPU smoke on Vast instance 58301075"
+        description="SceneAgent Fruits GPU smoke on Vast instance 59601312"
     )
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--checkout", type=Path, required=True)
@@ -2570,7 +2514,6 @@ def main(argv: list[str] | None = None) -> int:
         args.checkout,
         args.artifacts,
         os.environ.get("VAST_API_KEY", ""),
-        handle_sigterm=True,
         trigger=args.trigger,
         actor=args.actor,
         commit_sha=args.commit_sha,

@@ -1,15 +1,16 @@
 # GPU smoke for SceneAgent on Fruits.mp4.
-# The instance id is the literal 58301075. No input, label, or request file
-# can change it. The job never creates, rents, resizes, or destroys an instance.
+# The instance id is the literal 59601312. No input, label, or request file
+# can change it. The job never creates, rents, resizes, destroys, starts,
+# or stops an instance. A stopped instance is refused. Starting or stopping
+# it takes two separate user yeses outside this workflow.
 #
 # pull_request_target loads this file from the repository default branch
 # (main). A label on a pull request that targets Main_duplicate does not run
 # until main contains this file. The request-file push is a plain push, so it
 # uses the workflow committed on Main_duplicate. Once this file is on
 # Main_duplicate, that push starts a workflow run with no workflow_dispatch
-# and no click from Sandeep. It does not start a stopped instance. Only a
-# manual workflow_dispatch may start 58301075. A label and a request-file
-# trigger refuse before any start PUT.
+# and no click from Sandeep. workflow_dispatch does not start or stop the
+# instance either. No trigger sends a state PUT.
 name: sceneagent-gpu-smoke
 
 on:
@@ -93,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      group: gpu-smoke-58301075
+      group: gpu-smoke-59601312
       cancel-in-progress: false
     permissions:
       contents: read
@@ -152,7 +153,7 @@ jobs:
           : "${SMOKE_TRIGGER:?}"
           : "${SMOKE_ACTOR:?}"
           : "${SMOKE_SHA:?}"
-          python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$SMOKE_SHA"
+          python -m sceneagent.vast_smoke --instance-id 59601312 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$SMOKE_SHA"
 
       - name: Upload plan, ledger, and manifest
         if: success()
