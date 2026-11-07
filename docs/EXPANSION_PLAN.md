@@ -10,7 +10,7 @@ Two published gaps stay explicit. Section 3.4's per-Gaussian MLP weights are not
 
 ## Machine
 
-Isaac Sim 5 and Isaac Lab 2 are planned for the existing Canadian instance with a 580-series driver. No new machine is rented. Texas instance 58591955 (40 GB disk, CPU COLMAP only) does not receive this install. The only Vast instance later SceneAgent GPU work may use is 58301075.
+Isaac Sim 5 and Isaac Lab 2 are planned for the existing Canadian instance with a 580-series driver. No new machine is rented. Texas instance 58591955 (40 GB disk, CPU COLMAP only) does not receive this install. The only Vast instance later SceneAgent GPU work may use is 59601312. The GPU smoke workflow does not start or stop it.
 
 Checked 1 Nov 2026 through the Vast v1 instances API. Every instance was `exited`.
 
@@ -18,7 +18,7 @@ Checked 1 Nov 2026 through the Vast v1 instances API. Every instance was `exited
 |---|---|---|---|---|---|---|
 | 55073623 | Quebec, CA | 580.82.09 | RTX 4090, 24564 MB | 250 GB allocated, API `disk_util` 173 GB (about 77 GB free) | exited | The Canadian 580 box. Install not started. |
 | 58331400 | Quebec, CA | 595.99.02 | RTX 3090 | 280 GB, API use 197 GB | exited | Canada, but not a 580 driver. |
-| 58301075 | Texas, US | 595.99.02 | RTX 4090 | 500 GB | exited | The only Vast instance later SceneAgent GPU work may use. |
+| 58301075 | Texas, US | 595.99.02 | RTX 4090 | 500 GB | exited | Snapshot on 1 Nov 2026. Later GPU smoke uses 59601312 and does not start this id. |
 | 58591955 | Texas, US | 595.91.07 | RTX 4060 Ti | 40 GB | exited | Prior CPU COLMAP only. |
 
 Isaac Sim 5 plus Isaac Lab 2 needs on the order of 100 GB free. The API figure for 55073623 is about 77 GB free, and the box is stopped, so no live `df` was taken and no packages were downloaded. The next block is blocked on that instance being running with at least 100 GB free. `tools/canadian_isaac_instance.json` records the blocker. It has no API key. Isaac Sim and Isaac Lab versions are null because they were not installed.

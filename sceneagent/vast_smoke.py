@@ -3,12 +3,26 @@
 
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
-The only instance this module will touch is ``58301075`` in Texas. It may
-show that instance. Only an explicit ``workflow_dispatch`` may start it when
-it is stopped. A label or a request-file trigger refuses before any start
-PUT, and an unknown state refuses too. When this process was the one that
-started it, it stops the instance again. It attaches an ephemeral SSH public
-key so the runner can copy the checkout and bring the run files back.
+The only instance this module will touch is ``59601312``. It may show that
+instance when it is already running. It does not start or stop an instance.
+``workflow_dispatch``, a label, and a request-file trigger all refuse a
+stopped, starting, or unknown instance, and they send no state PUT. Starting
+or stopping the instance takes two separate user yeses outside this workflow.
+It copies the checkout with one fixed SSH private key from the Actions secret
+``VAST_SSH_PRIVATE_KEY``. That key is written to a mode-0600 file on the
+runner and removed on exit. The smoke does not generate, attach, or delete
+a remote key, so keys already on the instance stay. SSH requires
+``StrictHostKeyChecking=yes`` and one pinned known-host line in
+``ci/vast-ssh-known-host``. The connection uses ``public_ipaddr`` and
+``ports['22/tcp'][0].HostPort`` from the show response. The proxy
+``ssh_host`` and ``ssh_port`` are not a fallback. A missing or invalid direct
+endpoint, secret, or pin fails before any SSH connection, and the values are
+not logged.
+The fixed key stays authorized until someone removes it on the instance.
+Revocation and rotation are manual. Reuse is less isolation than a per-run
+key, and it removes the dependency on Vast's key attach and detach API.
+Restrict the Actions secret, pin the host, and rotate the key. This module
+does not add an approval loop.
 
 It does not create, rent, resize, or destroy an instance, and the remote
 command is only the SceneAgent video entry point. That path does not call
@@ -20,18 +34,10 @@ into the remote command, the URL, or the artifact files.
 build a plan. A missing plan fails the smoke. A ``deferred`` or ``reject``
 ledger entry stays a failed smoke.
 
-Vast's sshd answers before an attached key is installed, and the attach
-response does not include a key id. After attach, SSH is probed with a fixed
-attempt cap and timeout. A missing attach id is logged. The key is still
-detached when the listing has exactly one match.
-Keys already on the instance are read with one pinned GET,
-``/api/v0/instances/58301075/ssh/``, before attach. The manifest keeps the
-key count and a locally computed ``SHA256:`` fingerprint for each key. It
-also records the fingerprint of the ephemeral key this run generated, and
-whether that fingerprint is in a second GET of the same URL after attach.
-Key bodies are not recorded. Leftover keys are not detached. A failed run
-still publishes a redacted manifest, and a key that survives redaction
-publishes nothing.
+SSH is probed with a fixed attempt cap and timeout before rsync. The probe
+uses the fixed key and the pinned host line. It does not scan the live host
+and it does not trust a key on first use. A failed run still publishes a
+redacted manifest, and a key that survives redaction publishes nothing.
 
 The runner does not forward ``VAST_API_KEY``, ``GITHUB_TOKEN``, or any
 other secret to the instance. SSH ignores user config, the child
@@ -65,7 +71,10 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 API_ORIGIN = "https://console.vast.ai"
-ALLOWED_INSTANCE_ID = 58301075
+ALLOWED_INSTANCE_ID = 59601312
+# The remote script uses this file and no other interpreter. A missing or
+# non-executable path exits 127. PATH is not a fallback.
+REMOTE_PYTHON = "/root/miniforge3/envs/simfoundry/bin/python3"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
@@ -78,12 +87,9 @@ SSH_READY_MAX_ATTEMPTS = 6
 SSH_READY_TIMEOUT_S = 45.0
 SSH_READY_BACKOFF_S = 2.0
 SSH_READY_BACKOFF_CAP_S = 8.0
-# Earlier runs' keys stay. This flag does not authorize deleting them.
-# This run's own key is detached only when the pinned listing has exactly
-# one byte-for-byte match, and the request guard refuses every other id.
+# Remote authorized keys are not deleted. The fixed key stays until an
+# operator removes it. This flag does not authorize a detach.
 DETACH_LEFTOVER_KEYS = False
-# Armed only for the duration of this run's own matched DELETE.
-_ARMED_OWN_KEY_ID: str | None = None
 REQUIRED_LEDGER_ITEMS = ("video", "COLMAP camera poses")
 FETCH_NAMES = (
     "ledger.json",
@@ -118,7 +124,7 @@ RequestFn = Callable[..., tuple[int, dict[str, Any]]]
 
 
 class InstanceNotApproved(ValueError):
-    """The call is outside the SF-4 allowlist for instance 58301075."""
+    """The call is outside the SF-4 allowlist for instance 59601312."""
 
 
 class SmokeError(RuntimeError):
@@ -126,7 +132,7 @@ class SmokeError(RuntimeError):
 
 
 def parse_instance_id(value: object) -> int:
-    """Return 58301075. Any other id is refused before a network call."""
+    """Return 59601312. Any other id, including 58301075, is refused."""
     parsed: int | None
     if isinstance(value, bool):
         parsed = None
@@ -170,7 +176,18 @@ def mask_secret(value: str) -> None:
         print(f"::add-mask::{value}", flush=True)
 
 
-_SECRET_ENV_EXACT = {"SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_ASKPASS"}
+SSH_PRIVATE_KEY_ENV = "VAST_SSH_PRIVATE_KEY"
+KNOWN_HOST_PATH = Path(__file__).resolve().parents[1] / "ci" / "vast-ssh-known-host"
+_KNOWN_HOST_RE = re.compile(
+    r"^(?:\[(?P<bracket>[A-Za-z0-9.-]+)\]:(?P<port>\d+)|(?P<plain>[A-Za-z0-9.-]+))"
+    r"\s+(?:ssh-ed25519|ssh-rsa)\s+[A-Za-z0-9+/=]+(?:\s+\S+)?$"
+)
+_SECRET_ENV_EXACT = {
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_PID",
+    "GIT_ASKPASS",
+    SSH_PRIVATE_KEY_ENV,
+}
 _SECRET_ENV_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "APIKEY")
 _RSYNC_EXCLUDES = (
     ".git",
@@ -257,7 +274,7 @@ def unwrap_instance(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the instance when it is 58301075 in Texas."""
+    """Return the instance when it is 59601312 in Texas."""
     row = unwrap_instance(payload)
     if row is None:
         raise InstanceNotApproved(
@@ -291,12 +308,12 @@ def public_instance_view(record: dict[str, Any]) -> dict[str, Any]:
 def classify_status(record: dict[str, Any]) -> str:
     """Map a show-instance row to running, starting, stopped, or unknown.
 
-    ``stopped`` and ``exited`` are the stopped kind. Only an explicit
-    ``workflow_dispatch`` may start them. A label or a request-file trigger
-    refuses before any start PUT. ``exited`` is what the Vast listing showed
-    for this machine when it was not running. ``offline`` and ``unknown``
-    are not started: the API docs say those states do not become
-    ``running``, and this module does not destroy the instance to replace it.
+    ``stopped`` and ``exited`` are the stopped kind. This module does not
+    start them, and ``workflow_dispatch`` does not either. ``exited`` is what
+    the Vast listing showed for the previous machine when it was not running.
+    ``offline`` and ``unknown`` are not started: the API docs say those
+    states do not become ``running``, and this module does not destroy the
+    instance to replace it.
     """
     actual = _status_text(record.get("actual_status"))
     intended = _status_text(record.get("intended_status") or record.get("cur_state"))
@@ -348,7 +365,11 @@ def _require_ssh_key_id(value: object) -> str:
 
 
 def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -> None:
-    """Reject every Vast call except show, start, stop, the pinned ssh list, attach, and detach."""
+    """Reject every Vast call except show and the pinned ssh list.
+
+    Attach, detach, and a PUT that sets ``state`` are refused. This module
+    does not generate a remote key or delete one.
+    """
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or parsed.netloc != "console.vast.ai":
         raise InstanceNotApproved("refusing a Vast URL outside https://console.vast.ai")
@@ -366,9 +387,9 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
     method = method.upper()
     if method == "GET" and not is_ssh and query == [("owner", "me")] and body is None:
         return
-    # One added read: GET /api/v0/instances/58301075/ssh/ and nothing else.
+    # One added read: GET /api/v0/instances/59601312/ssh/ and nothing else.
     # The id is the constant, not a caller-supplied template. No query, no
-    # body, no sub-path, and no other method on this path.
+    # body, no sub-path, and no other method on this path. No state PUT.
     if (
         method == "GET"
         and parsed.path == f"/api/v0/instances/{ALLOWED_INSTANCE_ID}/ssh/"
@@ -377,91 +398,28 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
         and body is None
     ):
         return
-    if (
-        method == "PUT"
-        and not is_ssh
-        and not query
-        and isinstance(body, dict)
-        and set(body) == {"state"}
-        and body["state"] in {"running", "stopped"}
-    ):
-        return
-    if (
-        method == "POST"
-        and parsed.path.endswith("/ssh/")
-        and key_id is None
-        and not query
-        and isinstance(body, dict)
-        and set(body) == {"ssh_key"}
-    ):
-        _require_public_key(body.get("ssh_key"))
-        return
-    if method == "DELETE" and key_id and not query and body is None:
-        _require_ssh_key_id(key_id)
-        return
     raise InstanceNotApproved(f"refusing Vast {method} {parsed.path}")
 
 
-def arm_own_key_delete(key_id: str | None) -> None:
-    """Arm the one id ``guard_own_key_delete`` will send. ``None`` disarms it."""
-    global _ARMED_OWN_KEY_ID
-    if key_id is not None:
-        _require_ssh_key_id(key_id)
-    _ARMED_OWN_KEY_ID = key_id
-
-
 def guard_own_key_delete(method: str, url: str) -> None:
-    """Request-layer gate. DELETE is sent only for this run's single matched id.
-
-    The instance must be 58301075. Any other id, instance, or a DELETE while
-    nothing is armed is refused before the transport runs. ``DETACH_LEFTOVER_KEYS``
-    does not widen this. Trailing-whitespace-normalized byte match is what
-    arms the id, not the attach response.
-    """
+    """Refuse every DELETE. This module does not remove remote ssh keys."""
     if method.upper() != "DELETE":
         return
-    parsed = urllib.parse.urlsplit(url)
-    match = _INSTANCE_PATH_RE.fullmatch(parsed.path)
-    if match is None or "/ssh/" not in parsed.path:
-        raise InstanceNotApproved(f"refusing Vast DELETE {parsed.path}")
-    if int(match.group("id")) != ALLOWED_INSTANCE_ID:
-        raise InstanceNotApproved(
-            f"refusing to detach a key on instance {match.group('id')}"
-        )
-    key_id = match.group("key")
-    if not key_id or key_id != _ARMED_OWN_KEY_ID:
-        raise InstanceNotApproved(
-            "refusing to detach a key that is not this run's single matched key"
-        )
+    path = urllib.parse.urlsplit(url).path
+    raise InstanceNotApproved(f"refusing to delete a remote ssh key at {path}")
 
 
 def endpoint_for(
     kind: str,
     instance_id: object,
-    *,
-    public_key: str | None = None,
-    ssh_key_id: str | None = None,
 ) -> tuple[str, str, dict[str, Any] | None]:
     """Build one allowlisted request. Any other kind raises."""
     approved = parse_instance_id(instance_id)
     base = f"{API_ORIGIN}/api/v0/instances/{approved}/"
     if kind == "show":
         method, url, body = "GET", base + "?owner=me", None
-    elif kind == "start":
-        method, url, body = "PUT", base, {"state": "running"}
-    elif kind == "stop":
-        method, url, body = "PUT", base, {"state": "stopped"}
     elif kind == "show_ssh_keys":
         method, url, body = "GET", base + "ssh/", None
-    elif kind == "attach_ssh":
-        method, url, body = (
-            "POST",
-            base + "ssh/",
-            {"ssh_key": _require_public_key(public_key)},
-        )
-    elif kind == "detach_ssh":
-        key_id = _require_ssh_key_id(ssh_key_id)
-        method, url, body = "DELETE", f"{base}ssh/{key_id}/", None
     else:
         raise InstanceNotApproved(f"refusing Vast action {kind!r}")
     assert_request_allowed(method, url, body)
@@ -555,7 +513,7 @@ def build_remote_command(repo_dir: str, out_dir: str) -> list[str]:
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
     fruits = f"{repo}/{FRUITS_RELATIVE}"
-    return ["python3", "-m", "sceneagent", fruits, "--out", out]
+    return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
 
 
 def host_probe_command(out_dir: str) -> str:
@@ -587,23 +545,33 @@ def host_probe_command(out_dir: str) -> str:
             "(out / 'host_probe.json').write_text(json.dumps(probe, indent=2) + '\\n')",
         ]
     )
-    return f'"$py" -c {shlex.quote(code)}'
+    return f"{shlex.quote(REMOTE_PYTHON)} -c {shlex.quote(code)}"
 
 
 def build_remote_shell(repo_dir: str, out_dir: str) -> str:
-    """Bash script that runs the video entry point with the repo on PYTHONPATH."""
+    """Bash script that runs the video entry point with the pinned interpreter.
+
+    ``REMOTE_PYTHON`` is the only Python this script runs. If that file is
+    missing or not executable, the script prints why and exits 127. It does
+    not search ``PATH`` and it does not fall back to ``python`` or ``python3``.
+    """
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
     argv = build_remote_command(repo, out)
-    quoted_args = " ".join(shlex.quote(part) for part in argv[1:])
+    quoted = " ".join(shlex.quote(part) for part in argv)
+    py = shlex.quote(REMOTE_PYTHON)
+    missing = shlex.quote("pinned interpreter missing: " + REMOTE_PYTHON)
     lines = [
         "set -eu",
+        f"if [ ! -x {py} ]; then",
+        f"  printf '%s\\n' {missing} >&2",
+        "  exit 127",
+        "fi",
         f"cd {shlex.quote(repo)}",
         f"export PYTHONPATH={shlex.quote(repo)}",
         f"mkdir -p {shlex.quote(out)}",
-        "if command -v python3 >/dev/null 2>&1; then py=python3; else py=python; fi",
         host_probe_command(out),
-        f'"$py" {quoted_args}',
+        quoted,
     ]
     script = "\n".join(lines) + "\n"
     _reject_secret_text(script)
@@ -649,7 +617,7 @@ def ssh_base_argv(key_path: str, known_hosts: str, port: int) -> list[str]:
         "-p",
         str(port),
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        "StrictHostKeyChecking=yes",
         "-o",
         f"UserKnownHostsFile={known_hosts}",
         "-o",
@@ -686,14 +654,35 @@ def ssh_forwarding_problems(argv: list[str]) -> list[str]:
 
 
 def ssh_endpoint(record: dict[str, Any]) -> tuple[str, int]:
-    host = record.get("ssh_host")
-    port = record.get("ssh_port")
+    """Direct address from the show row. The proxy fields are not used.
+
+    ``public_ipaddr`` is the host. ``ports['22/tcp'][0].HostPort`` is the
+    port. A missing or invalid value refuses the connection. ``ssh_host`` and
+    ``ssh_port`` are not a fallback.
+    """
+    host = record.get("public_ipaddr")
     if not isinstance(host, str) or _HOST_RE.fullmatch(host) is None:
-        raise SmokeError(f"instance {ALLOWED_INSTANCE_ID} has no ssh_host")
-    if isinstance(port, str) and port.isdigit():
-        port = int(port)
-    if isinstance(port, bool) or not isinstance(port, int) or port <= 0:
-        raise SmokeError(f"instance {ALLOWED_INSTANCE_ID} has no ssh_port")
+        raise SmokeError(
+            f"instance {ALLOWED_INSTANCE_ID} direct ssh public_ipaddr is missing."
+        )
+    ports = record.get("ports")
+    mapping = ports.get("22/tcp") if isinstance(ports, dict) else None
+    first = mapping[0] if isinstance(mapping, list) and mapping else None
+    raw_port = first.get("HostPort") if isinstance(first, dict) else None
+    if raw_port is None or not isinstance(mapping, list) or not mapping:
+        raise SmokeError(
+            f"instance {ALLOWED_INSTANCE_ID} direct ssh port mapping 22/tcp is missing."
+        )
+    if isinstance(raw_port, str) and raw_port.isdigit():
+        port = int(raw_port)
+    elif isinstance(raw_port, int) and not isinstance(raw_port, bool):
+        port = raw_port
+    else:
+        port = 0
+    if port <= 0 or port > 65535:
+        raise SmokeError(
+            f"instance {ALLOWED_INSTANCE_ID} direct ssh HostPort is invalid."
+        )
     return host, port
 
 
@@ -780,7 +769,7 @@ def assess_secret_forwarding(
         problems.append("ssh environment still has " + ", ".join(leaked))
     problems.extend(ssh_forwarding_problems(ssh_base_argv("key", "known_hosts", 22)))
     secret_values = [api_key] if api_key else []
-    for name in ("GITHUB_TOKEN", "GH_TOKEN", "VAST_API_KEY"):
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "VAST_API_KEY", SSH_PRIVATE_KEY_ENV):
         value = os.environ.get(name, "")
         if value and value not in secret_values:
             secret_values.append(value)
@@ -892,15 +881,6 @@ def normalize_run_context(
     if _COMMIT_SHA_RE.fullmatch(commit_sha) is None:
         raise InstanceNotApproved("refusing commit sha")
     return {"trigger": trigger, "actor": actor, "commit_sha": commit_sha}
-
-
-def may_start_instance(trigger: str | None) -> bool:
-    """True only for an explicit ``workflow_dispatch``.
-
-    A missing trigger defaults to refuse. A label and a request-file push
-    must not start a stopped instance. That needs Sandeep's own click.
-    """
-    return trigger == "dispatch"
 
 
 def _apply_run_record(
@@ -1041,7 +1021,7 @@ def wait_until_ssh_accepts(
                 "result": "accepted",
             }
     raise SmokeError(
-        "ssh did not accept the ephemeral key "
+        "ssh did not accept the configured key "
         f"after {probes} attempts "
         f"(cap {max_attempts}, timeout {timeout_s:g}s, last result {last_class}, "
         f"last status {last_code})."
@@ -1832,31 +1812,70 @@ def unpack_tar(blob: bytes, dest: Path) -> None:
         raise SmokeError(f"run archive could not be read ({exc})") from None
 
 
-def generate_ssh_keypair(directory: Path) -> tuple[Path, str]:
-    private = directory / "sf4_ed25519"
+def require_ssh_private_key(value: object) -> str:
+    """Return the fixed private key. Do not include the value in an error."""
+    if not isinstance(value, str) or not value.strip():
+        raise InstanceNotApproved(f"{SSH_PRIVATE_KEY_ENV} is not set.")
+    text = value.replace("\r\n", "\n").strip()
+    if (
+        "-----BEGIN " not in text
+        or "-----END " not in text
+        or "PRIVATE" not in text
+        or text.startswith(("ssh-ed25519 ", "ssh-rsa "))
+    ):
+        raise InstanceNotApproved(f"{SSH_PRIVATE_KEY_ENV} is not a private key.")
+    return text + "\n"
+
+
+def write_ssh_private_key(directory: Path, material: str) -> Path:
+    """Write the runner key as mode 0600. The bytes are not logged."""
+    path = directory / "sf4_ed25519"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        subprocess.run(
-            [
-                "ssh-keygen",
-                "-t",
-                "ed25519",
-                "-N",
-                "",
-                "-f",
-                str(private),
-                "-C",
-                "sf4-smoke",
-            ],
-            check=True,
-            capture_output=True,
-            env=child_env(),
+        os.write(fd, material.encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+    return path
+
+
+def load_known_host_line(path: Path, host: str, port: int) -> str:
+    """Return the one pinned known_hosts line, or refuse before SSH.
+
+    The error does not quote the file. A comment-only file is not a pin.
+    """
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        raise InstanceNotApproved(
+            "VAST SSH known host pin is not configured."
+        ) from None
+    lines = [
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if len(lines) != 1 or "PRIVATE" in lines[0] or lines[0].startswith("-----"):
+        raise InstanceNotApproved("VAST SSH known host pin is not configured.")
+    match = _KNOWN_HOST_RE.fullmatch(lines[0])
+    if match is None:
+        raise InstanceNotApproved("VAST SSH known host pin is not configured.")
+    pinned_host = match.group("bracket") or match.group("plain")
+    pinned_port = match.group("port")
+    if pinned_host != host or (pinned_port is not None and int(pinned_port) != port):
+        raise InstanceNotApproved(
+            "VAST SSH known host pin does not match the instance ssh endpoint."
         )
-    except subprocess.CalledProcessError:
-        raise SmokeError("ssh-keygen failed") from None
-    private.chmod(0o600)
-    public = private.with_suffix(".pub").read_text(encoding="utf-8").strip()
-    _require_public_key(public)
-    return private, public
+    return lines[0] + "\n"
+
+
+def install_known_host_pin(directory: Path, source: Path, host: str, port: int) -> str:
+    """Copy the validated pin into the runner temp dir. No keyscan."""
+    line = load_known_host_line(source, host, port)
+    path = directory / "known_hosts"
+    path.write_text(line, encoding="utf-8")
+    path.chmod(0o644)
+    return str(path)
 
 
 class SshRemote:
@@ -1868,36 +1887,39 @@ class SshRemote:
         api_key: str,
         request: RequestFn,
         *,
+        private_key: str,
+        known_host_file: Path,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.api_key = api_key
         self.request = request
         self.sleep = sleep
         self.host, self.port = ssh_endpoint(record)
+        self._private_material = require_ssh_private_key(private_key)
         self.tmp = tempfile.TemporaryDirectory()
-        self.private, self.public = generate_ssh_keypair(Path(self.tmp.name))
-        self.known_hosts = str(Path(self.tmp.name) / "known_hosts")
-        self.key_id: str | None = None
-        self.key_id_returned = False
         self.ssh_report: dict[str, Any] = {
-            "key_id_returned": False,
-            "detach": "skipped",
             "accepted": None,
+            "remote_keys_modified": False,
         }
-        self.own_key: dict[str, Any] = {
-            "match_count": 0,
-            "detached": False,
-            "reason": "ssh key list was not read",
-        }
-        self._own_key_id: str | None = None
-        self._detach_done = False
-        self._attach()
+        try:
+            root = Path(self.tmp.name)
+            self.private = write_ssh_private_key(root, self._private_material)
+            self.known_hosts = install_known_host_pin(
+                root, known_host_file, self.host, self.port
+            )
+        except Exception:
+            # The constructor does not return, so run_smoke cannot close the
+            # mode-0600 file. Remove it here. A cleanup error must not replace
+            # the setup error.
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                _emit("ssh cleanup failed: " + str(cleanup_error), self.api_key)
+            raise
 
     def close(self) -> None:
-        try:
-            self._detach()
-        finally:
-            self.tmp.cleanup()
+        """Remove the runner temp dir, including the private key file."""
+        self.tmp.cleanup()
 
     def run(self, checkout: Path, local_run: Path) -> int:
         self._sync(checkout)
@@ -1906,159 +1928,6 @@ class SshRemote:
         )
         self._fetch(local_run)
         return code
-
-    def _call(self, kind: str, **kwargs: Any) -> tuple[int, dict[str, Any]]:
-        method, url, body = endpoint_for(kind, ALLOWED_INSTANCE_ID, **kwargs)
-        return call_json(
-            self.request,
-            method,
-            url,
-            self.api_key,
-            body,
-            sleep=self.sleep,
-        )
-
-    def _attach(self) -> None:
-        self.ssh_key_listing = load_ssh_key_fingerprints(
-            self.request, self.api_key, self.sleep
-        )
-        fingerprint = _fingerprint(self.public)
-        self.ephemeral_ssh_key = {
-            "fingerprint": fingerprint,
-            "listed_after_attach": None,
-        }
-        _log(
-            {
-                "action": "ssh_keys",
-                "when": "before_attach",
-                "instance_id": ALLOWED_INSTANCE_ID,
-                "count": self.ssh_key_listing["count"],
-                "fingerprints": self.ssh_key_listing["fingerprints"],
-            },
-            self.api_key,
-        )
-        status, payload = self._call("attach_ssh", public_key=self.public)
-        if status != 200 or payload.get("success") is False:
-            raise SmokeError(
-                f"attaching an ephemeral ssh key failed (HTTP {status}). The key is not printed."
-            )
-        after, after_payload = fetch_pinned_ssh_keys(
-            self.request, self.api_key, self.sleep
-        )
-        if fingerprint is None:
-            raise SmokeError(
-                "ephemeral ssh key could not be fingerprinted. The key is not printed."
-            )
-        self.ephemeral_ssh_key = ephemeral_key_record(self.public, after)
-        record, key_id = match_own_public_key(self.public, after_payload)
-        self.own_key = record
-        self._own_key_id = key_id
-        _log(
-            {
-                "action": "own_key",
-                "match_count": record["match_count"],
-                "detached": False,
-            },
-            self.api_key,
-        )
-        _log(
-            {
-                "action": "ssh_keys",
-                "when": "after_attach",
-                "instance_id": ALLOWED_INSTANCE_ID,
-                "count": after["count"],
-                "fingerprint": self.ephemeral_ssh_key["fingerprint"],
-                "listed_after_attach": self.ephemeral_ssh_key["listed_after_attach"],
-            },
-            self.api_key,
-        )
-        noted = note_attach_key_id(payload, self.api_key)
-        self.key_id = noted["key_id"] if isinstance(noted["key_id"], str) else None
-        self.key_id_returned = bool(noted["key_id_returned"])
-        self.ssh_report = {
-            "key_id_returned": self.key_id_returned,
-            "detach": noted["detach"],
-            "accepted": None,
-        }
-        if self.key_id is not None:
-            self.ssh_report["key_id"] = self.key_id
-
-    def detach_own_key(self) -> None:
-        """DELETE this run's key when the listing has exactly one match.
-
-        Runs on the success path before the manifest is published, and again
-        from ``close`` so a failure still removes it. A second call is a no-op.
-        Zero matches or several matches delete nothing.
-        """
-        if self._detach_done:
-            return
-        self._detach_done = True
-        if self.own_key.get("match_count") != 1 or self._own_key_id is None:
-            self.own_key["detached"] = False
-            self._sync_ssh_detach()
-            return
-        arm_own_key_delete(self._own_key_id)
-        try:
-            try:
-                status, payload = self._call("detach_ssh", ssh_key_id=self._own_key_id)
-            except Exception:
-                self.own_key["detached"] = False
-                self.own_key["reason"] = (
-                    "detach of the matched key failed (transport). "
-                    "The key is not printed."
-                )
-                self._sync_ssh_detach()
-                raise SmokeError(self.own_key["reason"]) from None
-        finally:
-            arm_own_key_delete(None)
-        if status not in {200, 204} or payload.get("success") is False:
-            self.own_key["detached"] = False
-            self.own_key["reason"] = (
-                f"detach of the matched key failed (HTTP {status}). "
-                "The key is not printed."
-            )
-            self._sync_ssh_detach()
-            raise SmokeError(self.own_key["reason"])
-        self.own_key["detached"] = True
-        self.key_id = None
-        self._sync_ssh_detach()
-
-    def _sync_ssh_detach(self) -> None:
-        """Make ``ssh_report.detach`` match the own-key DELETE result.
-
-        Attach often returns no id, so the report starts as ``skipped``.
-        After this method it is ``detached`` only when the DELETE succeeded,
-        ``failed`` when the one matched DELETE did not, and ``skipped`` when
-        there was not exactly one match.
-        """
-        detached = self.own_key.get("detached") is True
-        count = self.own_key.get("match_count")
-        reason = self.own_key.get("reason")
-        failed = (
-            count == 1
-            and not detached
-            and isinstance(reason, str)
-            and reason.startswith("detach of the matched key failed")
-        )
-        if detached:
-            outcome = "detached"
-        elif failed:
-            outcome = "failed"
-        else:
-            outcome = "skipped"
-        self.ssh_report["detach"] = outcome
-        _log(
-            {
-                "action": "own_key_detach",
-                "match_count": count,
-                "detached": detached,
-                "detach": outcome,
-            },
-            self.api_key,
-        )
-
-    def _detach(self) -> None:
-        self.detach_own_key()
 
     def _probe_ssh(self) -> tuple[int, str]:
         argv = [
@@ -2078,16 +1947,16 @@ class SshRemote:
         except subprocess.TimeoutExpired:
             return 255, "timeout"
         detail = completed.stderr.decode("utf-8", errors="replace")[-300:]
-        return int(completed.returncode), redact(detail, self.api_key)
+        detail = redact(redact(detail, self.api_key), self._private_material)
+        return int(completed.returncode), detail
 
     def _sync(self, checkout: Path) -> None:
         try:
-            ready = ssh_ready_or_raise(
+            ready = wait_until_ssh_accepts(
                 self._probe_ssh,
-                key_id_returned=self.key_id_returned,
-                api_key=self.api_key,
                 sleep=self.sleep,
                 now=time.monotonic,
+                api_key=self.api_key,
             )
         except SmokeError:
             self.ssh_report["accepted"] = False
@@ -2117,6 +1986,7 @@ class SshRemote:
                 tail = (completed.stderr or b"").decode("utf-8", errors="replace")[
                     -400:
                 ]
+                tail = redact(redact(tail, self.api_key), self._private_material)
                 raise SmokeError(f"rsync failed ({completed.returncode}): {tail}")
 
     def _bash(self, script: str, timeout_s: float) -> int:
@@ -2231,7 +2101,7 @@ def load_ssh_key_fingerprints(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    """GET ``/api/v0/instances/58301075/ssh/``. Return count and local fingerprints.
+    """GET ``/api/v0/instances/59601312/ssh/``. Return count and local fingerprints.
 
     This does not detach, and it does not return key material.
     """
@@ -2269,20 +2139,6 @@ def _show_instance(
     return require_approved_instance(payload)
 
 
-def _change_state(
-    kind: str,
-    request: RequestFn,
-    api_key: str,
-    sleep: Callable[[float], None],
-) -> None:
-    method, url, body = endpoint_for(kind, ALLOWED_INSTANCE_ID)
-    status, payload = call_json(request, method, url, api_key, body, sleep=sleep)
-    if status != 200 or payload.get("success") is False:
-        raise SmokeError(
-            f"{kind} instance {ALLOWED_INSTANCE_ID} failed (HTTP {status})."
-        )
-
-
 def wait_until_running(
     request: RequestFn,
     api_key: str,
@@ -2299,7 +2155,11 @@ def wait_until_running(
         row = _show_instance(request, api_key, sleep)
         kind = classify_status(row)
         last_status = row.get("actual_status")
-        host_ok = isinstance(row.get("ssh_host"), str) and bool(row.get("ssh_port"))
+        try:
+            ssh_endpoint(row)
+            host_ok = True
+        except SmokeError:
+            host_ok = False
         if kind == "running" and host_ok:
             return row
         if kind == "starting":
@@ -2334,15 +2194,19 @@ def run_smoke(
     now: Callable[[], float] = time.monotonic,
     boot_timeout_s: float = BOOT_TIMEOUT_S,
     handle_sigterm: bool = False,
+    ssh_private_key: str | None = None,
+    known_host_file: Path | None = None,
     trigger: str = "",
     actor: str = "",
     commit_sha: str = "",
 ) -> int:
-    """Run the Fruits smoke on 58301075 and restore power if this call started it.
+    """Run the Fruits smoke on 59601312 when that instance is already running.
 
     Exit 0 is a GPU accept. Exit 2 is a refusal before the instance is changed.
-    Exit 1 is a smoke that ran or started and did not pass, including a ledger
-    ``reject`` or ``deferred``.
+    Exit 1 is a smoke that ran and did not pass, including a ledger
+    ``reject`` or ``deferred``. This function does not start or stop the instance.
+    SIGTERM raises ``SystemExit(1)`` so ``finally`` can detach, and it does
+    not change instance power.
     """
     try:
         approved = parse_instance_id(instance_id)
@@ -2384,7 +2248,13 @@ def run_smoke(
         )
         return 2
 
-    started = False
+    if handle_sigterm:
+
+        def _on_term(_signum: int, _frame: object) -> None:
+            raise SystemExit(1)
+
+        signal.signal(signal.SIGTERM, _on_term)
+
     remote: Any = None
     code = 1
     remote_code = 0
@@ -2397,69 +2267,47 @@ def run_smoke(
     own_key: dict[str, Any] | None = None
     ssh_report: dict[str, Any] | None = None
 
-    def restore() -> bool:
-        nonlocal started
-        if not started:
-            return True
-        try:
-            _change_state("stop", request, key, sleep)
-        except (SmokeError, InstanceNotApproved) as exc:
-            _emit(str(exc), key)
-            return False
-        started = False
-        _log({"action": "stop", "instance_id": approved}, key)
-        return True
-
-    if handle_sigterm:
-
-        def _on_term(_signum: int, _frame: object) -> None:
-            restore()
-            raise SystemExit(1)
-
-        signal.signal(signal.SIGTERM, _on_term)
-
     try:
         row = _show_instance(request, key, sleep)
         shown = True
         _log({"action": "show", "instance": public_instance_view(row)}, key)
         kind = classify_status(row)
-        trigger_name = "" if context is None else context["trigger"]
         if kind == "stopped":
-            if not may_start_instance(trigger_name):
-                raise InstanceNotApproved("instance stopped; start needs Sandeep")
-            started = True
-            _change_state("start", request, key, sleep)
-            _log({"action": "start", "instance_id": approved}, key)
-            row = wait_until_running(
-                request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
-            )
-        elif kind == "starting":
-            if not may_start_instance(trigger_name):
-                raise InstanceNotApproved("instance not running; start needs Sandeep")
-            row = wait_until_running(
-                request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
-            )
-        elif kind != "running":
-            if not may_start_instance(trigger_name):
-                raise InstanceNotApproved("instance state unknown; start needs Sandeep")
-            actual = row.get("actual_status")
             raise InstanceNotApproved(
-                f"instance {approved} status {actual!r} is not running or stopped. "
-                "Not starting it, and not destroying it."
+                "instance stopped; this workflow does not start or stop instances"
             )
-        elif not row.get("ssh_host") or not row.get("ssh_port"):
-            row = wait_until_running(
-                request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
+        if kind == "starting":
+            raise InstanceNotApproved(
+                "instance not running; this workflow does not start or stop instances"
             )
+        if kind != "running":
+            raise InstanceNotApproved(
+                "instance state unknown; this workflow does not start or stop instances"
+            )
+        try:
+            ssh_endpoint(row)
+        except SmokeError as exc:
+            raise InstanceNotApproved(str(exc)) from None
         if remote_factory is None:
-            remote = SshRemote(row, key, request, sleep=sleep)
+            material = (
+                ssh_private_key
+                if ssh_private_key is not None
+                else os.environ.get(SSH_PRIVATE_KEY_ENV, "")
+            )
+            pin = KNOWN_HOST_PATH if known_host_file is None else Path(known_host_file)
+            remote = SshRemote(
+                row,
+                key,
+                request,
+                private_key=material,
+                known_host_file=pin,
+                sleep=sleep,
+            )
         else:
             remote = remote_factory(row)
         with tempfile.TemporaryDirectory() as tmp:
             local_run = Path(tmp) / "run"
             remote_code = int(remote.run(Path(checkout), local_run))
-            if hasattr(remote, "detach_own_key"):
-                remote.detach_own_key()
             found = getattr(remote, "ssh_report", None)
             if isinstance(found, dict):
                 ssh_report = found
@@ -2503,7 +2351,7 @@ def run_smoke(
     except InstanceNotApproved as exc:
         failure_reason = str(exc)
         _emit(failure_reason, key)
-        code = 1 if started else 2
+        code = 2
     except SmokeError as exc:
         failure_reason = str(exc)
         scan_failed = _is_key_scan_failure(exc)
@@ -2523,8 +2371,6 @@ def run_smoke(
                 remote, key_report, ephemeral_ssh_key
             )
             own_key = _remote_own_key(remote)
-        if not restore():
-            code = 1
         if (
             shown
             and code != 0
@@ -2556,7 +2402,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="SceneAgent Fruits GPU smoke on Vast instance 58301075"
+        description="SceneAgent Fruits GPU smoke on Vast instance 59601312"
     )
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--checkout", type=Path, required=True)
