@@ -632,6 +632,7 @@ def _step_statuses(poses: dict[str, Any]) -> dict[str, Any]:
     for name, step in (poses.get("steps") or {}).items():
         if isinstance(step, dict):
             statuses[name] = step.get("returncode")
+            statuses[f"{name}_timed_out"] = bool(step.get("timed_out"))
     gate = poses.get("reconstruction_gate") or {}
     statuses["reconstruction_gate_pass"] = gate.get("pass")
     models = []
@@ -848,6 +849,17 @@ def execute(request: dict[str, Any]) -> int:
         timeouts = native_timeouts(int(probed["frames"]))
         document["config"]["ffmpeg_timeout_s"] = timeouts["ffmpeg_timeout_s"]
         document["config"]["colmap_timeout_s"] = timeouts["colmap_timeout_s"]
+
+        def after_extract(frames):
+            count = len(frames)
+            if count != probed["frames"]:
+                return "extracted frame count is not the native count"
+            if not dry_run and count != APPROVED_FRAMES:
+                return "extracted frame count is not 452"
+            if dry_run and count <= 16:
+                return "dry run extracted too few frames to show there is no cap"
+            return ""
+
         poses = run_poses(
             video,
             output / "colmap",
@@ -856,6 +868,7 @@ def execute(request: dict[str, Any]) -> int:
             sample_interval_s=GPU_SAMPLE_INTERVAL_S,
             ffmpeg_timeout_s=timeouts["ffmpeg_timeout_s"],
             colmap_timeout_s=timeouts["colmap_timeout_s"],
+            after_extract=after_extract,
             **evidence_kwargs(),
         )
         document["exit_statuses"] = _step_statuses(poses)
@@ -868,14 +881,22 @@ def execute(request: dict[str, Any]) -> int:
         document["ffmpeg_command"] = [str(part) for part in command]
         frames = poses.get("frames") or []
         document["extracted_frames"] = len(frames)
-        if len(frames) != probed["frames"]:
-            raise EvidenceError("extracted frame count is not the native count")
+        if poses.get("failed_step") == "frame_count" or len(frames) != probed["frames"]:
+            document["failed_step"] = "frame_count"
+            document["reason"] = (
+                poses.get("reason") or "extracted frame count is not the native count"
+            )
+            return _finish(prefix, kind="sampling", document=document)
         if not dry_run and len(frames) != APPROVED_FRAMES:
-            raise EvidenceError("extracted frame count is not 452")
+            document["failed_step"] = "frame_count"
+            document["reason"] = "extracted frame count is not 452"
+            return _finish(prefix, kind="sampling", document=document)
         if len(frames) <= 16 and dry_run:
-            raise EvidenceError(
+            document["failed_step"] = "frame_count"
+            document["reason"] = (
                 "dry run extracted too few frames to show there is no cap"
             )
+            return _finish(prefix, kind="sampling", document=document)
         outcome = calibration_outcome(poses)
         if outcome == "off":
             raise EvidenceError("color calibration was off")

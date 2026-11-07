@@ -311,6 +311,7 @@ def run_poses(
     sample_interval_s=10,
     ffmpeg_timeout_s=180,
     colmap_timeout_s=900,
+    after_extract=None,
 ):
     """Sample frames, calibrate each image, and run COLMAP.
 
@@ -412,6 +413,17 @@ def run_poses(
             frames=frames,
             steps={"ffmpeg": extract},
         )
+    if after_extract is not None:
+        rejection = after_extract(list(frames))
+        if rejection:
+            return _result(
+                ran=True,
+                ok=False,
+                failed_step="frame_count",
+                frames=frames,
+                steps={"ffmpeg": extract},
+                reason=str(rejection),
+            )
     if color_calibrate:
         try:
             report = apply_per_image_color_calibration(images)
@@ -449,6 +461,9 @@ def run_poses(
         else:
             steps[step_name] = _run(argv, timeout_s=colmap_timeout_s)
         if steps[step_name]["returncode"] != 0:
+            reason = ""
+            if steps[step_name].get("timed_out"):
+                reason = f"{step_name} timed out"
             return _result(
                 ran=True,
                 ok=False,
@@ -457,6 +472,7 @@ def run_poses(
                 failed_step=step_name,
                 frames=frames,
                 steps=steps,
+                reason=reason,
             )
     # No subdirectory means the mapper wrote nothing. That stays a mapper
     # failure. A model that exists is accepted only by the quality bar, and

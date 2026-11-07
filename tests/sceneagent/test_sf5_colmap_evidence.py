@@ -75,6 +75,7 @@ from sceneagent.sf5_colmap_evidence import (
     query_gpu_memory,
     sift_match_bytes,
     summarize_free_samples,
+    _step_statuses,
     render_launch_command,
     required_output_prefix,
     reuse_refused,
@@ -161,7 +162,9 @@ def _install_media_stubs(directory: Path, frames: int = _MEDIA_FRAMES) -> None:
         "pattern = Path(sys.argv[-1])\n"
         "pattern.parent.mkdir(parents=True, exist_ok=True)\n"
         "image = Image.new('RGB', (8, 8), (40, 80, 120))\n"
-        f"for index in range(1, {frames} + 1):\n"
+        "import os\n"
+        f"count = int(os.environ.get('SF5_EXTRACT_FRAMES', '{frames}'))\n"
+        "for index in range(1, count + 1):\n"
         "    image.save(pattern.parent / f'{index:04d}.jpg', quality=95)\n",
         encoding="utf-8",
     )
@@ -876,6 +879,76 @@ def test_gpu_stage_drains_pipes_while_sampling(tmp_path):
     assert result["returncode"] == 0
     assert len(result["stdout_tail"]) == 2000
     assert len(result["stderr_tail"]) == 2000
+
+
+def test_step_status_records_a_timeout_separately_from_the_return_code():
+    statuses = _step_statuses(
+        {
+            "steps": {
+                "ffmpeg": {"returncode": 0, "timed_out": False},
+                "mapper": {"returncode": None, "timed_out": True},
+            },
+            "reconstruction_gate": {},
+        }
+    )
+    assert statuses["ffmpeg"] == 0
+    assert statuses["ffmpeg_timed_out"] is False
+    assert statuses["mapper"] is None
+    assert statuses["mapper_timed_out"] is True
+
+
+def test_timeout_reason_is_written_on_the_ledger(tmp_path, monkeypatch):
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+    probed = _ffprobe(video)
+
+    def fake_run_poses(*_args, **_kwargs):
+        return {
+            "ran": True,
+            "ok": False,
+            "failed_step": "mapper",
+            "reason": "mapper timed out",
+            "color_calibrate": True,
+            "color_calibration": {"applied": True},
+            "frames": [f"{index:04d}.jpg" for index in range(1, probed["frames"] + 1)],
+            "steps": {
+                "ffmpeg": {
+                    "command": ["ffmpeg", "-fps_mode", "passthrough", str(video)],
+                    "returncode": 0,
+                    "timed_out": False,
+                },
+                "mapper": {"returncode": None, "timed_out": True},
+            },
+        }
+
+    monkeypatch.setattr("sceneagent.sf5_colmap_evidence.run_poses", fake_run_poses)
+    output = tmp_path / "timeout-ledger" / "run"
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
+    assert code == 1
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["reason"] == "mapper timed out"
+    assert ledger["failed_step"] == "mapper"
+    assert ledger["exit_statuses"]["mapper"] is None
+    assert ledger["exit_statuses"]["mapper_timed_out"] is True
+
+
+def test_frame_count_mismatch_stops_before_colmap(tmp_path, monkeypatch):
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("SF5_EXTRACT_FRAMES", "3")
+    stage_log = tmp_path / "stages.log"
+    monkeypatch.setenv("SF5_STUB_LOG", str(stage_log))
+    output = tmp_path / "frames" / "run"
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
+    assert code == 2
+    assert not stage_log.exists()
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["failed_step"] == "frame_count"
+    assert ledger["reason"] == "extracted frame count is not the native count"
+    assert ledger["extracted_frames"] == 3
+    assert "feature_extractor" not in ledger["exit_statuses"]
 
 
 def test_package_source_does_not_control_other_processes():
