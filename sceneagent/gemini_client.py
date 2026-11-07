@@ -52,24 +52,37 @@ def _candidate_text(raw):
 
 
 class GeminiClient:
-    """HTTP client. The key is not included in returned bodies."""
+    """HTTP client. The key is not included in returned bodies or ``repr``."""
 
     def __init__(self, api_key):
         self.api_key = api_key
 
-    def generate(self, prompt, model_id, image_bytes=None, mime_type="image/jpeg"):
+    def __repr__(self):
+        return "GeminiClient(api_key='[redacted]')"
+
+    def __str__(self):
+        return repr(self)
+
+    def generate(
+        self, prompt, model_id, image_bytes=None, mime_type="image/jpeg", images=()
+    ):
         parts = [{"text": prompt}]
+        blobs = []
         if image_bytes is not None:
+            blobs.append(image_bytes)
+        blobs.extend(images or ())
+        if blobs:
             import base64
 
-            parts.append(
-                {
-                    "inline_data": {
-                        "mime_type": mime_type,
-                        "data": base64.b64encode(image_bytes).decode("ascii"),
+            for blob in blobs:
+                parts.append(
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": base64.b64encode(blob).decode("ascii"),
+                        }
                     }
-                }
-            )
+                )
         status, raw = _request(
             f"{API_ROOT}/models/{model_id}:generateContent",
             self.api_key,
