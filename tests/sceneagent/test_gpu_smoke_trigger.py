@@ -14,6 +14,9 @@ from sceneagent.gpu_smoke_trigger import (
     REQUIRE_QA_PM_PASS,
     check_push_diff,
     classify_push_diff,
+    _job_if,
+    _jobs,
+    label_cleanup_runs,
     label_trigger_allowed,
     paths_from_name_status,
     smoke_trigger_mapping,
@@ -333,7 +336,7 @@ def test_cancelled_run_cannot_reach_the_start_put():
     """
     text = WORKFLOW.read_text(encoding="utf-8")
     assert [
-        item for item in workflow_safety_findings(text) if "cancelled" in item
+        item for item in workflow_safety_findings(text) if "!cancelled()" in item
     ] == []
     mutant = text.replace("      !cancelled() &&\n", "", 1)
     killed = [item for item in workflow_safety_findings(mutant) if "cancelled" in item]
@@ -355,6 +358,31 @@ def test_cancelled_run_cannot_reach_the_start_put():
         "fruits_gpu_smoke step uses always() without !cancelled() "
         "on the path to the start PUT"
     ]
+
+
+def test_label_cleanup_runs_when_the_smoke_job_is_cancelled():
+    """Cleanup stays true for a cancelled smoke while the label is present.
+
+    ``!cancelled()`` on the smoke job skips a queued run. The cleanup if is
+    ``always()`` plus the same ``contains(…labels.*.name…)`` form the smoke
+    job already uses, so that skip does not leave ``run-gpu-smoke`` stuck.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    expression = _job_if(_jobs(text)["label_cleanup"])
+    assert label_cleanup_runs(
+        expression, smoke_result="cancelled", labels=["run-gpu-smoke"]
+    )
+    assert label_cleanup_runs(
+        expression, smoke_result="skipped", labels=["run-gpu-smoke"]
+    )
+    assert not label_cleanup_runs(
+        expression, smoke_result="cancelled", labels=["qa-pass"]
+    )
+    assert [
+        item
+        for item in workflow_safety_findings(text)
+        if "label cleanup must run" in item
+    ] == []
 
 
 def test_workflow_safety_contract():

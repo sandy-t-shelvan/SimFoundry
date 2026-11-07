@@ -83,6 +83,7 @@
 - A label smoke runs only when the pull request base ref is `main` or `Main_duplicate`, so the orchestrator checkout is not an unprotected branch. The concurrency group `gpu-smoke-58301075` is on the smoke job. An unrelated label does not enter that group.
 - A label or a request-file push refuses before any start PUT when instance 58301075 is stopped, not running, or in an unknown state. The stopped refusal is `instance stopped; start needs Sandeep`. Only an explicit `workflow_dispatch` may start the instance. A missing trigger refuses too.
 - A cancelled GPU smoke run does not start instance 58301075. The smoke job `if` is `always() && !cancelled()`, so a queued run that was cancelled does not send the start PUT. `label_cleanup` still uses `always()` and does not call Vast.
+- A cancelled GPU smoke still removes `run-gpu-smoke`. `label_cleanup` is `always()` when that label is on the pull request, including when `fruits_gpu_smoke` is cancelled or skipped, so the label can be added again.
 
 ## Not in this tree
 

@@ -183,11 +183,7 @@ jobs:
     needs: fruits_gpu_smoke
     if: >-
       always() &&
-      github.event_name == 'pull_request_target' &&
-      github.event.action == 'labeled' &&
-      github.event.label.name == 'run-gpu-smoke' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.fruits_gpu_smoke.result != 'skipped'
+      contains(github.event.pull_request.labels.*.name, 'run-gpu-smoke')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -471,6 +471,60 @@ def _smoke_trigger_findings(text: str) -> list[str]:
     ]
 
 
+def label_cleanup_runs(
+    expression: str, *, smoke_result: str, labels: list[str]
+) -> bool:
+    """Whether the label-cleanup ``if`` runs for this smoke result and labels.
+
+    ``always()`` is true, including after a cancel. A
+    ``contains(github.event.pull_request.labels.*.name, '…')`` clause is the
+    same form the smoke job uses for labels already on the pull request.
+    ``needs.fruits_gpu_smoke.result != '…'`` is false when the result is that
+    value, so ``!= 'skipped'`` does not run after a cancelled queue.
+    """
+    flat = " ".join(expression.split())
+    if flat.startswith(">-"):
+        flat = flat[2:].strip()
+    elif flat.startswith((">", "|")):
+        flat = flat[1:].strip()
+    if "always()" not in flat:
+        return False
+    saw_label_gate = False
+    for raw in flat.split("&&"):
+        clause = raw.strip()
+        if clause in {"", "always()"}:
+            continue
+        contained = re.fullmatch(
+            r"contains\(github\.event\.pull_request\.labels\.\*\.name, '([^']*)'\)",
+            clause,
+        )
+        if contained is not None:
+            name = contained.group(1)
+            if name not in labels:
+                return False
+            if name == RUN_GPU_SMOKE_LABEL:
+                saw_label_gate = True
+            continue
+        excluded = re.fullmatch(
+            r"needs\.fruits_gpu_smoke\.result != '([^']*)'",
+            clause,
+        )
+        if excluded is not None:
+            if smoke_result == excluded.group(1):
+                return False
+            continue
+        required = re.fullmatch(
+            r"needs\.fruits_gpu_smoke\.result == '([^']*)'",
+            clause,
+        )
+        if required is not None:
+            if smoke_result != required.group(1):
+                return False
+            continue
+        return False
+    return saw_label_gate
+
+
 def _always_without_cancelled(expression: str) -> bool:
     """True when ``always()`` is used and ``!cancelled()`` is not in the same if."""
     return "always()" in expression and "!cancelled()" not in expression
@@ -661,8 +715,23 @@ def workflow_safety_findings(text: str) -> list[str]:
     cleanup_if = _job_if(cleanup)
     if "always()" not in cleanup_if:
         findings.append("label cleanup must run on failure with if: always()")
-    if "needs.fruits_gpu_smoke.result != 'skipped'" not in cleanup_if:
-        findings.append("label cleanup must not run when the smoke job was skipped")
+    # A cancelled queued smoke is skipped by !cancelled(). Cleanup still has
+    # to remove run-gpu-smoke, so the if must stay true for result cancelled
+    # (and for skipped) when that label is on the pull request.
+    if not label_cleanup_runs(
+        cleanup_if, smoke_result="cancelled", labels=["run-gpu-smoke"]
+    ):
+        findings.append(
+            "label cleanup must run when the smoke job is cancelled "
+            "and run-gpu-smoke is present"
+        )
+    if not label_cleanup_runs(
+        cleanup_if, smoke_result="skipped", labels=["run-gpu-smoke"]
+    ):
+        findings.append(
+            "label cleanup must run when a cancelled queue skips the smoke job "
+            "and run-gpu-smoke is present"
+        )
     for job_name, job_text in jobs.items():
         if "timeout-minutes:" not in job_text:
             findings.append(f"{job_name} is missing timeout-minutes")
