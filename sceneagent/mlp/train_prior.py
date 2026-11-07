@@ -3,7 +3,8 @@
 The training table is the pilot labels plus the stratified labels. Each row
 is one object. The MLP runs on every in-mask Gaussian, the 33 outputs are
 averaged, and the loss is applied to that mean. Whole objects are held out,
-including the can, the shark, and the pillow. The saved npz is our
+including the can, the shark, and the pillow. The fitted-splat trainer
+then splits that holdout into validation and test. The saved npz is our
 checkpoint for Harvard section 3.4. It is not Harvard's prior.
 """
 
@@ -12,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +45,10 @@ PILOT_LABELS = ROOT / "pilot_labels.jsonl"
 STRATIFIED_LABELS = ROOT / "stratified_labels.jsonl"
 CHECKPOINT = ROOT / "physics_prior.npz"
 REPORT_PATH = ROOT / "train_report.json"
+# Fitted-splat run. This file is not the epoch-2 triangle checkpoint.
+SPLAT_CHECKPOINT = ROOT / "physics_prior_splat.npz"
+SPLAT_REPORT = ROOT / "train_report_splat.json"
+FITTED_MARKER_NAME = "fitted_splat.json"
 KNOWN_IDS = (
     "002_master_chef_can",
     "Weisshai_Great_White_Shark",
@@ -126,7 +132,9 @@ def holdout_ids(ids, rate=0.12):
     """Hold out whole objects. The three known ids are always in the holdout.
 
     The extra holdout is a stable hash of the object id, so the split does
-    not depend on row order. An id is never in both sets.
+    not depend on row order. An id is never in both the train set and this
+    holdout. The fitted trainer splits this pool into validation and test.
+    The triangle trainer still scores the whole holdout.
     """
 
     present = list(dict.fromkeys(ids))
@@ -141,6 +149,40 @@ def holdout_ids(ids, rate=0.12):
     if not held.issuperset(set(KNOWN_IDS) & set(present)):
         raise RuntimeError("known objects were not held out")
     return held
+
+
+def _validation_count(n_holdout):
+    """How many holdout ids become validation: 30%, rounded half up.
+
+    Half-up, not Python's round-half-even. ``(3 * n) / 10`` uses integers
+    so a binary ``0.3 * n`` cannot fall on the wrong side of a tie. A
+    remainder of 5 or more rounds away from zero (15 ids become 5, not 4).
+    A remainder below 5 rounds down.
+    """
+
+    if n_holdout < 0:
+        raise ValueError(f"holdout count is negative: {n_holdout}")
+    quotient, remainder = divmod(3 * int(n_holdout), 10)
+    if remainder >= 5:
+        return quotient + 1
+    return quotient
+
+
+def validation_and_test_ids(held_ids):
+    """Split one existing holdout into validation and test.
+
+    Sort by sha256(id) bytes, then by the id string. The first 30%, rounded
+    half up, is validation. The rest is test. There is no shuffle. Train ids
+    are not an argument. An id absent from ``held_ids`` is not added,
+    including the can, the shark, and the pillow.
+    """
+
+    ordered = sorted(
+        list(dict.fromkeys(held_ids)),
+        key=lambda obj_id: (hashlib.sha256(obj_id.encode("utf-8")).digest(), obj_id),
+    )
+    n_validation = _validation_count(len(ordered))
+    return ordered[:n_validation], ordered[n_validation:]
 
 
 def train_and_report(epochs=30, lr=1e-3, seed=0):
@@ -161,12 +203,13 @@ def train_and_report(epochs=30, lr=1e-3, seed=0):
             f"stopped before training: train {len(train_rows)} holdout {len(hold_rows)}"
         )
     prior = PhysicsPrior.initialize(seed)
-    history = _fit(prior, train_rows, epochs=epochs, lr=lr, seed=seed)
+    fit = _fit(prior, train_rows, epochs=epochs, lr=lr, seed=seed)
+    history = fit["train_loss"]
     prior.save(CHECKPOINT)
     loaded = PhysicsPrior.load(CHECKPOINT)
     train_score = score_split(loaded, train_rows)
     hold_score = score_split(loaded, hold_rows)
-    predictions = [_predict_row(loaded, row) for row in hold_rows]
+    predictions = [_predict_row(loaded, row, CHECKPOINT) for row in hold_rows]
     known = [row for row in predictions if row["id"] in KNOWN_IDS]
     known.sort(key=lambda row: KNOWN_IDS.index(row["id"]))
     report = {
@@ -281,11 +324,29 @@ def score_split(prior, rows):
     }
 
 
-def _fit(prior, rows, epochs, lr, seed):
+def _fit(prior, rows, epochs, lr, seed, checkpoint=None, val_rows=None):
+    """Adam on ``rows`` only.
+
+    Without ``val_rows``, early stopping reads the train loss and the file
+    keeps the last epoch, which is the triangle-row trainer. With
+    ``val_rows``, the same patience rule reads the validation loss, and the
+    saved weights are the earliest epoch with the lowest validation loss.
+    The test set is not an argument and is not read here.
+    """
+
+    if checkpoint is None:
+        checkpoint = CHECKPOINT
     params = [prior.w1, prior.b1, prior.w2, prior.b2, prior.w_out, prior.b_out]
     adam = _Adam(params, lr=lr)
     rng = np.random.default_rng(seed)
     history = []
+    val_history = []
+    best_val = math.inf
+    best_weights = None
+    best_epoch = None
+    selecting = val_rows is not None
+    if selecting and len(val_rows) < 1:
+        raise ValueError("validation split is empty")
     for epoch in range(epochs):
         order = rng.permutation(len(rows))
         total = 0.0
@@ -298,14 +359,51 @@ def _fit(prior, rows, epochs, lr, seed):
             adam.step([grads[name] for name in ("w1", "b1", "w2", "b2", "w_out", "b_out")])
         mean_loss = total / len(rows)
         history.append(mean_loss)
-        prior.save(CHECKPOINT)
-        print(f"epoch {epoch + 1} train_loss {mean_loss:.4f}", flush=True)
-        if epoch + 1 >= 12 and min(history[-4:]) > min(history[:-4]) * 0.995:
+        if selecting:
+            val_score = score_split(prior, val_rows)
+            val_loss = float(val_score["loss"])
+            if not math.isfinite(val_loss):
+                raise RuntimeError(f"validation loss became non-finite at epoch {epoch + 1}")
+            val_history.append(val_loss)
+            if val_loss < best_val:
+                best_val = val_loss
+                best_weights = [np.array(param, copy=True) for param in params]
+                best_epoch = epoch + 1
+            print(
+                f"epoch {epoch + 1} train_loss {mean_loss:.4f} "
+                f"val_loss {val_loss:.4f} val_material {val_score['material_accuracy']:.3f}",
+                flush=True,
+            )
+            stop_on = val_history
+        else:
+            prior.save(checkpoint)
+            print(f"epoch {epoch + 1} train_loss {mean_loss:.4f}", flush=True)
+            stop_on = history
+        # Threshold 0.995. From epoch 12, stop when the best of the last 4
+        # losses is not at least 0.5% below the best loss before that window.
+        # The comparison is strict, so a drop of exactly 0.5% does not stop.
+        # Fitted runs pass validation losses; the triangle run passes train loss.
+        if epoch + 1 >= 12 and min(stop_on[-4:]) > min(stop_on[:-4]) * 0.995:
             break
-    return history
+    if selecting:
+        for param, saved in zip(params, best_weights):
+            param[...] = saved
+        prior.save(checkpoint)
+    return {
+        "train_loss": history,
+        "val_loss": val_history if selecting else None,
+        "checkpoint_epoch": best_epoch if selecting else (len(history) or None),
+    }
 
 
-def _predict_row(prior, row):
+def _predict_row(prior, row, checkpoint):
+    """Vote one object with the checkpoint this prior was loaded from.
+
+    The triangle trainer passes ``physics_prior.npz``. The fitted-splat
+    trainer passes ``physics_prior_splat.npz``. ``vote_loaded_prior`` reads
+    that path when ``prior`` is omitted.
+    """
+
     features = _features(row)
     mask = np.ones(features.shape[0], dtype=bool)
     voted = vote_loaded_prior(
@@ -313,7 +411,7 @@ def _predict_row(prior, row):
         mask,
         vlm={"source": "vlm", "class": row["material"], "weight": VLM_WEIGHT},
         keyword=keyword_material(row["name"]),
-        checkpoint=CHECKPOINT,
+        checkpoint=checkpoint,
         name=row["name"],
         prior=prior,
     )
@@ -430,7 +528,214 @@ def _clip(grads, clip):
     return [grad * scale for grad in grads]
 
 
+def load_fitted_training_rows(root=None):
+    """Status=ok stratified labels whose ``prior_input.npy`` came from a fitted splat.
+
+    A triangle stand-in, including one whose opacity is the constant 0.99,
+    has no fitted marker and is not a training row. Pilot-only ids are not
+    read. The label file's path is ignored when it does not point at the
+    fitted array; the object directory is ``root/source/id``.
+    """
+
+    root = Path(root) if root is not None else ROOT
+    labels_path = root / "stratified_labels.jsonl"
+    if not labels_path.is_file():
+        raise FileNotFoundError(f"missing stratified labels at {labels_path}")
+    found = {}
+    with labels_path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            if record.get("status") != "ok" or record.get("id") in found:
+                continue
+            source = record.get("source")
+            obj_id = record.get("id")
+            if source not in {"ycb", "gso", "abo"} or not obj_id:
+                continue
+            directory = root / source / obj_id
+            prior_path = directory / "prior_input.npy"
+            marker_path = directory / FITTED_MARKER_NAME
+            if not prior_path.is_file() or not marker_path.is_file():
+                continue
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            if marker.get("kind") != "fitted" or marker.get("opacity_constant_099"):
+                continue
+            if float(marker.get("opacity_std") or 0.0) < 1e-3:
+                continue
+            shape = tuple(int(value) for value in np.load(prior_path, mmap_mode="r").shape)
+            if len(shape) != 2 or shape[1] != 912 or shape[0] < 1:
+                continue
+            for key in ("material", "body_type", "collision", "log_mass", "log_density", "rigidity", "deformability"):
+                if record.get(key) is None:
+                    break
+            else:
+                found[obj_id] = {
+                    "id": obj_id,
+                    "source": source,
+                    "name": record.get("name") or obj_id,
+                    "status": "ok",
+                    "material": record["material"],
+                    "body_type": record["body_type"],
+                    "collision": record["collision"],
+                    "log_mass": float(record["log_mass"]),
+                    "log_density": float(record["log_density"]),
+                    "rigidity": float(record["rigidity"]),
+                    "deformability": float(record["deformability"]),
+                    "prior_input": str(prior_path),
+                    "extent_m": record.get("extent_m"),
+                }
+    return list(found.values())
+
+
+def train_fitted_and_report(epochs=30, lr=1e-3, seed=0):
+    """Train on fitted-splat rows and write ``physics_prior_splat.npz``.
+
+    Does not read or write ``physics_prior.npz``. Slots 28–32 stay masked.
+    Train ids are the fitted ids ``holdout_ids`` does not select (rate 0.12,
+    plus the can, the shark, and the pillow when those ids are present).
+    That holdout is sorted by sha256(id) then the id string. The first 30%,
+    rounded half up, is validation. The rest is test. Early stopping and the
+    saved checkpoint use validation loss. The factor is 0.995. The test set
+    is scored once after that checkpoint is chosen.
+    """
+
+    rows = load_fitted_training_rows()
+    if len(rows) < 12:
+        raise SystemExit(f"stopped before training: only {len(rows)} fitted rows")
+    reason = labels_should_stop(rows)
+    if reason:
+        raise SystemExit(f"stopped before training: {reason}")
+    by_source = _count_sources(rows)
+    held = holdout_ids([row["id"] for row in rows])
+    validation_ids, test_ids = validation_and_test_ids(held)
+    by_id = {row["id"]: row for row in rows}
+    missing = [obj_id for obj_id in validation_ids + test_ids if obj_id not in by_id]
+    if missing:
+        raise SystemExit(f"stopped before training: holdout ids without rows {missing[:5]}")
+    validation_set = set(validation_ids)
+    test_set = set(test_ids)
+    train_rows = [row for row in rows if row["id"] not in held]
+    val_rows = [by_id[obj_id] for obj_id in validation_ids]
+    test_rows = [by_id[obj_id] for obj_id in test_ids]
+    if {row["id"] for row in train_rows} & (validation_set | test_set):
+        raise RuntimeError("train ids moved into validation or test")
+    if (validation_set & test_set) or ((validation_set | test_set) != set(held)):
+        raise SystemExit("stopped before training: validation and test do not partition the holdout")
+    if len(train_rows) < 10 or len(val_rows) < 1 or len(test_rows) < 1:
+        raise SystemExit(
+            f"stopped before training: train {len(train_rows)} "
+            f"validation {len(val_rows)} test {len(test_rows)}"
+        )
+    if SPLAT_CHECKPOINT.resolve() == CHECKPOINT.resolve():
+        raise SystemExit("refusing to write the fitted prior over physics_prior.npz")
+    print(
+        f"split n_train {len(train_rows)} n_validation {len(val_rows)} n_test {len(test_rows)}",
+        flush=True,
+    )
+    print(
+        "early_stopping validation_loss threshold 0.995 window 4 min_epoch 12",
+        flush=True,
+    )
+    prior = PhysicsPrior.initialize(seed)
+    fit = _fit(
+        prior,
+        train_rows,
+        epochs=epochs,
+        lr=lr,
+        seed=seed,
+        checkpoint=SPLAT_CHECKPOINT,
+        val_rows=val_rows,
+    )
+    history = fit["train_loss"]
+    prior.save(SPLAT_CHECKPOINT)
+    loaded = PhysicsPrior.load(SPLAT_CHECKPOINT)
+    train_score = score_split(loaded, train_rows)
+    val_score = score_split(loaded, val_rows)
+    test_score = score_split(loaded, test_rows)
+    predictions = [_predict_row(loaded, row, SPLAT_CHECKPOINT) for row in test_rows]
+    known = [row for row in predictions if row["id"] in KNOWN_IDS]
+    known.sort(key=lambda row: KNOWN_IDS.index(row["id"]))
+    present = {row["id"] for row in rows}
+    report = {
+        "checkpoint": str(SPLAT_CHECKPOINT),
+        "weights": "ours",
+        "section": "3.4",
+        "fitted_splat": True,
+        "gemini_called": False,
+        "acquire_called": False,
+        "n_fitted": len(rows),
+        "n_train": len(train_rows),
+        "n_validation": len(val_rows),
+        "n_test": len(test_rows),
+        "n_holdout": len(held),
+        "validation_fraction": 0.3,
+        "validation_rounding": "half-up",
+        "holdout_order": "sha256(id), id",
+        "seed": seed,
+        "early_stop_metric": "validation_loss",
+        "early_stop_threshold": 0.995,
+        "early_stop_window": 4,
+        "early_stop_min_epoch": 12,
+        "checkpoint_rule": "earliest epoch with the lowest validation loss",
+        "sources": by_source,
+        "epochs_ran": len(history),
+        "checkpoint_epoch": fit["checkpoint_epoch"],
+        "train_loss_first": history[0] if history else None,
+        "train_loss_last": history[-1] if history else None,
+        "train_loss_by_epoch": history,
+        "val_loss_by_epoch": fit["val_loss"],
+        "val_loss_best": min(fit["val_loss"]) if fit["val_loss"] else None,
+        "train": train_score,
+        "validation": val_score,
+        "test": test_score,
+        "train_ids": [row["id"] for row in train_rows],
+        "validation_ids": validation_ids,
+        "test_ids": test_ids,
+        "known_ids_in_validation": [obj_id for obj_id in KNOWN_IDS if obj_id in validation_set],
+        "known_ids_in_test": [obj_id for obj_id in KNOWN_IDS if obj_id in test_set],
+        "known_ids_absent": [obj_id for obj_id in KNOWN_IDS if obj_id not in present],
+        "test_predictions": predictions,
+        "known": known,
+        "w_out_shape": [32, 33],
+        "n_materials": 10,
+        "n_body": 6,
+        "n_collision": 8,
+        "n_numeric": 9,
+        "masked_slots": [28, 29, 30, 31, 32],
+        "materials": list(MATERIAL_CLASSES),
+        "body_types": list(BODY_TYPES),
+        "collision_primitives": list(COLLISION_PRIMITIVES),
+    }
+    convert_report = ROOT / "fitted_convert_report.json"
+    if convert_report.is_file():
+        report["conversion"] = json.loads(convert_report.read_text(encoding="utf-8"))
+    SPLAT_REPORT.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"fitted epochs {len(history)} checkpoint_epoch {fit['checkpoint_epoch']} "
+        f"validation {_format_metrics(val_score)}",
+        flush=True,
+    )
+    print(f"test {_format_metrics(test_score)} wrote {SPLAT_CHECKPOINT}", flush=True)
+    return report
+
+
+def _format_metrics(score):
+    return (
+        f"material {score['material_accuracy']:.6f} "
+        f"body {score['body_accuracy']:.6f} "
+        f"collision {score['collision_accuracy']:.6f} "
+        f"log_mass_mae {score['log_mass_mae']:.6f} "
+        f"log_density_mae {score['log_density_mae']:.6f} "
+        f"rigidity_mae {score['rigidity_mae']:.6f} "
+        f"deformability_mae {score['deformability_mae']:.6f}"
+    )
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "fitted":
+        train_fitted_and_report()
+        return
     train_and_report()
 
 

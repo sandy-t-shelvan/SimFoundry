@@ -3,6 +3,10 @@
 No Gemini calls and no downloaded meshes. Tensors in the training test are fake.
 """
 
+import hashlib
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -14,7 +18,19 @@ from sceneagent.mlp.stratum import (
     labels_should_stop,
     order_bucket,
 )
-from sceneagent.mlp.train_prior import _Adam, holdout_ids, loss_and_gradients
+from sceneagent.mlp.train_prior import (
+    CHECKPOINT,
+    SPLAT_CHECKPOINT,
+    _Adam,
+    _fit,
+    _predict_row,
+    _validation_count,
+    holdout_ids,
+    loss_and_gradients,
+    train_and_report,
+    train_fitted_and_report,
+    validation_and_test_ids,
+)
 from sceneagent.taxonomy import MATERIAL_CLASSES
 
 
@@ -83,6 +99,189 @@ def test_identity_holdout_includes_the_three_known_objects():
     train = [obj_id for obj_id in ids if obj_id not in held]
     assert set(train).isdisjoint(held)
     assert "003_cracker_box" in train
+    validation, test = validation_and_test_ids(held)
+    assert len(validation) == _validation_count(len(held)) == 1
+    assert set(validation) | set(test) == set(held)
+    assert set(validation).isdisjoint(test)
+    assert set(train).isdisjoint(validation)
+    assert set(train).isdisjoint(test)
+    assert "003_cracker_box" not in validation
+    assert "003_cracker_box" not in test
+
+
+def test_validation_is_thirty_percent_of_the_holdout_in_sha256_order():
+    held = {f"id-{index:04d}" for index in range(50)}
+    held.update(("002_master_chef_can", "Weisshai_Great_White_Shark", "B079TXJCR5"))
+    validation, test = validation_and_test_ids(held)
+    ordered = sorted(
+        held,
+        key=lambda obj_id: (hashlib.sha256(obj_id.encode("utf-8")).digest(), obj_id),
+    )
+    # 53 * 0.3 = 15.9, half-up to 16. Python round-half-even is not used.
+    assert _validation_count(len(ordered)) == 16
+    assert _validation_count(15) == 5
+    assert _validation_count(5) == 2
+    assert _validation_count(1) == 0
+    assert _validation_count(462) == 139
+    assert validation == ordered[:16]
+    assert test == ordered[16:]
+    assert validation != sorted(held)[:16]
+    assert set(validation).isdisjoint(test)
+    again_validation, again_test = validation_and_test_ids(list(reversed(tuple(sorted(held)))))
+    assert again_validation == validation
+    assert again_test == test
+    absent_validation, absent_test = validation_and_test_ids(["only-object"])
+    assert absent_validation == []
+    assert absent_test == ["only-object"]
+    assert "002_master_chef_can" not in absent_validation
+    assert "002_master_chef_can" not in absent_test
+
+
+def test_saved_462_holdout_uses_139_validation_ids_not_the_first_30():
+    """The backed-up 462-id holdout is split in sha256 order, half up.
+
+    3 * 462 = 1386, and 1386 / 10 leaves remainder 6, so half-up yields 139
+    validation ids and 323 test ids. The first 30 lexicographic ids are not
+    the validation slice. Train membership stays the complement: 3736 - 462.
+    """
+
+    report_path = (
+        Path(__file__).resolve().parents[2]
+        / "data"
+        / "mlp"
+        / "train_report_splat_holdout462.json"
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    held = report["holdout_ids"]
+    assert report["n_holdout"] == len(held) == len(set(held)) == 462
+    assert report["n_fitted"] - 462 == report["n_train"] == 3274
+    validation, test = validation_and_test_ids(held)
+    assert _validation_count(462) == 139
+    assert len(validation) == 139
+    assert len(test) == 323
+    assert validation[0] == "B07F3T4RSD"
+    assert validation[-1] == "B07BMTNH22"
+    assert test[0] == "B071J4SDZZ"
+    lexical = sorted(set(held))
+    assert validation != lexical[:30]
+    assert validation != lexical[:139]
+    assert set(validation).isdisjoint(test)
+    assert set(validation) | set(test) == set(held)
+    for known in ("002_master_chef_can", "Weisshai_Great_White_Shark", "B079TXJCR5"):
+        assert known in report["known_ids_absent"]
+        assert known not in held
+        assert known not in validation
+        assert known not in test
+
+
+def test_train_ids_stay_out_of_the_validation_and_test_slices():
+    ids = [f"obj-{index:04d}" for index in range(400)]
+    ids.extend(("002_master_chef_can", "Weisshai_Great_White_Shark", "B079TXJCR5"))
+    held = holdout_ids(list(reversed(ids)))
+    validation, test = validation_and_test_ids(held)
+    train = [obj_id for obj_id in ids if obj_id not in held]
+    assert len(validation) == _validation_count(len(held))
+    assert len(validation) + len(test) == len(held)
+    assert len(train) == len(ids) - len(held)
+    assert set(train).isdisjoint(validation)
+    assert set(train).isdisjoint(test)
+    assert set(validation) | set(test) == set(held)
+    for known in ("002_master_chef_can", "Weisshai_Great_White_Shark", "B079TXJCR5"):
+        assert known in validation or known in test
+        assert known not in train
+
+
+def _zero_grads(prior):
+    return {
+        name: np.zeros_like(getattr(prior, name))
+        for name in ("w1", "b1", "w2", "b2", "w_out", "b_out")
+    }
+
+
+def test_validation_loss_selects_the_checkpoint_and_can_stop(tmp_path, monkeypatch):
+    prior = PhysicsPrior.initialize(0)
+    train_rows = [{"id": "train-a", "prior_input": "unused"}]
+    val_rows = [{"id": "val-a", "prior_input": "unused"}]
+    seen = []
+    marker = {"n": 0}
+
+    def fake_features(row):
+        seen.append(row["id"])
+        return np.zeros((2, 912), dtype=np.float64)
+
+    def fake_loss_and_gradients(model, features, label):
+        seen.append(label["id"])
+        marker["n"] += 1
+        model.w1[0, 0] = float(marker["n"])
+        return 1.0, _zero_grads(model)
+
+    schedule = [8, 7, 6, 5, 4, 3, 2, 1, 1.5, 1.5, 1.5, 1.5, 9]
+    snapshots = []
+
+    def fake_score(model, rows):
+        assert [row["id"] for row in rows] == ["val-a"]
+        snapshots.append(np.array(model.w1, copy=True))
+        return {"loss": schedule[len(snapshots) - 1], "material_accuracy": 0.0}
+
+    monkeypatch.setattr("sceneagent.mlp.train_prior._features", fake_features)
+    monkeypatch.setattr("sceneagent.mlp.train_prior.loss_and_gradients", fake_loss_and_gradients)
+    monkeypatch.setattr("sceneagent.mlp.train_prior.score_split", fake_score)
+    checkpoint = tmp_path / "physics_prior_splat.npz"
+    fit = _fit(
+        prior,
+        train_rows,
+        epochs=16,
+        lr=1e-3,
+        seed=0,
+        checkpoint=checkpoint,
+        val_rows=val_rows,
+    )
+    assert fit["checkpoint_epoch"] == 8
+    assert len(fit["train_loss"]) == 12
+    assert fit["val_loss"] == schedule[:12]
+    assert set(seen) == {"train-a"}
+    assert len(snapshots) == 12
+    assert not np.array_equal(snapshots[7], snapshots[-1])
+    assert np.array_equal(prior.w1, snapshots[7])
+    loaded = PhysicsPrior.load(checkpoint)
+    assert np.array_equal(loaded.w1, snapshots[7])
+
+
+def test_triangle_fit_keeps_the_last_epoch_and_stops_on_train_loss(tmp_path, monkeypatch):
+    prior = PhysicsPrior.initialize(0)
+    train_rows = [{"id": "train-a", "prior_input": "unused"}]
+    marker = {"n": 0}
+    scheduled = iter([5, 4, 3, 2, 1, 0.5, 0.4, 0.3, 0.9, 0.9, 0.9, 0.9, 0.1])
+
+    def fake_features(row):
+        return np.zeros((2, 912), dtype=np.float64)
+
+    def fake_loss_and_gradients(model, features, label):
+        marker["n"] += 1
+        model.w1[0, 0] = float(marker["n"])
+        return next(scheduled), _zero_grads(model)
+
+    def fake_score(model, rows):
+        raise AssertionError("triangle fit must not score a validation split")
+
+    monkeypatch.setattr("sceneagent.mlp.train_prior._features", fake_features)
+    monkeypatch.setattr("sceneagent.mlp.train_prior.loss_and_gradients", fake_loss_and_gradients)
+    monkeypatch.setattr("sceneagent.mlp.train_prior.score_split", fake_score)
+    fit = _fit(
+        prior,
+        train_rows,
+        epochs=16,
+        lr=1e-3,
+        seed=0,
+        checkpoint=tmp_path / "physics_prior.npz",
+    )
+    assert fit["val_loss"] is None
+    assert fit["checkpoint_epoch"] == 12
+    assert len(fit["train_loss"]) == 12
+    assert marker["n"] == 12
+    assert prior.w1[0, 0] > 11.0
+    loaded = PhysicsPrior.load(tmp_path / "physics_prior.npz")
+    assert loaded.w1[0, 0] > 11.0
 
 
 def test_training_step_ignores_slots_28_through_32_and_reduces_loss():
@@ -169,3 +368,64 @@ def test_vote_writes_log_mass_once_and_scales_unknown(tmp_path):
     assert unknown["scores"]["unknown"] == pytest.approx(0.4 * unknown["proposal"]["weight"] + 0.4)
     assert unknown["record"]["log_mass"] == pytest.approx(1.5)
     assert unknown["record"]["mass_kg"] is None
+
+
+def test_fitted_vote_names_the_splat_checkpoint_not_the_triangle_file():
+    import ast
+    import inspect
+
+    def checkpoint_name(function):
+        tree = ast.parse(inspect.getsource(function))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_predict_row"
+        ]
+        assert len(calls) == 1
+        assert len(calls[0].args) == 3
+        assert isinstance(calls[0].args[2], ast.Name)
+        return calls[0].args[2].id
+
+    assert checkpoint_name(train_fitted_and_report) == "SPLAT_CHECKPOINT"
+    assert checkpoint_name(train_and_report) == "CHECKPOINT"
+
+
+def test_predict_row_forwards_the_splat_checkpoint(tmp_path, monkeypatch):
+    features = tmp_path / "row.npy"
+    np.save(features, np.zeros((2, 912), dtype=np.float64))
+    seen = {}
+
+    def fake_vote(array, mask, *, vlm, keyword, checkpoint, name, prior=None):
+        seen["checkpoint"] = checkpoint
+        return {
+            "proposal": {"source": "physics_prior", "class": "plastic", "weight": 0.5},
+            "decoded": {
+                "material": "plastic",
+                "body_type": "rigid",
+                "collision": "box",
+                "log_mass": -1.0,
+                "log_density": 6.0,
+                "rigidity": 0.9,
+                "deformability": 0.1,
+            },
+            "winner": "plastic",
+            "scores": {"plastic": 1.5},
+            "record": {"body_type": "rigid"},
+        }
+
+    monkeypatch.setattr("sceneagent.mlp.train_prior.vote_loaded_prior", fake_vote)
+    row = {
+        "id": "obj",
+        "source": "abo",
+        "name": "cup",
+        "material": "plastic",
+        "body_type": "rigid",
+        "collision": "box",
+        "prior_input": str(features),
+    }
+    predicted = _predict_row(object(), row, SPLAT_CHECKPOINT)
+    assert seen["checkpoint"] == SPLAT_CHECKPOINT
+    assert seen["checkpoint"] != CHECKPOINT
+    assert seen["checkpoint"].name == "physics_prior_splat.npz"
+    assert predicted["proposal"]["source"] == "physics_prior"
+    assert predicted["vote_winner"] == "plastic"

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Section 3.4: the fitted-splat vote loads `data/mlp/physics_prior_splat.npz`. The weights are ours. The epoch-2 `physics_prior.npz` stays the triangle-row file. The Per-Gaussian MLP row stays missing because Harvard's weights are not released. Young's modulus, Poisson's ratio, and the rendering material stay unset.
 - The MLP download check already accepts an RGB or RGBA photo and a color palette, and it rejects grayscale and LA. `test_rgba_image_passes` was failing because the sample source stayed `ycb` while the manifest said `gso`. The sample source now matches that manifest. An RGBA photo does not waive a source mismatch.
 - Added a `sceneagent` package on the SimFoundry fork. It does not change pipelines A, B, or C.
 - Phase 1 writes the paper's file contract: plan, manifest, ledger, material vote, association cuts, model-free sisters, a USD physics contract (JSON only), and a scripted place grid with Wilson intervals.
