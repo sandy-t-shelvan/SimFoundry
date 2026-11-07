@@ -24,6 +24,7 @@ from sceneagent.colmap_stage import (
     run_poses,
     sample_frame_command,
     _run,
+    _stop_our_child,
 )
 from sceneagent.reconstruction_gate import (
     MAX_REPROJ_PX,
@@ -135,31 +136,51 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+_MEDIA_FRAMES = 20
+
+
 def _synthetic_video(directory: Path) -> tuple[Path, str]:
     path = directory / "synthetic.mp4"
-    subprocess.run(
-        [
-            "ffmpeg",
-            "-y",
-            "-v",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=size=64x64:rate=10:duration=2",
-            "-pix_fmt",
-            "yuv420p",
-            str(path),
-        ],
-        check=True,
-    )
+    path.write_bytes(b"synthetic-video-bytes")
     return path, _sha256(path)
+
+
+def _install_media_stubs(directory: Path, frames: int = _MEDIA_FRAMES) -> None:
+    """ffmpeg and ffprobe stand-ins so the unit job does not need the binaries."""
+    directory.mkdir(parents=True, exist_ok=True)
+    ffmpeg = directory / "ffmpeg"
+    ffmpeg.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from PIL import Image\n"
+        "if '-h' in sys.argv:\n"
+        "    sys.stdout.write('-fps_mode passthrough\\n')\n"
+        "    raise SystemExit(0)\n"
+        "pattern = Path(sys.argv[-1])\n"
+        "pattern.parent.mkdir(parents=True, exist_ok=True)\n"
+        "image = Image.new('RGB', (8, 8), (40, 80, 120))\n"
+        f"for index in range(1, {frames} + 1):\n"
+        "    image.save(pattern.parent / f'{index:04d}.jpg', quality=95)\n",
+        encoding="utf-8",
+    )
+    ffmpeg.chmod(0o755)
+    probe = directory / "ffprobe"
+    probe.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "print(json.dumps({'streams': [{'nb_read_frames': '%s', 'nb_frames': '%s', "
+        "'width': 8, 'height': 8, 'duration': '2.0'}]}))\n" % (frames, frames),
+        encoding="utf-8",
+    )
+    probe.chmod(0o755)
 
 
 def _install_stub(
     directory: Path, banner: str = "COLMAP 3.11.1 -- Structure-from-Motion\n"
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
+    _install_media_stubs(directory)
     stub = directory / "colmap"
     needle = 'sys.stdout.write("COLMAP 3.11.1 -- Structure-from-Motion\\n")'
     text = _STUB if banner == "COLMAP 3.11.1 -- Structure-from-Motion\n" else _STUB.replace(
@@ -202,12 +223,13 @@ def test_pinned_fruits_bytes_match_this_checkout():
     assert FRUITS.stat().st_size == APPROVED_BYTES == 1733022
     assert _sha256(FRUITS) == APPROVED_SHA256
     assert pinned_file_bytes_match(ROOT) is True
-    probed = _ffprobe(FRUITS)
-    assert fruits_probe_matches(probed) is True
-    assert probed["frames"] == APPROVED_FRAMES == 452
-    assert probed["width"] == APPROVED_WIDTH == 1280
-    assert probed["height"] == APPROVED_HEIGHT == 720
-    assert f"{probed['duration_s']:.3f}" == APPROVED_DURATION_ROUNDED_S == "15.067"
+    if shutil.which("ffprobe"):
+        probed = _ffprobe(FRUITS)
+        assert fruits_probe_matches(probed) is True
+        assert probed["frames"] == APPROVED_FRAMES == 452
+        assert probed["width"] == APPROVED_WIDTH == 1280
+        assert probed["height"] == APPROVED_HEIGHT == 720
+        assert f"{probed['duration_s']:.3f}" == APPROVED_DURATION_ROUNDED_S == "15.067"
 
 
 def test_native_command_is_passthrough_and_the_old_api_is_unchanged():
@@ -507,10 +529,10 @@ def test_reuse_and_version_and_gate_failure(tmp_path, monkeypatch):
 
 def test_offline_dry_run_registers_every_native_frame(tmp_path, monkeypatch):
     video, digest = _synthetic_video(tmp_path)
-    probed = _ffprobe(video)
-    assert probed["frames"] > 16
     _install_stub(tmp_path / "bin")
     monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+    probed = _ffprobe(video)
+    assert probed["frames"] > 16
     monkeypatch.delenv("SF5_STUB_REPROJ", raising=False)
     output = tmp_path / "dry" / "run"
     code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
@@ -711,6 +733,8 @@ def test_native_run_passes_the_scaled_timeout(tmp_path, monkeypatch):
     from sceneagent.sf5_colmap_evidence import native_timeouts
 
     video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
     probed = _ffprobe(video)
     seen = {}
 
@@ -719,8 +743,6 @@ def test_native_run_passes_the_scaled_timeout(tmp_path, monkeypatch):
         raise EvidenceError("stop after reading the timeout")
 
     monkeypatch.setattr("sceneagent.sf5_colmap_evidence.run_poses", fake_run_poses)
-    _install_stub(tmp_path / "bin")
-    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
     code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(tmp_path / "timeout" / "run")))
     assert code == 2
     assert seen["colmap_timeout_s"] == native_timeouts(probed["frames"])["colmap_timeout_s"]
@@ -748,6 +770,19 @@ def test_calibration_failure_stays_a_reject(tmp_path, monkeypatch):
     assert ledger["failed_step"] == "color_calibration"
     assert ledger["reason"] == "calibration boom"
     assert "was off" not in ledger["reason"]
+
+
+def test_timed_out_stage_reaps_a_child_that_ignores_terminate():
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+        ]
+    )
+    _stop_our_child(proc)
+    assert proc.poll() is not None
+    assert proc.returncode is not None
 
 
 def test_during_sample_does_not_stop_colmap():

@@ -507,8 +507,8 @@ def _read_stream(stream, chunks):
 
 
 def _start_stream_readers(proc):
-    stdout_chunks = []
-    stderr_chunks = []
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
     threads = (
         threading.Thread(
             target=_read_stream, args=(proc.stdout, stdout_chunks), daemon=True
@@ -537,6 +537,7 @@ def _stop_our_child(proc):
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait()
 
 
 def _run(command, timeout_s=600, *, on_gpu_sample=None, sample_interval_s=10):

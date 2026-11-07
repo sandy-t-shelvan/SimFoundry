@@ -22,7 +22,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from sceneagent.colmap_stage import run_poses, sample_frame_command
+from sceneagent.colmap_stage import run_poses
 from sceneagent.reconstruction_gate import EVIDENCE_DIRNAME
 
 PINNED_BASE_SHA = "d60c7467640aeb63fc3d7269e8d01c54da7126fa"
@@ -104,7 +104,11 @@ def native_timeouts(frame_count: int) -> dict[str, int]:
     The 16-frame sample keeps 180s for ffmpeg and 900s for each COLMAP step.
     A longer sequence is allowed that budget once per 16 frames, rounded up.
     """
-    if isinstance(frame_count, bool) or not isinstance(frame_count, int) or frame_count <= 0:
+    if (
+        isinstance(frame_count, bool)
+        or not isinstance(frame_count, int)
+        or frame_count <= 0
+    ):
         raise EvidenceError("frame count for the step ceiling is missing")
     blocks = (frame_count + SHORT_RUN_FRAMES - 1) // SHORT_RUN_FRAMES
     return {
@@ -409,7 +413,7 @@ def sift_match_bytes(num_matches: int) -> int:
 def accepted_free_mib_budget(value: Any) -> int:
     """Accept only the explicit proposed 6144 MiB budget. There is no default."""
     proposed = value == PROPOSED_MIN_FREE_MIB or value == str(PROPOSED_MIN_FREE_MIB)
-    if isinstance(value, bool) or isinstance(value, float) or not proposed:
+    if isinstance(value, (bool, float)) or not proposed:
         raise GpuBudgetError(
             "GPU free-memory budget is absent or not the proposed 6144 MiB"
         )
@@ -557,7 +561,9 @@ def observed_code_sha(repo: Path) -> str | None:
 
 
 def base_is_ancestor(repo: Path) -> bool:
-    code, _text = git_text(repo, ["merge-base", "--is-ancestor", PINNED_BASE_SHA, "HEAD"])
+    code, _text = git_text(
+        repo, ["merge-base", "--is-ancestor", PINNED_BASE_SHA, "HEAD"]
+    )
     return code == 0
 
 
@@ -867,13 +873,17 @@ def execute(request: dict[str, Any]) -> int:
         if not dry_run and len(frames) != APPROVED_FRAMES:
             raise EvidenceError("extracted frame count is not 452")
         if len(frames) <= 16 and dry_run:
-            raise EvidenceError("dry run extracted too few frames to show there is no cap")
+            raise EvidenceError(
+                "dry run extracted too few frames to show there is no cap"
+            )
         outcome = calibration_outcome(poses)
         if outcome == "off":
             raise EvidenceError("color calibration was off")
         if outcome == "failed":
             document["failed_step"] = poses.get("failed_step") or "color_calibration"
-            document["reason"] = poses.get("reason") or "color calibration produced no report"
+            document["reason"] = (
+                poses.get("reason") or "color calibration produced no report"
+            )
             return _finish(prefix, kind="reject", document=document)
         evidence = evidence_dir_for(output)
         if not evidence_path_allowed(output, evidence):
@@ -982,13 +992,17 @@ def render_launch_command(code_sha: str) -> str:
         "gpu_free_mib_min: 6144",
         "This command is exact. It is not cleared to run.",
         "Blocked until: " + "; ".join(AUTHORIZATION_GATES) + ".",
-        "The 6144 MiB figure is an Engineering Lead estimate from "
-        "2026-11-06 6:47 PM ET. It is unmeasured and is not launch authorization.",
+        (
+            "The 6144 MiB figure is an Engineering Lead estimate from "
+            "2026-11-06 6:47 PM ET. It is unmeasured and is not launch authorization."
+        ),
         "Direct user authorization is also required.",
         "Do not execute this file.",
         "Input is the pinned relative path under the checkout of the code SHA.",
-        "The output prefix must be a real directory chain on instance "
-        f"{INSTANCE_ID}. Symlink components are rejected before read.",
+        (
+            "The output prefix must be a real directory chain on instance "
+            f"{INSTANCE_ID}. Symlink components are rejected before read."
+        ),
         "No SSH, no package upload, and no workflow dispatch.",
         "",
         " ".join(command),
