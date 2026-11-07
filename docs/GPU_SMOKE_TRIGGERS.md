@@ -6,6 +6,25 @@ that id. The workflow does not create, rent, resize, destroy, start, or stop
 an instance. One run at a time: concurrency group `gpu-smoke-59601312`, and
 an in-progress run is not cancelled.
 
+SSH uses one fixed private key, the Actions secret `VAST_SSH_PRIVATE_KEY`.
+This repository does not contain that secret, and this change does not create
+it. The runner writes it to a mode-0600 temp file and deletes that file on
+exit, including when SIGTERM raises `SystemExit` so `finally` runs. The smoke
+does not generate, attach, or delete a remote authorized key. Keys already on
+the instance stay until someone removes them there.
+
+`StrictHostKeyChecking=yes`. The pin is one public known_hosts line in
+`ci/vast-ssh-known-host`. That file is a comment until an operator replaces
+it, and a comment-only file is refused before SSH. There is no `ssh-keyscan`
+and no trust-on-first-use. A missing secret or a missing pin fails before a
+connection, and the failure text does not include the secret or the pin line.
+
+The fixed key remains authorized across runs. Revocation and rotation are
+manual. That is less isolation than a per-run key, and it is what removes the
+dependency on Vast's attach and detach API. Keep the Actions secret restricted,
+keep the host pin reviewed, and rotate the key when it should stop working.
+This workflow does not add an approval loop.
+
 The manifest records the trigger (`dispatch`, `label`, or `request-file`),
 the actor, the commit SHA under test, and `secrets_forwarded: false`.
 `VAST_API_KEY` stays in the Actions secret. It is not forwarded over SSH, not

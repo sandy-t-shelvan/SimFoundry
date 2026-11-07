@@ -146,6 +146,7 @@ jobs:
         working-directory: orchestrator
         env:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
+          VAST_SSH_PRIVATE_KEY: ${{ secrets.VAST_SSH_PRIVATE_KEY }}
           SMOKE_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event_name == 'pull_request_target' && 'label' || github.event_name == 'push' && 'request-file' || 'invalid' }}
           SMOKE_ACTOR: ${{ github.actor }}
           SMOKE_SHA: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}

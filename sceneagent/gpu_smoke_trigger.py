@@ -623,6 +623,10 @@ def workflow_safety_findings(text: str) -> list[str]:
         )
     if text.count("secrets.VAST_API_KEY") != 1:
         findings.append("VAST_API_KEY must appear in exactly one step")
+    if text.count("secrets.VAST_SSH_PRIVATE_KEY") != 1:
+        findings.append(
+            "VAST_SSH_PRIVATE_KEY must be passed from the Actions secret in exactly one step"
+        )
     if "--instance-id 59601312" not in text:
         findings.append("instance id must be the literal 59601312")
     if "LABEL_SMOKE_GATE" not in text:
@@ -691,6 +695,14 @@ def workflow_safety_findings(text: str) -> list[str]:
             findings.append("the keyed step must run sceneagent.vast_smoke")
         if "--instance-id 59601312" not in run:
             findings.append("the keyed step must pass instance 59601312 as a literal")
+        if "VAST_SSH_PRIVATE_KEY" in run:
+            findings.append(
+                "keyed run script must not print or interpolate the ssh private key"
+            )
+        if "secrets.VAST_SSH_PRIVATE_KEY" not in step:
+            findings.append(
+                "the keyed step must receive VAST_SSH_PRIVATE_KEY from the Actions secret"
+            )
         for banned in (
             "pip install",
             "cd ",

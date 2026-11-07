@@ -1,0 +1,6 @@
+# Not configured.
+# Replace this comment with one OpenSSH known_hosts line for instance
+# 59601312 before a GPU smoke can connect. The line is a public host key,
+# not a private key. A comment-only file is refused before SSH.
+# StrictHostKeyChecking=yes. Do not use ssh-keyscan output from an
+# unattended run as a substitute for a reviewed pin.
