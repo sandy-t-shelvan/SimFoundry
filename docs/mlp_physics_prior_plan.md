@@ -1,3 +1,5 @@
+The GitHub instructions for this branch are in [mlp_physics_prior.md](mlp_physics_prior.md). Follow that file for what happened, where the Gemini labels and fitted rows are, and how to finish. A copy onto Vast instance 59601312 was requested on 7 November 2026 and still has to be checked before that machine is used. This plan stays as the build record.
+
 # Physics-prior MLP
 
 This branch holds the section 3.4 physics prior trained in this repository, the fitted-splat data path, and the validation split the next retrain will use. The weights are ours. They correspond to the project's section 3.4 prior. They are not a released Harvard checkpoint. The gap-matrix row for the per-Gaussian MLP stays missing for that reason.
