@@ -529,7 +529,14 @@ def _join_streams(threads, stdout_chunks, stderr_chunks):
 
 
 def _stop_our_child(proc):
-    """Stop the stage this process started. No other process is signaled."""
+    """Stop the direct child this process started.
+
+    Only ``proc`` is signaled. An unrelated process is not. A grandchild
+    that this child has already forked is not addressed: an orphaned
+    grandchild can survive after the direct child exits. Process-group
+    signaling is not a requirement of this package, and this function does
+    not scan the process table or signal any other pid.
+    """
     if proc.poll() is not None:
         return
     proc.terminate()

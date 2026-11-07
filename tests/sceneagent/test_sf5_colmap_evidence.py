@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -770,6 +771,72 @@ def test_calibration_failure_stays_a_reject(tmp_path, monkeypatch):
     assert ledger["failed_step"] == "color_calibration"
     assert ledger["reason"] == "calibration boom"
     assert "was off" not in ledger["reason"]
+
+
+def assert_stop_signals_only_our_child(stop):
+    """``stop`` may signal only the child it is given.
+
+    The sentinel is a process this test spawned and then does not pass to
+    ``stop``. A handler records SIGUSR1 (10) and SIGTERM. The test does not
+    list processes. Cleanup signals only those two Popen objects.
+    """
+    log_path = Path(tempfile.mkstemp(prefix="sf5-sentinel-")[1])
+    sentinel_code = (
+        "import signal, sys, time\n"
+        "path = sys.argv[1]\n"
+        "def remember(signum, _frame):\n"
+        "    handle = open(path, 'a', encoding='utf-8')\n"
+        "    handle.write('%s\\n' % signum)\n"
+        "    handle.close()\n"
+        "signal.signal(signal.SIGUSR1, remember)\n"
+        "signal.signal(signal.SIGTERM, remember)\n"
+        "sys.stdout.write('ready\\n')\n"
+        "sys.stdout.flush()\n"
+        "while True:\n"
+        "    time.sleep(0.2)\n"
+    )
+    sentinel = subprocess.Popen(
+        [sys.executable, "-c", sentinel_code, str(log_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    previous = os.environ.get("SF5_UNRELATED_SENTINEL")
+    os.environ["SF5_UNRELATED_SENTINEL"] = str(sentinel.pid)
+    try:
+        ready = sentinel.stdout.readline()
+        assert ready.strip() == "ready"
+        assert sentinel.poll() is None
+        stop(child)
+        assert child.poll() is not None, "own child was not stopped"
+        assert sentinel.poll() is None, "unrelated sentinel was stopped"
+        recorded = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        assert recorded == "", recorded
+    finally:
+        if previous is None:
+            os.environ.pop("SF5_UNRELATED_SENTINEL", None)
+        else:
+            os.environ["SF5_UNRELATED_SENTINEL"] = previous
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+        if sentinel.poll() is None:
+            sentinel.terminate()
+            try:
+                sentinel.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                sentinel.kill()
+                sentinel.wait(timeout=5)
+        log_path.unlink(missing_ok=True)
+
+
+def test_stop_our_child_does_not_signal_an_unrelated_sentinel():
+    assert_stop_signals_only_our_child(_stop_our_child)
 
 
 def test_timed_out_stage_reaps_a_child_that_ignores_terminate():

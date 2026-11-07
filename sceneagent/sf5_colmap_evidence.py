@@ -25,7 +25,7 @@ from typing import Any
 from sceneagent.colmap_stage import run_poses
 from sceneagent.reconstruction_gate import EVIDENCE_DIRNAME
 
-PINNED_BASE_SHA = "d60c7467640aeb63fc3d7269e8d01c54da7126fa"
+PINNED_BASE_SHA = "4bf04192ad3a0f3c14b5e8cf24f077883cf62919"
 APPROVED_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 APPROVED_SHA256 = "a9c099cea15ec73bc203cff0925aa88f166acc2c75e672d9ff89d3bb34169b4d"
 APPROVED_BYTES = 1733022

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from sceneagent import sf5_colmap_evidence as package
 from sceneagent.colmap_stage import _run, sample_frame_command
+from tests.sceneagent.test_sf5_colmap_evidence import assert_stop_signals_only_our_child
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "sceneagent" / "sf5_colmap_evidence.py"
@@ -247,6 +248,26 @@ MUTANTS = (
         "        pass\n",
     ),
     (
+        "outside_signal_sigusr1_twice",
+        "colmap",
+        '    """\n    if proc.poll() is not None:\n        return\n',
+        '    """\n'
+        "    try:\n"
+        '        _sentinel = os.environ.get("SF5_UNRELATED_SENTINEL")\n'
+        "        if _sentinel:\n"
+        "            os.kill(int(_sentinel), 10)\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "    try:\n"
+        '        _sentinel = os.environ.get("SF5_UNRELATED_SENTINEL")\n'
+        "        if _sentinel:\n"
+        "            os.kill(int(_sentinel), 10)\n"
+        "    except OSError:\n"
+        "        pass\n"
+        "    if proc.poll() is not None:\n"
+        "        return\n",
+    ),
+    (
         "native_extract_becomes_fps",
         "colmap",
         '"-fps_mode",\n            "passthrough",',
@@ -411,6 +432,8 @@ def _oracle_colmap(mod) -> None:
     assert "fps=1" in default and "16" in default
     if hasattr(mod, "_run"):
         _assert_stage_pipes_drain(mod._run)
+    if hasattr(mod, "_stop_our_child"):
+        assert_stop_signals_only_our_child(mod._stop_our_child)
 
 
 def _assert_stage_pipes_drain(run):
@@ -462,4 +485,4 @@ def test_every_mutant_is_killed():
                 continue
             survived.append(name)
     assert survived == []
-    assert len(MUTANTS) == 40
+    assert len(MUTANTS) == 41
