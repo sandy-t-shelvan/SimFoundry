@@ -52,6 +52,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tarfile
@@ -1886,7 +1887,17 @@ class SshRemote:
         }
         self._own_key_id: str | None = None
         self._detach_done = False
-        self._attach()
+        try:
+            self._attach()
+        except Exception:
+            # __init__ raising leaves the caller with no object, so run_smoke's
+            # finally cannot detach a key that attach already posted. Close
+            # here. A cleanup error must not replace the setup error.
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                _emit("ssh cleanup failed: " + str(cleanup_error), self.api_key)
+            raise
 
     def close(self) -> None:
         try:
@@ -2314,6 +2325,7 @@ def run_smoke(
     sleep: Callable[[float], None] = time.sleep,
     now: Callable[[], float] = time.monotonic,
     boot_timeout_s: float = BOOT_TIMEOUT_S,
+    handle_sigterm: bool = False,
     trigger: str = "",
     actor: str = "",
     commit_sha: str = "",
@@ -2323,6 +2335,8 @@ def run_smoke(
     Exit 0 is a GPU accept. Exit 2 is a refusal before the instance is changed.
     Exit 1 is a smoke that ran and did not pass, including a ledger
     ``reject`` or ``deferred``. This function does not start or stop the instance.
+    SIGTERM raises ``SystemExit(1)`` so ``finally`` can detach, and it does
+    not change instance power.
     """
     try:
         approved = parse_instance_id(instance_id)
@@ -2363,6 +2377,13 @@ def run_smoke(
             key,
         )
         return 2
+
+    if handle_sigterm:
+
+        def _on_term(_signum: int, _frame: object) -> None:
+            raise SystemExit(1)
+
+        signal.signal(signal.SIGTERM, _on_term)
 
     remote: Any = None
     code = 1
@@ -2514,6 +2535,7 @@ def main(argv: list[str] | None = None) -> int:
         args.checkout,
         args.artifacts,
         os.environ.get("VAST_API_KEY", ""),
+        handle_sigterm=True,
         trigger=args.trigger,
         actor=args.actor,
         commit_sha=args.commit_sha,

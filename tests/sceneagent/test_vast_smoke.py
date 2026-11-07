@@ -6,6 +6,7 @@
 import base64
 import hashlib
 import json
+import signal
 import subprocess
 from pathlib import Path
 
@@ -2562,3 +2563,76 @@ def test_remote_exit_code_propagates(tmp_path):
             sleep=lambda _seconds: None,
         )
         assert code == rc
+
+
+def test_setup_failure_after_attach_closes_and_reraises_the_original(monkeypatch):
+    def fake_keypair(directory):
+        private = Path(directory) / "sf4_ed25519"
+        private.write_text("not-a-real-key\n", encoding="utf-8")
+        return private, PUBLIC_KEY
+
+    monkeypatch.setattr("sceneagent.vast_smoke.generate_ssh_keypair", fake_keypair)
+    closed = []
+
+    def close_raises(self):
+        closed.append(self)
+        raise RuntimeError("cleanup failed")
+
+    monkeypatch.setattr(SshRemote, "close", close_raises)
+    seen = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        seen.append(method)
+        if method == "GET" and url.endswith("/ssh/"):
+            if seen.count("GET") == 1:
+                return 200, {"success": True, "ssh_keys": []}
+            return 500, {"success": False}
+        if method == "POST" and url.endswith("/ssh/"):
+            return 200, {"success": True}
+        raise AssertionError((method, url))
+
+    with pytest.raises(SmokeError, match=r"listing ssh keys failed \(HTTP 500\)"):
+        SshRemote(_texas("running"), "test-key", request, sleep=lambda _s: None)
+    assert seen == ["GET", "POST", "GET"]
+    assert len(closed) == 1
+
+
+def test_sigterm_raises_systemexit_and_finally_closes(monkeypatch, tmp_path):
+    installed = {}
+
+    def capture(signum, handler):
+        installed[signum] = handler
+
+    monkeypatch.setattr("sceneagent.vast_smoke.signal.signal", capture)
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append((method, None if body is None else dict(body)))
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    class _Closing:
+        def __init__(self):
+            self.closed = False
+
+        def run(self, checkout, local_run):
+            installed[signal.SIGTERM](signal.SIGTERM, None)
+
+        def close(self):
+            self.closed = True
+
+    remote = _Closing()
+    with pytest.raises(SystemExit) as caught:
+        run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / "out",
+            "test-key",
+            request=request,
+            remote_factory=lambda _row: remote,
+            sleep=lambda _seconds: None,
+            handle_sigterm=True,
+        )
+    assert caught.value.code == 1
+    assert remote.closed is True
+    assert calls == [("GET", None)]
