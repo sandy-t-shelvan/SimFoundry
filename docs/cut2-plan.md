@@ -77,7 +77,7 @@ something usable on its own.
 | Run4 (PR #32 gives the mapper room) and the Cut 1 merge (PR #28) | Run4 meets the 10239 bar (240 or more of 300 registered); `main` has Cut 1; `main`'s gpu-smoke names 59601312 |
 | Remove the old QA/PM gate code and slim the GPU workflow | `gpu_smoke_trigger.py` gate lines, workflow lines 72–90, `docs/GPU_SMOKE_TRIGGERS.md` and their tests are gone; gpu-smoke runs on push with a path filter |
 | KAN-29: GPU query timeout is a resource exit (3), not an identity exit (2) | Test for the exit code |
-| Refresh stale facts in the plan of record and canvas (no status word changes) | Section 1's `caf16b7` branch and Windows paths; "CI installs only numpy and pytest" (now ruff, mypy, two pytest jobs, actionlint); LaMa row's instance 58301075 (now 59601312); "color calibration is still undone" (code exists in `ingest_assets`, the live run is what's pending); canvas "KAN-15 on hold until Cut 1 merges" (Cut 1 has merged); canvas next-phase 2 blocker "1 fps / 16-frame cap" (run4 and SF-5 now bypass it) |
+| Refresh stale facts in the plan of record (no status word changes; the canvas was refreshed with this plan) | Section 1's `caf16b7` branch and Windows paths; "CI installs only numpy and pytest" (now ruff, mypy, two pytest jobs, actionlint); LaMa row's instance 58301075 (now 59601312); "color calibration is still undone" (code exists in `ingest_assets`, the live run is what's pending) |
 | Close KAN-30 | Superseded: PR #26 made SSH direct-only |
 
 After this phase, PRs target `main` and `Main_duplicate` retires (agreed 2026-11-07).
