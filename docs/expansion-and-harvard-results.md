@@ -861,6 +861,8 @@ flowchart TD
 
 Build note. Inputs: `data/mlp/` label jsonl when present. That directory is gitignored. Outputs: `data/mlp/physics_prior.npz` and `train_report.json` with `weights: "ours"`, `section: "3.4"`, and `w_out_shape` `[32, 33]`. `train_and_report` stops before a gradient step when a source has fewer than 20 labels or the holdout split is too small. `vote_loaded_prior` averages in-mask 33-d outputs in chunks of 4096 and writes logs through `store_log_mass_density`. `equation2_vote` sets `claimed_mlp` false when the prior is absent. Slots 28–32 stay unnamed. Do not edit the catalog sentence to call this checkpoint the released Harvard weights. Do not fill Young's modulus, Poisson's ratio, or the rendering material.
 
+Material vote constants. Equation (2) on page 9 scales an unknown vote by 0.4. `DEFAULT_KEYWORD_WEIGHT` 1.0 is a SimFoundry choice, not published: the paper says keyword priors use a fixed weight and does not give the number. The material-vote VLM in this tree is `gemini-3.8-flash`, our configuration. The PDF's Gemini 2.5 Flash sentence is the section 3.8 Meshy route, not this vote.
+
 ### 10.5 Parts, completion, and joints
 
 Canvas rows: PartSAM is done. CubePart is missing. Articulate Anything is partial. PartNet table 25959 was rejected for the fruit.

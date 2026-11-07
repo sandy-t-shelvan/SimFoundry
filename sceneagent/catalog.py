@@ -235,7 +235,7 @@ ROWS = (
     {
         "block": "3.4 Physics prior",
         "sub_block": "VLM material proposal",
-        "paper": "Section 3.4: a VLM is one vote source and may audit the class. Sister edits in section 3.8 name Gemini 2.5 Flash.",
+        "paper": "Section 3.4: a VLM is one vote source and may audit the class. The material-vote model in this tree is gemini-3.8-flash, our configuration. The PDF's Gemini 2.5 Flash sentence is the section 3.8 Meshy route, not this vote.",
         "simfoundry": "Gemini is already the VLM for stages 3, 5, 6, 11 and pipeline B.",
         "tool": "google-genai",
         "repo": "",
