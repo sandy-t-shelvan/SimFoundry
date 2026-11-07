@@ -58,8 +58,33 @@ def discard_stale_ns_eval_report(report_path: Path) -> None:
     Once this run starts training, that checkpoint is no longer the one this
     file would be claiming. Deleting it up front means a train that never
     reaches eval cannot be read as the previous success.
+
+    An ``OSError`` from that delete is not a training failure. It is recorded
+    and swallowed so both trainers, which call this before their nonfatal
+    eval try, still start ``ns-train``. When the old file cannot be removed,
+    it is replaced with an error record if that write succeeds, so the
+    leftover is not a success. If that write fails too, the bytes are left
+    as they were and nothing here claims a new success.
     """
-    report_path.unlink(missing_ok=True)
+    try:
+        report_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Could not remove stale ns-eval report %s: %s", report_path, exc)
+        _record_stale_removal_failure(report_path, exc)
+
+
+def _record_stale_removal_failure(report_path: Path, exc: OSError) -> None:
+    """Replace a stuck report with an error, or leave it untouched if unwritable."""
+    payload = _empty_report(None)
+    payload["error"] = f"could not remove stale ns-eval report: {exc}"
+    try:
+        _write_report(report_path, payload)
+    except OSError as write_exc:
+        logger.warning(
+            "Could not record stale ns-eval removal failure at %s: %s",
+            report_path,
+            write_exc,
+        )
 
 
 def write_heldout_ns_eval_report(

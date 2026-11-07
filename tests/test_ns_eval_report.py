@@ -463,6 +463,68 @@ def test_discard_removes_only_an_existing_report(tmp_path):
     assert not report.exists()
 
 
+def test_stale_report_removal_oserror_does_not_abort_training(
+    tmp_path, monkeypatch, restore_cwd, caplog
+):
+    """Unlinking ns_eval.json can raise. That must not stop ns-train, and it
+    must not be written up as a new success. An unwritable disk leaves the
+    old bytes alone.
+    """
+    blocked = tmp_path / "blocked" / "ns_eval.json"
+    blocked.parent.mkdir()
+    stale_success = json.dumps({"ok": True, "psnr": 30}).encode()
+    blocked.write_bytes(stale_success)
+    real_unlink = Path.unlink
+    real_write = ns_eval_report._write_report
+
+    def unlink(self, missing_ok=False):
+        if self.name == "ns_eval.json":
+            raise OSError(13, "Permission denied", str(self))
+        return real_unlink(self, missing_ok=missing_ok)
+
+    def write_report(path, payload):
+        if Path(path) == blocked:
+            raise OSError(30, "Read-only file system", str(path))
+        return real_write(path, payload)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    monkeypatch.setattr(ns_eval_report, "_write_report", write_report)
+    with caplog.at_level("WARNING"):
+        discard_stale_ns_eval_report(blocked)
+    assert blocked.read_bytes() == stale_success
+    assert "Could not remove stale ns-eval report" in caplog.text
+    assert "Could not record stale ns-eval removal failure" in caplog.text
+
+    module = _stage_2c(monkeypatch)
+    cfg, base = _prepare_2c(tmp_path)
+    report = base / "ns_eval.json"
+    report.write_text(
+        json.dumps({"ok": True, "psnr": 30, "ssim": 1, "lpips": 0}),
+        encoding="utf-8",
+    )
+    calls = _patch_2c_commands(monkeypatch, module, make_config=True, make_ply=True)
+    inner = module.subprocess.run
+    at_train = {}
+
+    def run(argv, cwd=None, env=None, check=False, **kwargs):
+        if argv and argv[0] == "ns-train":
+            at_train["report"] = _read(report)
+        return inner(argv, cwd=cwd, env=env, check=check, **kwargs)
+
+    monkeypatch.setattr(module.subprocess, "run", run)
+    _patch_eval(monkeypatch, returncode=0, body=_NS_EVAL_JSON)
+    module.main(cfg)
+    assert [cmd[0] for cmd in calls] == ["ns-train", "ns-export"]
+    recorded = at_train["report"]
+    assert recorded["ok"] is False
+    assert recorded["psnr"] is None
+    assert recorded["ssim"] is None
+    assert recorded["lpips"] is None
+    assert "could not remove stale ns-eval report" in recorded["error"]
+    assert "Permission denied" in recorded["error"]
+    assert _read(base / "stage_info.json")["success"] is True
+
+
 def _stub_module(monkeypatch: pytest.MonkeyPatch, name: str, **attrs: object) -> None:
     module = types.ModuleType(name)
     for key, value in attrs.items():
