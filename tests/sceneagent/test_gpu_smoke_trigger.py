@@ -360,29 +360,45 @@ def test_cancelled_run_cannot_reach_the_start_put():
     ]
 
 
-def test_label_cleanup_runs_when_the_smoke_job_is_cancelled():
-    """Cleanup stays true for a cancelled smoke while the label is present.
-
-    ``!cancelled()`` on the smoke job skips a queued run. The cleanup if is
-    ``always()`` plus the same ``contains(…labels.*.name…)`` form the smoke
-    job already uses, so that skip does not leave ``run-gpu-smoke`` stuck.
-    """
+def _cleanup_if() -> str:
     text = WORKFLOW.read_text(encoding="utf-8")
-    expression = _job_if(_jobs(text)["label_cleanup"])
-    assert label_cleanup_runs(
-        expression, smoke_result="cancelled", labels=["run-gpu-smoke"]
-    )
-    assert label_cleanup_runs(
-        expression, smoke_result="skipped", labels=["run-gpu-smoke"]
-    )
-    assert not label_cleanup_runs(
-        expression, smoke_result="cancelled", labels=["qa-pass"]
-    )
+    return _job_if(_jobs(text)["label_cleanup"])
+
+
+def test_label_cleanup_runs_when_the_smoke_job_is_cancelled():
+    """Dropping ``!= 'skipped'`` lets cleanup run after a cancel.
+
+    The rest of the original ``if`` stays: ``pull_request_target``,
+    ``labeled``, ``run-gpu-smoke``, and the same repository.
+    """
+    expression = _cleanup_if()
+    assert "needs.fruits_gpu_smoke.result != 'skipped'" not in expression
+    assert label_cleanup_runs(expression, smoke_result="cancelled")
+    assert label_cleanup_runs(expression, smoke_result="skipped")
     assert [
         item
-        for item in workflow_safety_findings(text)
+        for item in workflow_safety_findings(WORKFLOW.read_text(encoding="utf-8"))
         if "label cleanup must run" in item
     ] == []
+
+
+def test_label_cleanup_does_not_run_for_a_fork_pull_request():
+    expression = _cleanup_if()
+    assert not label_cleanup_runs(
+        expression,
+        smoke_result="cancelled",
+        head_repo="someone/SimFoundry",
+        repository=THIS_REPO,
+    )
+
+
+def test_label_cleanup_does_not_run_for_a_different_label():
+    expression = _cleanup_if()
+    assert not label_cleanup_runs(
+        expression,
+        smoke_result="cancelled",
+        event_label="qa-pass",
+    )
 
 
 def test_workflow_safety_contract():
