@@ -21,10 +21,12 @@ Phase 1 — build a nerfstudio transforms.json from:
 Phase 2 — `ns-train splatfacto` with dataparser flags that preserve DA3's
 metric scale and disable any auto-reorientation (`auto_scale_poses=False,
 center_method=none, orientation_method=none, scale_factor=1.0`), then
-`ns-export gaussian-splat`.
+`ns-eval` on that run's held-out eval split (report-only PSNR/SSIM/LPIPS
+JSON at `<base_dir>/ns_eval.json`; a failure does not change this stage's
+exit), then `ns-export gaussian-splat`.
 
 Phase 1 runs in `simfoundry` (just numpy / cv2 / plyfile). Phase 2 is shelled out
-via `mamba run -n nerfstudio_simfoundry ns-{train,export,viewer}` — the env
+via `mamba run -n nerfstudio_simfoundry ns-{train,eval,export,viewer}` — the env
 must already exist on `mamba env list` (see auto_bg_pipeline_setup_README.md
 §4). The subprocess env is curated in `_ns_env()` for CUDA toolchain
 correctness.
@@ -51,6 +53,10 @@ import hydra
 import numpy as np
 from plyfile import PlyData, PlyElement
 
+from simfoundry.pipeline.ns_eval_report import (
+    discard_stale_ns_eval_report,
+    write_heldout_ns_eval_report,
+)
 from simfoundry.pipeline.stage_utils import bootstrap_hydra_workdir
 
 bootstrap_hydra_workdir(__file__)
@@ -525,17 +531,34 @@ def main(cfg):
                 "Viser binds to 0.0.0.0; for SSH use `ssh -L %d:localhost:%d <host>`.",
                 sec.viewer_port, sec.viewer_port, sec.viewer_port, sec.viewer_port)
     logger.info("ns-train: %s", " ".join(train_cmd))
+    # Drop the previous report before training replaces the checkpoint. A train
+    # that never reaches ns-eval must not leave the last success in place.
+    eval_report = base_dir / "ns_eval.json"
+    discard_stale_ns_eval_report(eval_report)
     subprocess.run(train_cmd, cwd=str(base_dir), env=env, check=True)
+
+    outputs_dir = base_dir / "outputs"
+    configs = sorted(outputs_dir.glob("**/config.yml"), key=lambda p: p.stat().st_mtime, reverse=True)
+    load_config = configs[0] if configs else None
+    # Same mamba env as ns-train. ns-eval scores the held-out eval split.
+    # A failure is written into ns_eval.json and does not change the exit below.
+    try:
+        write_heldout_ns_eval_report(
+            load_config=load_config,
+            report_path=eval_report,
+            argv_prefix=["mamba", "run", "-n", NS_ENV_NAME],
+            cwd=base_dir,
+            env=env,
+        )
+    except Exception:
+        logger.exception("Held-out ns-eval report failed; stage verdict unchanged")
 
     if sec.no_export:
         logger.info("--no-export set; skipping ns-export.")
         return
 
-    outputs_dir = base_dir / "outputs"
-    configs = sorted(outputs_dir.glob("**/config.yml"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not configs:
+    if load_config is None:
         sys.exit(f"No training config found under {outputs_dir}")
-    load_config = configs[0]
 
     export_dir = base_dir / "export"
     export_dir.mkdir(parents=True, exist_ok=True)
