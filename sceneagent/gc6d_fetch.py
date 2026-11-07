@@ -26,6 +26,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Any, cast
 
+from sceneagent.bin_benchmark import image_keys
+
 SOURCE = "https://huggingface.co/datasets/GraspClutter6D/GraspClutter6D/resolve/main/"
 SCENE_VOLUMES = [f"scenes.7z.{i:03d}" for i in range(1, 6)]
 MODELS_ARCHIVE = "models_eval.7z"
@@ -177,7 +179,7 @@ def fetch_scene(scene: str, out_dir: Path | str, source: str = SOURCE) -> dict:
     names = extract_members(volumes, f"scenes/{scene}/", out)
 
     gt = json.loads((out / f"scenes/{scene}/scene_gt.json").read_text(encoding="utf-8"))
-    obj_ids = sorted({entry["obj_id"] for image in gt.values() for entry in image})
+    obj_ids = sorted({entry["obj_id"] for key in image_keys(gt) for entry in gt[key]})
     models_url = source + MODELS_ARCHIVE
     models = RemoteVolumes([remote_size(models_url)], http_fetch([models_url]))
     wanted = {f"obj_{obj_id:06d}.ply" for obj_id in obj_ids}

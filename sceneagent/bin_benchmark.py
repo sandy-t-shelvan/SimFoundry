@@ -31,15 +31,25 @@ def object_name(obj_id: int) -> str:
     return f"obj_{int(obj_id):06d}"
 
 
+def image_keys(gt: dict[str, Any]) -> list[str]:
+    """The ``scene_gt.json`` keys that are images, lowest first.
+
+    GraspClutter6D scene 000091 also has keys -4 to -1 with no image behind
+    them and a different object set (33 ids across them, against the scene's
+    20). Only positive keys are images.
+    """
+    return sorted((key for key in gt if int(key) > 0), key=int)
+
+
 def load_gt_poses(
     scene_dir: Path | str, image_id: int | None = None
 ) -> tuple[int, dict[str, tuple[np.ndarray, np.ndarray]]]:
     """Return the image id and each object's (rotation, translation in m).
 
-    ``image_id`` defaults to the lowest id in ``scene_gt.json``.
+    ``image_id`` defaults to the lowest image key in ``scene_gt.json``.
     """
     gt = json.loads((Path(scene_dir) / "scene_gt.json").read_text(encoding="utf-8"))
-    key = str(image_id) if image_id is not None else min(gt, key=int)
+    key = str(image_id) if image_id is not None else image_keys(gt)[0]
     poses: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for entry in gt[key]:
         name = object_name(entry["obj_id"])

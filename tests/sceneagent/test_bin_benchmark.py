@@ -15,6 +15,7 @@ import trimesh
 from sceneagent import metrics
 from sceneagent.bin_benchmark import (
     POINTS_PER_OBJECT,
+    image_keys,
     load_gt_poses,
     reference_clouds,
     sample_model_points,
@@ -57,6 +58,14 @@ def _bop_scene(tmp_path):
                 "cam_t_m2c": [9.0, 9.0, 9.0],
             }
         ],
+        # GraspClutter6D 000091 has non-image keys -4..-1 with other objects.
+        "-4": [
+            {
+                "obj_id": 83,
+                "cam_R_m2c": np.eye(3).ravel().tolist(),
+                "cam_t_m2c": [0.0, 0.0, 1.0],
+            }
+        ],
     }
     (scene / "scene_gt.json").write_text(json.dumps(gt), encoding="utf-8")
     return scene, models
@@ -66,7 +75,9 @@ def test_min_distances_match_brute_force():
     rng = np.random.default_rng(0)
     source, target = rng.normal(size=(230, 3)), rng.normal(size=(310, 3))
     brute = np.linalg.norm(source[:, None, :] - target[None, :, :], axis=2).min(axis=1)
-    assert np.allclose(metrics._min_distances(source, target), brute, rtol=1e-12, atol=0)
+    assert np.allclose(
+        metrics._min_distances(source, target), brute, rtol=1e-12, atol=0
+    )
 
 
 def test_protocol_sized_clouds_score_without_the_full_distance_matrix():
@@ -94,6 +105,10 @@ def test_poses_come_from_the_first_image_in_metres(tmp_path):
     rotation, translation = poses["obj_000007"]
     assert np.allclose(rotation, _rot_z(30))
     assert np.allclose(translation, [0.15, -0.04, 0.65])
+
+
+def test_non_image_keys_are_never_the_default_image():
+    assert image_keys({"-4": [], "-1": [], "2": [], "10": [], "1": []}) == ["1", "2", "10"]
 
 
 def test_a_repeated_object_in_one_image_is_refused(tmp_path):
