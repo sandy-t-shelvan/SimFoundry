@@ -167,8 +167,7 @@ GPU package, which can be pulled in if a phase finishes early. (SF-8 part 2 is i
 
 ## Decisions (2026-11-07)
 
-1. **Target: the bin score.** Recommended; awaiting Sandeep's explicit OK after the GraspClutter6D
-   explanation.
+1. **Target: the bin score.** Decided (Sandeep, 2026-11-07). Phase 1 is PR #33.
 2. **If COLMAP can't register the 13 photos:** use the dataset's camera poses, and record that as a
    deviation in the score file. Decided.
 3. **Masks:** SAM vit_h (matches the plan of record; SAM 2 would leave the paper's mask row open).
