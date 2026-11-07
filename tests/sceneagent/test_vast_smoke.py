@@ -377,6 +377,24 @@ def test_ssh_and_rsync_argv_do_not_carry_the_api_key(tmp_path):
     assert "sceneagent" in blob
 
 
+def test_rsync_creates_the_missing_remote_parent(tmp_path):
+    # Run4 on 2026-11-07 failed with `mkdir "/workspace/sf4-smoke/repo" failed`:
+    # a fresh box has no /workspace/sf4-smoke, and rsync makes only the last
+    # path component unless told otherwise.
+    invocations = rsync_invocations(
+        tmp_path,
+        "ssh6.vast.ai",
+        22,
+        "/tmp/sf4_ed25519",
+        "/tmp/known_hosts",
+        REMOTE_REPO,
+    )
+    assert invocations
+    for command, _cwd in invocations:
+        assert command[0] == "rsync"
+        assert "--mkpath" in command
+
+
 def test_ssh_key_id_comes_from_the_attach_response_only():
     assert ssh_key_id_from_attach({"ssh_key_id": 17}) == "17"
     assert ssh_key_id_from_attach({"key": {"key_id": "abc"}}) == "abc"
