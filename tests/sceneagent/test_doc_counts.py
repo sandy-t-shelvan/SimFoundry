@@ -114,6 +114,8 @@ def test_sdlc_dependency_list_matches_sceneagent_ci():
         "pytest",
         "trimesh",
         "pillow",
+        "py7zr",
+        "scipy",
     ]
     workflow = (ROOT / ".github" / "workflows" / "sceneagent-ci.yml").read_text(encoding="utf-8")
     assert workflow.count("python -m pip install -r requirements-sceneagent-ci.txt") == 3
