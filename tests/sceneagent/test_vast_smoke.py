@@ -1682,6 +1682,7 @@ def test_ssh_remote_sync_retries_the_probe_then_rsyncs(tmp_path, monkeypatch):
     assert counter["probes"] == 3
     assert counter["rsync"] == 2
     assert remote.ssh_report["accepted"] is True
+    assert "detach" not in remote.ssh_report
     assert codes == []
 
 
@@ -1702,8 +1703,11 @@ def test_ssh_remote_sync_fails_cleanly_when_the_probe_bound_runs_out(
     monkeypatch.setattr("sceneagent.vast_smoke.subprocess.run", run_rsync)
     remote = _bare_remote(_bound_sleep(counter))
     remote._probe_ssh = probe
-    with pytest.raises(SmokeError, match="did not accept the configured key"):
+    with pytest.raises(SmokeError, match="did not accept the configured key") as raised:
         remote._sync(_checkout(tmp_path))
+    message = str(raised.value)
+    assert "attach_ssh" not in message
+    assert "detach" not in message.lower()
     assert counter["probes"] == 6
     assert remote.ssh_report["accepted"] is False
 
@@ -2449,8 +2453,9 @@ def test_ssh_endpoint_uses_the_direct_port_and_ignores_the_proxy():
         "[47.186.21.5]:51823 ssh-ed25519 "
         "AAAAC3NzaC1lZDI1NTE5AAAAIFqxlHMUC7xRRWryJ7y1/3LjWJiHFLhPlb9bH05FR3Nr"
     ]
-    assert load_known_host_line(KNOWN_HOST_PATH, "47.186.21.5", 51823).strip() == (
-        pin_line[0]
+    assert (
+        load_known_host_line(KNOWN_HOST_PATH, "47.186.21.5", 51823).strip()
+        == (pin_line[0])
     )
     with pytest.raises(InstanceNotApproved, match="does not match"):
         load_known_host_line(KNOWN_HOST_PATH, "ssh5.vast.ai", 16868)

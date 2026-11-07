@@ -1897,7 +1897,6 @@ class SshRemote:
         self.host, self.port = ssh_endpoint(record)
         self._private_material = require_ssh_private_key(private_key)
         self.tmp = tempfile.TemporaryDirectory()
-        self.key_id_returned = False
         self.ssh_report: dict[str, Any] = {
             "accepted": None,
             "remote_keys_modified": False,
@@ -1953,12 +1952,11 @@ class SshRemote:
 
     def _sync(self, checkout: Path) -> None:
         try:
-            ready = ssh_ready_or_raise(
+            ready = wait_until_ssh_accepts(
                 self._probe_ssh,
-                key_id_returned=self.key_id_returned,
-                api_key=self.api_key,
                 sleep=self.sleep,
                 now=time.monotonic,
+                api_key=self.api_key,
             )
         except SmokeError:
             self.ssh_report["accepted"] = False
