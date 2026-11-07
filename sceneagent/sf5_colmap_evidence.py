@@ -44,6 +44,8 @@ FORBIDDEN_COMPONENTS = frozenset({"fitted_splat", "sceneagent-simfoundry"})
 # unmeasured. Not a measured fact and not launch authorization.
 PROPOSED_MIN_FREE_MIB = 6144
 GPU_SAMPLE_INTERVAL_S = 10
+# A wedged nvidia-smi must not sit inside the stage poll forever. One try.
+GPU_QUERY_TIMEOUT_S = 30
 FAQ_URL = "https://colmap.github.io/faq.html"
 FAQ_SECTION = "Feature matching fails due to illegal memory access"
 # The live page on 2026-11-06. It is not a snapshot of the COLMAP 3.11.1 docs.
@@ -89,6 +91,10 @@ class ForbiddenPathError(EvidenceError):
 
 class GpuBudgetError(EvidenceError):
     """The explicit free-memory budget is missing or the reading is short."""
+
+
+class GpuQueryTimeout(EvidenceError):
+    """The memory query did not return before its hard timeout."""
 
 
 # run_poses sizes 180s and 900s for its 16-frame default. A native sequence
@@ -817,6 +823,8 @@ def execute(request: dict[str, Any]) -> int:
         def on_gpu_sample():
             try:
                 reading = query_gpu_memory(reader, budget)
+            except GpuQueryTimeout:
+                raise
             except EvidenceError as exc:
                 gpu_log.append(
                     {
@@ -973,16 +981,28 @@ def _evidence_or_none(output: Path, evidence: Path) -> dict[str, Any] | None:
     }
 
 
-def _nvidia_smi(argv: list[str]) -> dict[str, Any]:
+def _nvidia_smi(argv: list[str], timeout_s: float | None = None) -> dict[str, Any]:
+    """One aggregate memory query. A timeout is not retried.
+
+    ``subprocess.run`` stops the query process it started. It does not
+    signal the COLMAP stage. The stage child is stopped by ``_run`` when
+    this exception leaves the in-stage sample.
+    """
+    if timeout_s is None:
+        timeout_s = GPU_QUERY_TIMEOUT_S
     if not gpu_query_is_aggregate(argv):
         raise EvidenceError("GPU query is not the aggregate free-memory query")
-    completed = subprocess.run(
-        argv,
-        capture_output=True,
-        text=True,
-        check=False,
-        shell=False,
-    )
+    try:
+        completed = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=False,
+            shell=False,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        raise GpuQueryTimeout("gpu_query_timeout") from None
     return {
         "returncode": completed.returncode,
         "stdout": completed.stdout or "",

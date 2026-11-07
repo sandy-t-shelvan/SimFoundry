@@ -468,9 +468,13 @@ def run_poses(
         else:
             steps[step_name] = _run(argv, timeout_s=colmap_timeout_s)
         if steps[step_name]["returncode"] != 0:
-            reason = ""
             if steps[step_name].get("timed_out"):
                 reason = f"{step_name} timed out"
+            else:
+                reason = (
+                    f"{step_name} failed with return code "
+                    f"{steps[step_name]['returncode']}"
+                )
             return _result(
                 ran=True,
                 ok=False,

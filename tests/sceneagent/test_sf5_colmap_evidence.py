@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,7 @@ from sceneagent.sf5_colmap_evidence import (
     EvidenceError,
     ForbiddenPathError,
     GpuBudgetError,
+    GpuQueryTimeout,
     assert_native_argv,
     assert_no_symlink,
     build_manifest,
@@ -73,6 +75,7 @@ from sceneagent.sf5_colmap_evidence import (
     path_is_forbidden,
     pinned_file_bytes_match,
     query_gpu_memory,
+    _nvidia_smi,
     sift_match_bytes,
     summarize_free_samples,
     _step_statuses,
@@ -986,6 +989,163 @@ def test_frame_count_mismatch_stops_before_colmap(tmp_path, monkeypatch):
     assert ledger["reason"] == "extracted frame count is not the native count"
     assert ledger["extracted_frames"] == 3
     assert "feature_extractor" not in ledger["exit_statuses"]
+
+
+def test_gpu_query_timeout_fails_closed_and_stops_only_our_stage_child(
+    tmp_path, monkeypatch
+):
+    query_log = tmp_path / "queries.log"
+    query_bin = tmp_path / "bin"
+    query_bin.mkdir()
+    sleeper = query_bin / "nvidia-smi"
+    sleeper.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os\n"
+        "import time\n"
+        "from pathlib import Path\n"
+        "path = Path(os.environ['SF5_GPU_QUERY_LOG'])\n"
+        "handle = path.open('a', encoding='utf-8')\n"
+        "handle.write('start\\n')\n"
+        "handle.close()\n"
+        "while True:\n"
+        "    handle = path.open('a', encoding='utf-8')\n"
+        "    handle.write('beat\\n')\n"
+        "    handle.close()\n"
+        "    time.sleep(0.05)\n",
+        encoding="utf-8",
+    )
+    sleeper.chmod(0o755)
+    monkeypatch.setenv("SF5_GPU_QUERY_LOG", str(query_log))
+    monkeypatch.setenv("PATH", str(query_bin) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(
+        "sceneagent.sf5_colmap_evidence.GPU_QUERY_TIMEOUT_S", 0.2
+    )
+    stage_stamp = tmp_path / "stage-stamp.txt"
+    stage = tmp_path / "stage.py"
+    stage.write_text(
+        "import sys\n"
+        "import time\n"
+        "from pathlib import Path\n"
+        "path = Path(sys.argv[1])\n"
+        "while True:\n"
+        "    path.write_text(str(time.time()), encoding='utf-8')\n"
+        "    time.sleep(0.05)\n",
+        encoding="utf-8",
+    )
+    log_path = Path(tempfile.mkstemp(prefix="sf5-sentinel-")[1])
+    sentinel = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import signal, sys, time\n"
+                "path = sys.argv[1]\n"
+                "def remember(signum, _frame):\n"
+                "    handle = open(path, 'a', encoding='utf-8')\n"
+                "    handle.write('%s\\n' % signum)\n"
+                "    handle.close()\n"
+                "signal.signal(signal.SIGUSR1, remember)\n"
+                "signal.signal(signal.SIGTERM, remember)\n"
+                "sys.stdout.write('ready\\n')\n"
+                "sys.stdout.flush()\n"
+                "while True:\n"
+                "    time.sleep(0.2)\n"
+            ),
+            str(log_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    try:
+        assert sentinel.stdout.readline().strip() == "ready"
+        def sample():
+            _nvidia_smi(list(GPU_FREE_ARGV))
+
+        with pytest.raises(GpuQueryTimeout, match="^gpu_query_timeout$"):
+            _run(
+                [sys.executable, str(stage), str(stage_stamp)],
+                timeout_s=5,
+                on_gpu_sample=sample,
+                sample_interval_s=0.05,
+            )
+        frozen = stage_stamp.read_text(encoding="utf-8")
+        time.sleep(0.3)
+        assert stage_stamp.read_text(encoding="utf-8") == frozen
+        starts = query_log.read_text(encoding="utf-8").count("start\n")
+        beats = query_log.read_text(encoding="utf-8")
+        time.sleep(0.25)
+        assert starts == 1
+        assert query_log.read_text(encoding="utf-8") == beats
+        assert sentinel.poll() is None
+        recorded = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        assert recorded == ""
+    finally:
+        if sentinel.poll() is None:
+            sentinel.terminate()
+            try:
+                sentinel.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                sentinel.kill()
+                sentinel.wait(timeout=5)
+        log_path.unlink(missing_ok=True)
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "ledger-bin")
+    monkeypatch.setenv(
+        "PATH", str(tmp_path / "ledger-bin") + os.pathsep + os.environ["PATH"]
+    )
+
+    def raise_query_timeout(*_args, **_kwargs):
+        raise GpuQueryTimeout("gpu_query_timeout")
+
+    monkeypatch.setattr(
+        "sceneagent.sf5_colmap_evidence.run_poses", raise_query_timeout
+    )
+    output = tmp_path / "query-timeout" / "run"
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
+    assert code != 0
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["reason"] == "gpu_query_timeout"
+
+
+def test_colmap_crash_reason_includes_return_code(tmp_path, monkeypatch):
+    video, _digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
+
+    def fake_run(command, timeout_s=600, **_kwargs):
+        if Path(command[0]).name == "ffmpeg":
+            dest = Path(str(command[-1]).replace("%04d", "0001"))
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"frame")
+            return {
+                "command": command,
+                "returncode": 0,
+                "timed_out": False,
+                "stdout_tail": "",
+                "stderr_tail": "",
+                "gpu_samples": [],
+            }
+        assert command[1] == "feature_extractor"
+        return {
+            "command": command,
+            "returncode": 139,
+            "timed_out": False,
+            "stdout_tail": "",
+            "stderr_tail": "crash",
+            "gpu_samples": [],
+        }
+
+    monkeypatch.setattr("sceneagent.colmap_stage._run", fake_run)
+    result = run_poses(
+        video,
+        tmp_path / "colmap",
+        color_calibrate=False,
+    )
+    assert result["failed_step"] == "feature_extractor"
+    assert result["reason"]
+    assert "139" in result["reason"]
+    assert "timed out" not in result["reason"]
 
 
 def test_package_source_does_not_control_other_processes():
