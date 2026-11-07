@@ -25,7 +25,9 @@ Restrict the Actions secret, pin the host, and rotate the key. This module
 does not add an approval loop.
 
 It does not create, rent, resize, or destroy an instance, and the remote
-command is only the SceneAgent video entry point. That path does not call
+command is only the SceneAgent video entry point. ``--pipeline run4``
+runs ``python -m sceneagent.run4`` on the same pinned interpreter. That
+path does not call
 Meshy or Gemini. The API key is read from the environment and is not written
 into the remote command, the URL, or the artifact files.
 
@@ -99,6 +101,7 @@ FETCH_NAMES = (
     "colmap_poses.json",
     "tool_probe.json",
     "host_probe.json",
+    "run4_evidence.json",
 )
 PUBLIC_FIELDS = (
     "id",
@@ -508,12 +511,31 @@ def fruits_path(checkout: Path) -> Path:
     return path
 
 
-def build_remote_command(repo_dir: str, out_dir: str) -> list[str]:
-    """Argv for the Fruits video entry point. No API key and no paid client."""
+def build_remote_command(
+    repo_dir: str,
+    out_dir: str,
+    pipeline: str = "sceneagent",
+    commit_sha: str = "",
+) -> list[str]:
+    """Argv for the Fruits entry point. No API key and no paid client.
+
+    ``sceneagent`` is the 1 fps video path. ``run4`` is ``sceneagent.run4``.
+    A measured checkout SHA is appended only for run4. The default command
+    stays free of that flag so an empty SHA is not invented.
+    """
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
     fruits = f"{repo}/{FRUITS_RELATIVE}"
-    return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
+    if pipeline == "sceneagent":
+        return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
+    if pipeline != "run4":
+        raise InstanceNotApproved("refusing pipeline")
+    argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]
+    if commit_sha:
+        if re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+            raise InstanceNotApproved("refusing commit sha")
+        argv.extend(["--commit-sha", commit_sha])
+    return argv
 
 
 def host_probe_command(out_dir: str) -> str:
@@ -548,16 +570,22 @@ def host_probe_command(out_dir: str) -> str:
     return f"{shlex.quote(REMOTE_PYTHON)} -c {shlex.quote(code)}"
 
 
-def build_remote_shell(repo_dir: str, out_dir: str) -> str:
+def build_remote_shell(
+    repo_dir: str,
+    out_dir: str,
+    pipeline: str = "sceneagent",
+    commit_sha: str = "",
+) -> str:
     """Bash script that runs the video entry point with the pinned interpreter.
 
     ``REMOTE_PYTHON`` is the only Python this script runs. If that file is
     missing or not executable, the script prints why and exits 127. It does
     not search ``PATH`` and it does not fall back to ``python`` or ``python3``.
+    ``pipeline`` selects ``sceneagent`` or ``sceneagent.run4``.
     """
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
-    argv = build_remote_command(repo, out)
+    argv = build_remote_command(repo, out, pipeline=pipeline, commit_sha=commit_sha)
     quoted = " ".join(shlex.quote(part) for part in argv)
     py = shlex.quote(REMOTE_PYTHON)
     missing = shlex.quote("pinned interpreter missing: " + REMOTE_PYTHON)
@@ -1713,7 +1741,12 @@ def publish_artifacts(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
     for rel, data in prepared:
-        if Path(rel).name not in {"plan.json", "ledger.json", "manifest.json"}:
+        if Path(rel).name not in {
+            "plan.json",
+            "ledger.json",
+            "manifest.json",
+            "run4_evidence.json",
+        }:
             continue
         target = artifact_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1923,8 +1956,22 @@ class SshRemote:
 
     def run(self, checkout: Path, local_run: Path) -> int:
         self._sync(checkout)
+        # Attributes, not new run() arguments: tests inject remotes whose
+        # run() takes only the checkout and the local directory.
+        pipeline = getattr(self, "pipeline", "sceneagent")
+        commit_sha = getattr(self, "commit_sha", "")
+        if not isinstance(pipeline, str):
+            pipeline = "sceneagent"
+        if not isinstance(commit_sha, str):
+            commit_sha = ""
         code = self._bash(
-            build_remote_shell(REMOTE_REPO, REMOTE_OUT), timeout_s=REMOTE_TIMEOUT_S
+            build_remote_shell(
+                REMOTE_REPO,
+                REMOTE_OUT,
+                pipeline=pipeline,
+                commit_sha=commit_sha,
+            ),
+            timeout_s=REMOTE_TIMEOUT_S,
         )
         self._fetch(local_run)
         return code
@@ -2199,6 +2246,7 @@ def run_smoke(
     trigger: str = "",
     actor: str = "",
     commit_sha: str = "",
+    pipeline: str = "sceneagent",
 ) -> int:
     """Run the Fruits smoke on 59601312 when that instance is already running.
 
@@ -2212,6 +2260,9 @@ def run_smoke(
         approved = parse_instance_id(instance_id)
     except InstanceNotApproved as exc:
         _emit(str(exc), "")
+        return 2
+    if pipeline not in {"sceneagent", "run4"}:
+        _emit("refusing pipeline", "")
         return 2
     try:
         key = require_api_key(api_key)
@@ -2307,6 +2358,8 @@ def run_smoke(
             remote = remote_factory(row)
         with tempfile.TemporaryDirectory() as tmp:
             local_run = Path(tmp) / "run"
+            remote.pipeline = pipeline
+            remote.commit_sha = commit_sha
             remote_code = int(remote.run(Path(checkout), local_run))
             found = getattr(remote, "ssh_report", None)
             if isinstance(found, dict):
@@ -2317,7 +2370,12 @@ def run_smoke(
             own_key = _remote_own_key(remote)
             manifest = collect_artifact_manifest(
                 local_run,
-                command=build_remote_command(REMOTE_REPO, REMOTE_OUT),
+                command=build_remote_command(
+                    REMOTE_REPO,
+                    REMOTE_OUT,
+                    pipeline=pipeline,
+                    commit_sha=commit_sha,
+                ),
                 instance_id=approved,
                 api_key=key,
                 ssh=ssh_report,
@@ -2410,6 +2468,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trigger", choices=sorted(_TRIGGER_NAMES), default="")
     parser.add_argument("--actor", default="")
     parser.add_argument("--commit-sha", default="")
+    parser.add_argument(
+        "--pipeline", choices=("sceneagent", "run4"), default="sceneagent"
+    )
     args = parser.parse_args(argv)
     return run_smoke(
         args.instance_id,
@@ -2420,6 +2481,7 @@ def main(argv: list[str] | None = None) -> int:
         trigger=args.trigger,
         actor=args.actor,
         commit_sha=args.commit_sha,
+        pipeline=args.pipeline,
     )
 
 
