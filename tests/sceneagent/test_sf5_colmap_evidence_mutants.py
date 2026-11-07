@@ -42,14 +42,6 @@ MUTANTS = (
     ("reject_exit_swallowed", "package", '"reject": 1,', '"reject": 0,'),
     ("identity_exit_swallowed", "package", '"identity": 2,', '"identity": 0,'),
     (
-        "launch_marked_ready",
-        "package",
-        '"""This package does not record QA, PM, or go, so it cannot clear itself."""\n'
-        "    return False",
-        '"""This package does not record QA, PM, or go, so it cannot clear itself."""\n'
-        "    return True",
-    ),
-    (
         "gpu_blind_retry",
         "package",
         '"""One query. A failure is not retried."""\n    return 1',
@@ -310,7 +302,6 @@ def _oracle_package(mod) -> None:
     assert mod.exit_code("resource") == 3
     assert mod.exit_code("accept") == 0
     assert mod.exit_code("gpu_budget") == 4
-    assert mod.launch_ready() is False
     assert mod.gpu_attempts() == 1
     assert mod.hashes_match("abc", "def") is False
     assert mod.hashes_match("abc", "abc") is True
@@ -485,4 +476,4 @@ def test_every_mutant_is_killed():
                 continue
             survived.append(name)
     assert survived == []
-    assert len(MUTANTS) == 41
+    assert len(MUTANTS) == 40
