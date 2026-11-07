@@ -4,9 +4,11 @@
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
 The only instance this module will touch is ``58301075`` in Texas. It may
-show that instance, start it when it is stopped, and stop it again when this
-process was the one that started it. It attaches an ephemeral SSH public key
-so the runner can copy the checkout and bring the run files back.
+show that instance. Only an explicit ``workflow_dispatch`` may start it when
+it is stopped. A label or a request-file trigger refuses before any start
+PUT, and an unknown state refuses too. When this process was the one that
+started it, it stops the instance again. It attaches an ephemeral SSH public
+key so the runner can copy the checkout and bring the run files back.
 
 It does not create, rent, resize, or destroy an instance, and the remote
 command is only the SceneAgent video entry point. That path does not call
@@ -30,11 +32,19 @@ whether that fingerprint is in a second GET of the same URL after attach.
 Key bodies are not recorded. Leftover keys are not detached. A failed run
 still publishes a redacted manifest, and a key that survives redaction
 publishes nothing.
+
+The runner does not forward ``VAST_API_KEY``, ``GITHUB_TOKEN``, or any
+other secret to the instance. SSH ignores user config, the child
+environment drops secret variables, and rsync copies ``sceneagent`` and
+``Fruits.mp4`` only, never ``.git``. The manifest records
+``secrets_forwarded`` false. A trigger name, actor, and commit SHA are
+recorded when the workflow passes them. They cannot change the instance id.
 """
 
 from __future__ import annotations
 
 import base64
+import fnmatch
 import hashlib
 import io
 import json
@@ -52,7 +62,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 API_ORIGIN = "https://console.vast.ai"
 ALLOWED_INSTANCE_ID = 58301075
@@ -160,11 +170,51 @@ def mask_secret(value: str) -> None:
         print(f"::add-mask::{value}", flush=True)
 
 
+_SECRET_ENV_EXACT = {"SSH_AUTH_SOCK", "SSH_AGENT_PID", "GIT_ASKPASS"}
+_SECRET_ENV_MARKERS = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "APIKEY")
+_RSYNC_EXCLUDES = (
+    ".git",
+    ".github",
+    "__pycache__",
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*credential*",
+    "*secret*",
+    "id_rsa",
+    "id_ed25519",
+)
+_TRIGGER_NAMES = {"dispatch", "label", "request-file"}
+_ACTOR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,38}(?:\[bot\])?")
+_COMMIT_SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+class SecretForwarding(TypedDict):
+    """What the manifest records about secrets and the GPU."""
+
+    secrets_forwarded: bool
+    ssh_env_forwarded: bool
+    git_credentials_shipped: bool
+    payload_secret_hits: int
+
+
+def _secret_env_name(name: str) -> bool:
+    if name in _SECRET_ENV_EXACT:
+        return True
+    upper = name.upper()
+    return any(marker in upper for marker in _SECRET_ENV_MARKERS)
+
+
 def child_env() -> dict[str, str]:
-    """Environment for ssh and rsync. The API key stays on the runner."""
-    env = dict(os.environ)
-    env.pop("VAST_API_KEY", None)
-    return env
+    """Environment for ssh and rsync. Secrets stay on the runner.
+
+    GitHub injects ``GITHUB_TOKEN`` into every step. OpenSSH does not send
+    the process environment unless config says so, and this argv does not.
+    Dropping the names here means a later ``SendEnv`` still has nothing to send.
+    """
+    return {
+        key: value for key, value in os.environ.items() if not _secret_env_name(key)
+    }
 
 
 def _emit(message: str, api_key: str) -> None:
@@ -241,9 +291,11 @@ def public_instance_view(record: dict[str, Any]) -> dict[str, Any]:
 def classify_status(record: dict[str, Any]) -> str:
     """Map a show-instance row to running, starting, stopped, or unknown.
 
-    ``stopped`` and ``exited`` are startable. ``exited`` is what the Vast
-    listing showed for this machine when it was not running. ``offline`` and
-    ``unknown`` are not started: the API docs say those states do not become
+    ``stopped`` and ``exited`` are the stopped kind. Only an explicit
+    ``workflow_dispatch`` may start them. A label or a request-file trigger
+    refuses before any start PUT. ``exited`` is what the Vast listing showed
+    for this machine when it was not running. ``offline`` and ``unknown``
+    are not started: the API docs say those states do not become
     ``running``, and this module does not destroy the instance to replace it.
     """
     actual = _status_text(record.get("actual_status"))
@@ -583,8 +635,15 @@ def _reject_secret_text(text: str) -> None:
 
 
 def ssh_base_argv(key_path: str, known_hosts: str, port: int) -> list[str]:
+    """SSH argv that does not forward the runner environment or an agent.
+
+    ``-F /dev/null`` ignores ssh_config, which is where ``SendEnv`` and
+    ``SetEnv`` would otherwise be picked up. The default is to send neither.
+    """
     return [
         "ssh",
+        "-F",
+        "/dev/null",
         "-i",
         key_path,
         "-p",
@@ -598,8 +657,32 @@ def ssh_base_argv(key_path: str, known_hosts: str, port: int) -> list[str]:
         "-o",
         "IdentitiesOnly=yes",
         "-o",
+        "ForwardAgent=no",
+        "-o",
+        "ClearAllForwardings=yes",
+        "-o",
         "ConnectTimeout=20",
     ]
+
+
+def ssh_forwarding_problems(argv: list[str]) -> list[str]:
+    """Return reasons this argv would forward a secret. Values are not included."""
+    problems: list[str] = []
+    if argv.count("-F") != 1 or "/dev/null" not in argv:
+        problems.append("ssh reads config that could set SendEnv")
+    if "ForwardAgent=no" not in argv:
+        problems.append("ForwardAgent is not disabled")
+    if "ClearAllForwardings=yes" not in argv:
+        problems.append("ssh forwardings are not cleared")
+    for item in argv:
+        if item.startswith("SendEnv"):
+            problems.append("ssh SendEnv is set")
+        if item.startswith("SetEnv"):
+            problems.append("ssh SetEnv is set")
+    joined = " ".join(argv)
+    if "VAST_API_KEY" in joined or "GITHUB_TOKEN" in joined:
+        problems.append("ssh argv names a secret")
+    return problems
 
 
 def ssh_endpoint(record: dict[str, Any]) -> tuple[str, int]:
@@ -627,13 +710,13 @@ def rsync_invocations(
     remote = f"root@{host}:{repo}/"
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
     scene = checkout / "sceneagent"
+    excludes = _rsync_exclude_args()
     return [
         (
             [
                 "rsync",
                 "-a",
-                "--exclude",
-                "__pycache__",
+                *excludes,
                 "-e",
                 ssh_e,
                 str(scene),
@@ -642,10 +725,206 @@ def rsync_invocations(
             checkout,
         ),
         (
-            ["rsync", "-a", "-R", "-e", ssh_e, FRUITS_RELATIVE, remote],
+            ["rsync", "-a", "-R", *excludes, "-e", ssh_e, FRUITS_RELATIVE, remote],
             checkout,
         ),
     ]
+
+
+def _rsync_exclude_args() -> list[str]:
+    args: list[str] = []
+    for pattern in _RSYNC_EXCLUDES:
+        args.extend(["--exclude", pattern])
+    return args
+
+
+def _ship_excluded(relative: str) -> bool:
+    parts = tuple(part for part in relative.split("/") if part not in {"", "."})
+    for pattern in _RSYNC_EXCLUDES:
+        if fnmatch.fnmatch(relative, pattern):
+            return True
+        for part in parts:
+            if fnmatch.fnmatch(part, pattern):
+                return True
+    return False
+
+
+def iter_shipped_files(checkout: Path) -> list[Path]:
+    """Files rsync would copy. ``.git`` and credential names are not included."""
+    root = Path(checkout)
+    shipped: list[Path] = []
+    scene = root / "sceneagent"
+    if scene.is_dir():
+        for path in sorted(item for item in scene.rglob("*") if item.is_file()):
+            relative = path.relative_to(scene).as_posix()
+            if _ship_excluded(relative):
+                continue
+            shipped.append(path)
+    fruits = root / FRUITS_RELATIVE
+    if fruits.is_file() and not _ship_excluded(FRUITS_RELATIVE):
+        shipped.append(fruits)
+    return shipped
+
+
+def assess_secret_forwarding(
+    checkout: Path, api_key: str
+) -> tuple[SecretForwarding, list[str]]:
+    """Fail closed before a network call when a secret would reach the GPU.
+
+    Problem strings name the check. They do not contain the secret value.
+    """
+    problems: list[str] = []
+    env = child_env()
+    leaked = sorted(name for name in env if _secret_env_name(name))
+    if leaked:
+        problems.append("ssh environment still has " + ", ".join(leaked))
+    problems.extend(ssh_forwarding_problems(ssh_base_argv("key", "known_hosts", 22)))
+    secret_values = [api_key] if api_key else []
+    for name in ("GITHUB_TOKEN", "GH_TOKEN", "VAST_API_KEY"):
+        value = os.environ.get(name, "")
+        if value and value not in secret_values:
+            secret_values.append(value)
+    hits = 0
+    git_shipped = False
+    for path in iter_shipped_files(checkout):
+        relative = path.relative_to(checkout).as_posix()
+        if ".git" in path.relative_to(checkout).parts:
+            git_shipped = True
+            problems.append(f"git metadata would be shipped ({relative})")
+            continue
+        if path.stat().st_size > 20 * 1024 * 1024:
+            problems.append(f"shipped file is too large to scan ({relative})")
+            hits += 1
+            continue
+        data = path.read_bytes()
+        if any(secret.encode("utf-8") in data for secret in secret_values if secret):
+            problems.append(f"a secret value is in a shipped file ({relative})")
+            hits += 1
+    record: SecretForwarding = {
+        "secrets_forwarded": bool(problems),
+        "ssh_env_forwarded": any(
+            "ssh environment" in item
+            or "SendEnv" in item
+            or "ForwardAgent" in item
+            or "SetEnv" in item
+            or "ssh reads config" in item
+            for item in problems
+        ),
+        "git_credentials_shipped": git_shipped,
+        "payload_secret_hits": hits,
+    }
+    return record, problems
+
+
+def _path_names_payload(value: str) -> bool:
+    """True when a path component is exactly ``payload``.
+
+    ``Path`` keeps ``payload`` as a component of ``./payload`` and
+    ``payload/``. It does not treat ``.ci`` as ``ci``.
+    """
+    if value in {"payload", "./payload", "payload/", "./payload/"}:
+        return True
+    return "payload" in Path(value).parts
+
+
+def payload_import_blockers() -> list[str]:
+    """Ways this process could import the PR-head ``payload/`` tree.
+
+    The keyed step must run the base orchestrator. A ``PYTHONPATH``,
+    ``PYTHONSTARTUP``, ``sys.path`` entry, ``.pth`` line, or ``sitecustomize``
+    that names ``payload`` is refused before any instance call.
+    """
+    blockers: list[str] = []
+    if Path.cwd().name == "payload":
+        blockers.append("cwd is payload")
+    for key in ("PYTHONPATH", "PYTHONSTARTUP"):
+        raw = os.environ.get(key, "")
+        pieces = raw.split(os.pathsep) if key == "PYTHONPATH" else [raw]
+        for piece in pieces:
+            if piece and _path_names_payload(piece):
+                blockers.append(f"{key} names payload")
+    for entry in sys.path:
+        if entry and _path_names_payload(entry):
+            blockers.append("sys.path names payload")
+    seen: set[str] = set()
+    for entry in sys.path:
+        directory = Path(entry) if entry else Path.cwd()
+        try:
+            resolved = str(directory.resolve())
+        except OSError:
+            continue
+        if resolved in seen or not directory.is_dir():
+            continue
+        seen.add(resolved)
+        if (directory / "sitecustomize.py").is_file() and _path_names_payload(
+            str(directory)
+        ):
+            blockers.append("sitecustomize.py is under payload")
+        for pth in directory.glob("*.pth"):
+            try:
+                text = pth.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for line in text.splitlines():
+                body = line.strip()
+                if not body or body.startswith(("#", "import ")):
+                    continue
+                if _path_names_payload(body):
+                    blockers.append("a .pth file adds payload")
+                    break
+    return blockers
+
+
+def normalize_run_context(
+    trigger: str, actor: str, commit_sha: str
+) -> dict[str, str] | None:
+    """Return trigger metadata, or None when the caller did not set any.
+
+    The instance id is not accepted here. A bad actor or SHA is refused
+    without echoing it, so a secret passed in that position is not logged.
+    """
+    if trigger == "" and actor == "" and commit_sha == "":
+        return None
+    if trigger not in _TRIGGER_NAMES:
+        raise InstanceNotApproved("refusing trigger")
+    if _ACTOR_RE.fullmatch(actor) is None:
+        raise InstanceNotApproved("refusing actor")
+    if _COMMIT_SHA_RE.fullmatch(commit_sha) is None:
+        raise InstanceNotApproved("refusing commit sha")
+    return {"trigger": trigger, "actor": actor, "commit_sha": commit_sha}
+
+
+def may_start_instance(trigger: str | None) -> bool:
+    """True only for an explicit ``workflow_dispatch``.
+
+    A missing trigger defaults to refuse. A label and a request-file push
+    must not start a stopped instance. That needs Sandeep's own click.
+    """
+    return trigger == "dispatch"
+
+
+def _apply_run_record(
+    document: dict[str, Any],
+    run_context: dict[str, str] | None,
+    secret_forwarding: SecretForwarding | None,
+) -> None:
+    """Add trigger metadata. Refuse a record that says a secret was forwarded."""
+    if secret_forwarding is not None:
+        if secret_forwarding.get("secrets_forwarded") is not False:
+            raise SmokeError("refusing to publish a manifest that forwarded a secret")
+        document["secrets_forwarded"] = False
+        document["secret_forwarding"] = {
+            "secrets_forwarded": False,
+            "ssh_env_forwarded": bool(secret_forwarding["ssh_env_forwarded"]),
+            "git_credentials_shipped": bool(
+                secret_forwarding["git_credentials_shipped"]
+            ),
+            "payload_secret_hits": int(secret_forwarding["payload_secret_hits"]),
+        }
+    if run_context is not None:
+        document["trigger"] = run_context["trigger"]
+        document["actor"] = run_context["actor"]
+        document["commit_sha"] = run_context["commit_sha"]
 
 
 def ssh_key_id_from_attach(payload: dict[str, Any]) -> str | None:
@@ -1306,6 +1585,8 @@ def collect_artifact_manifest(
     ssh_keys: dict[str, Any] | None = None,
     ephemeral_ssh_key: dict[str, Any] | None = None,
     own_key: dict[str, Any] | None = None,
+    run_context: dict[str, str] | None = None,
+    secret_forwarding: SecretForwarding | None = None,
 ) -> dict[str, Any]:
     """Record the run. Never rewrite ``ledger.json`` or invent ``plan.json``.
 
@@ -1389,6 +1670,7 @@ def collect_artifact_manifest(
     manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
     if not manifest["complete"]:
         manifest["passed"] = False
+    _apply_run_record(manifest, run_context, secret_forwarding)
     manifest_text = redact(json.dumps(manifest, indent=2) + "\n", api_key)
     if api_key and api_key in manifest_text:
         raise SmokeError(
@@ -1476,6 +1758,8 @@ def publish_failure_manifest(
     ssh_keys: dict[str, Any] | None = None,
     ephemeral_ssh_key: dict[str, Any] | None = None,
     own_key: dict[str, Any] | None = None,
+    run_context: dict[str, str] | None = None,
+    secret_forwarding: SecretForwarding | None = None,
 ) -> dict[str, Any]:
     """Write only a redacted manifest after the same scan as a successful publish.
 
@@ -1508,6 +1792,7 @@ def publish_failure_manifest(
         document["own_key"] = own
     if ssh is not None:
         document["ssh"] = _public_ssh_report(ssh)
+    _apply_run_record(document, run_context, secret_forwarding)
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
         (run_dir / "manifest.json").write_text(
@@ -2049,6 +2334,9 @@ def run_smoke(
     now: Callable[[], float] = time.monotonic,
     boot_timeout_s: float = BOOT_TIMEOUT_S,
     handle_sigterm: bool = False,
+    trigger: str = "",
+    actor: str = "",
+    commit_sha: str = "",
 ) -> int:
     """Run the Fruits smoke on 58301075 and restore power if this call started it.
 
@@ -2071,6 +2359,29 @@ def run_smoke(
         fruits_path(Path(checkout))
     except InstanceNotApproved as exc:
         _emit(str(exc), key)
+        return 2
+    try:
+        context = normalize_run_context(trigger, actor, commit_sha)
+    except InstanceNotApproved as exc:
+        _emit(str(exc), key)
+        return 2
+    import_blockers = payload_import_blockers()
+    if import_blockers:
+        for blocker in import_blockers:
+            _emit(blocker, key)
+        _emit(
+            "refusing to import the payload checkout. No instance call was made.",
+            key,
+        )
+        return 2
+    forwarding, problems = assess_secret_forwarding(Path(checkout), key)
+    if problems:
+        for problem in problems:
+            _emit(problem, key)
+        _emit(
+            "refusing to forward a secret to the GPU. No instance call was made.",
+            key,
+        )
         return 2
 
     started = False
@@ -2112,7 +2423,10 @@ def run_smoke(
         shown = True
         _log({"action": "show", "instance": public_instance_view(row)}, key)
         kind = classify_status(row)
+        trigger_name = "" if context is None else context["trigger"]
         if kind == "stopped":
+            if not may_start_instance(trigger_name):
+                raise InstanceNotApproved("instance stopped; start needs Sandeep")
             started = True
             _change_state("start", request, key, sleep)
             _log({"action": "start", "instance_id": approved}, key)
@@ -2120,10 +2434,14 @@ def run_smoke(
                 request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
             )
         elif kind == "starting":
+            if not may_start_instance(trigger_name):
+                raise InstanceNotApproved("instance not running; start needs Sandeep")
             row = wait_until_running(
                 request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
             )
         elif kind != "running":
+            if not may_start_instance(trigger_name):
+                raise InstanceNotApproved("instance state unknown; start needs Sandeep")
             actual = row.get("actual_status")
             raise InstanceNotApproved(
                 f"instance {approved} status {actual!r} is not running or stopped. "
@@ -2158,19 +2476,24 @@ def run_smoke(
                 ssh_keys=key_report,
                 ephemeral_ssh_key=ephemeral_ssh_key,
                 own_key=own_key,
+                run_context=context,
+                secret_forwarding=forwarding,
             )
             publish_artifacts(local_run, Path(artifact_dir), api_key=key)
             published = True
-        _log(
-            {
-                "action": "conclude",
-                "instance_id": approved,
-                "passed": manifest["passed"],
-                "remote_exit": remote_code,
-                "failure_reason": manifest.get("failure_reason"),
-            },
-            key,
-        )
+        concluded: dict[str, Any] = {
+            "action": "conclude",
+            "instance_id": approved,
+            "passed": manifest["passed"],
+            "remote_exit": remote_code,
+            "failure_reason": manifest.get("failure_reason"),
+            "secrets_forwarded": False,
+        }
+        if context is not None:
+            concluded["trigger"] = context["trigger"]
+            concluded["actor"] = context["actor"]
+            concluded["commit_sha"] = context["commit_sha"]
+        _log(concluded, key)
         if remote_code == 0 and manifest["passed"]:
             code = 0
         elif remote_code != 0:
@@ -2219,6 +2542,8 @@ def run_smoke(
                     ssh_keys=key_report,
                     ephemeral_ssh_key=ephemeral_ssh_key,
                     own_key=own_key,
+                    run_context=context,
+                    secret_forwarding=forwarding,
                 )
             except SmokeError as exc:
                 _emit(str(exc), key)
@@ -2236,6 +2561,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--checkout", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
+    parser.add_argument("--trigger", choices=sorted(_TRIGGER_NAMES), default="")
+    parser.add_argument("--actor", default="")
+    parser.add_argument("--commit-sha", default="")
     args = parser.parse_args(argv)
     return run_smoke(
         args.instance_id,
@@ -2243,6 +2571,9 @@ def main(argv: list[str] | None = None) -> int:
         args.artifacts,
         os.environ.get("VAST_API_KEY", ""),
         handle_sigterm=True,
+        trigger=args.trigger,
+        actor=args.actor,
+        commit_sha=args.commit_sha,
     )
 
 
