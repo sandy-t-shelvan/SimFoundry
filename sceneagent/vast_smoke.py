@@ -13,9 +13,11 @@ It copies the checkout with one fixed SSH private key from the Actions secret
 runner and removed on exit. The smoke does not generate, attach, or delete
 a remote key, so keys already on the instance stay. SSH requires
 ``StrictHostKeyChecking=yes`` and one pinned known-host line in
-``ci/vast-ssh-known-host``. That file is not a configured pin until an
-operator replaces the comment with the instance's public host key. A missing
-secret or pin fails before any SSH connection, and the values are not logged.
+``ci/vast-ssh-known-host``. The connection uses ``public_ipaddr`` and
+``ports['22/tcp'][0].HostPort`` from the show response. The proxy
+``ssh_host`` and ``ssh_port`` are not a fallback. A missing or invalid direct
+endpoint, secret, or pin fails before any SSH connection, and the values are
+not logged.
 The fixed key stays authorized until someone removes it on the instance.
 Revocation and rotation are manual. Reuse is less isolation than a per-run
 key, and it removes the dependency on Vast's key attach and detach API.
@@ -652,14 +654,35 @@ def ssh_forwarding_problems(argv: list[str]) -> list[str]:
 
 
 def ssh_endpoint(record: dict[str, Any]) -> tuple[str, int]:
-    host = record.get("ssh_host")
-    port = record.get("ssh_port")
+    """Direct address from the show row. The proxy fields are not used.
+
+    ``public_ipaddr`` is the host. ``ports['22/tcp'][0].HostPort`` is the
+    port. A missing or invalid value refuses the connection. ``ssh_host`` and
+    ``ssh_port`` are not a fallback.
+    """
+    host = record.get("public_ipaddr")
     if not isinstance(host, str) or _HOST_RE.fullmatch(host) is None:
-        raise SmokeError(f"instance {ALLOWED_INSTANCE_ID} has no ssh_host")
-    if isinstance(port, str) and port.isdigit():
-        port = int(port)
-    if isinstance(port, bool) or not isinstance(port, int) or port <= 0:
-        raise SmokeError(f"instance {ALLOWED_INSTANCE_ID} has no ssh_port")
+        raise SmokeError(
+            f"instance {ALLOWED_INSTANCE_ID} direct ssh public_ipaddr is missing."
+        )
+    ports = record.get("ports")
+    mapping = ports.get("22/tcp") if isinstance(ports, dict) else None
+    first = mapping[0] if isinstance(mapping, list) and mapping else None
+    raw_port = first.get("HostPort") if isinstance(first, dict) else None
+    if raw_port is None or not isinstance(mapping, list) or not mapping:
+        raise SmokeError(
+            f"instance {ALLOWED_INSTANCE_ID} direct ssh port mapping 22/tcp is missing."
+        )
+    if isinstance(raw_port, str) and raw_port.isdigit():
+        port = int(raw_port)
+    elif isinstance(raw_port, int) and not isinstance(raw_port, bool):
+        port = raw_port
+    else:
+        port = 0
+    if port <= 0 or port > 65535:
+        raise SmokeError(
+            f"instance {ALLOWED_INSTANCE_ID} direct ssh HostPort is invalid."
+        )
     return host, port
 
 
@@ -2134,7 +2157,11 @@ def wait_until_running(
         row = _show_instance(request, api_key, sleep)
         kind = classify_status(row)
         last_status = row.get("actual_status")
-        host_ok = isinstance(row.get("ssh_host"), str) and bool(row.get("ssh_port"))
+        try:
+            ssh_endpoint(row)
+            host_ok = True
+        except SmokeError:
+            host_ok = False
         if kind == "running" and host_ok:
             return row
         if kind == "starting":
@@ -2259,10 +2286,10 @@ def run_smoke(
             raise InstanceNotApproved(
                 "instance state unknown; this workflow does not start or stop instances"
             )
-        if not row.get("ssh_host") or not row.get("ssh_port"):
-            row = wait_until_running(
-                request, key, sleep=sleep, now=now, timeout_s=boot_timeout_s
-            )
+        try:
+            ssh_endpoint(row)
+        except SmokeError as exc:
+            raise InstanceNotApproved(str(exc)) from None
         if remote_factory is None:
             material = (
                 ssh_private_key

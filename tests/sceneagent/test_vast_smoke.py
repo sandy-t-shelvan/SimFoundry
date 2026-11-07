@@ -21,6 +21,7 @@ from sceneagent.vast_smoke import (
     REMOTE_REPO,
     SSH_READY_MAX_ATTEMPTS,
     SSH_READY_TIMEOUT_S,
+    KNOWN_HOST_PATH,
     InstanceNotApproved,
     SmokeError,
     SshRemote,
@@ -38,6 +39,7 @@ from sceneagent.vast_smoke import (
     endpoint_for,
     ephemeral_key_record,
     list_attached_ssh_keys,
+    load_known_host_line,
     load_ssh_key_fingerprints,
     main,
     mask_secret,
@@ -55,6 +57,7 @@ from sceneagent.vast_smoke import (
     normalize_run_context,
     run_smoke,
     ssh_base_argv,
+    ssh_endpoint,
     ssh_forwarding_problems,
     ssh_key_id_from_attach,
     wait_until_ssh_accepts,
@@ -78,6 +81,8 @@ def _texas(status, **extra):
         "geolocation": "Texas, US",
         "ssh_host": "ssh6.vast.ai",
         "ssh_port": 35512,
+        "public_ipaddr": "47.186.21.5",
+        "ports": {"22/tcp": [{"HostPort": "51823"}]},
         "gpu_name": "RTX 4090",
         "jupyter_token": "do-not-log",
         "extra_env": [["SECRET", "nope"]],
@@ -2419,13 +2424,89 @@ _FAKE_PRIVATE = (
 )
 
 
-def _host_pin(directory, host="ssh6.vast.ai", port=35512):
+def _host_pin(directory, host="47.186.21.5", port=51823):
     path = Path(directory) / "known_host"
     path.write_text(
         f"[{host}]:{port} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForSf4SmokeOnly\n",
         encoding="utf-8",
     )
     return path
+
+
+def test_ssh_endpoint_uses_the_direct_port_and_ignores_the_proxy():
+    row = _texas(
+        "running",
+        ssh_host="ssh5.vast.ai",
+        ssh_port=16868,
+    )
+    assert ssh_endpoint(row) == ("47.186.21.5", 51823)
+    pin_line = [
+        line.strip()
+        for line in KNOWN_HOST_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert pin_line == [
+        "[47.186.21.5]:51823 ssh-ed25519 "
+        "AAAAC3NzaC1lZDI1NTE5AAAAIFqxlHMUC7xRRWryJ7y1/3LjWJiHFLhPlb9bH05FR3Nr"
+    ]
+    assert load_known_host_line(KNOWN_HOST_PATH, "47.186.21.5", 51823).strip() == (
+        pin_line[0]
+    )
+    with pytest.raises(InstanceNotApproved, match="does not match"):
+        load_known_host_line(KNOWN_HOST_PATH, "ssh5.vast.ai", 16868)
+    numeric = _texas("running")
+    numeric["ports"] = {"22/tcp": [{"HostPort": 51823}]}
+    assert ssh_endpoint(numeric) == ("47.186.21.5", 51823)
+
+
+def test_ssh_endpoint_refuses_a_missing_or_invalid_direct_endpoint():
+    proxy = _texas("running", ssh_host="ssh5.vast.ai", ssh_port=16868)
+    missing_ip = dict(proxy)
+    missing_ip.pop("public_ipaddr")
+    with pytest.raises(SmokeError, match="public_ipaddr is missing"):
+        ssh_endpoint(missing_ip)
+    bad_ip = dict(proxy)
+    bad_ip["public_ipaddr"] = "not a host"
+    with pytest.raises(SmokeError, match="public_ipaddr is missing"):
+        ssh_endpoint(bad_ip)
+    for broken in (None, {}, {"80/tcp": [{"HostPort": "80"}]}):
+        row = dict(proxy)
+        row["ports"] = broken
+        with pytest.raises(SmokeError, match="22/tcp is missing"):
+            ssh_endpoint(row)
+    for host_port in (None, "", "abc", "0", 0, True, -1, 70000):
+        row = dict(proxy)
+        row["ports"] = {"22/tcp": [{"HostPort": host_port}]}
+        with pytest.raises(SmokeError, match="22/tcp is missing|HostPort is invalid"):
+            ssh_endpoint(row)
+
+
+def test_running_show_without_a_direct_endpoint_does_not_use_the_proxy(
+    tmp_path, capsys
+):
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        row = _texas("running", ssh_host="ssh5.vast.ai", ssh_port=16868)
+        row.pop("ports")
+        return 200, {"instances": row}
+
+    def factory(_row):
+        raise AssertionError("proxy connection")
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "out",
+        "test-key",
+        request=request,
+        remote_factory=factory,
+        sleep=lambda _seconds: None,
+    )
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "22/tcp is missing" in err
+    assert "ssh5.vast.ai" not in err
+    assert "16868" not in err
 
 
 def test_fixed_key_is_mode_0600_and_removed_on_close(tmp_path, monkeypatch):

@@ -13,11 +13,15 @@ exit, including when SIGTERM raises `SystemExit` so `finally` runs. The smoke
 does not generate, attach, or delete a remote authorized key. Keys already on
 the instance stay until someone removes them there.
 
-`StrictHostKeyChecking=yes`. The pin is one public known_hosts line in
-`ci/vast-ssh-known-host`. That file is a comment until an operator replaces
-it, and a comment-only file is refused before SSH. There is no `ssh-keyscan`
-and no trust-on-first-use. A missing secret or a missing pin fails before a
-connection, and the failure text does not include the secret or the pin line.
+`StrictHostKeyChecking=yes`. SSH connects to `public_ipaddr` and
+`ports['22/tcp'][0].HostPort` from the show response. `ssh_host` and
+`ssh_port` are not a fallback. The pin is the public known_hosts line in
+`ci/vast-ssh-known-host` for `[47.186.21.5]:51823`, fingerprint
+`SHA256:NDJOu/2d7YbJz6Wj/HgqNSraxzsNkp8Plj/QGtAShO8`. A missing or invalid
+direct endpoint, a missing secret, or a pin that does not match that
+endpoint fails before SSH. There is no `ssh-keyscan` and no
+trust-on-first-use. The failure text does not include the secret or the pin
+line.
 
 The fixed key remains authorized across runs. Revocation and rotation are
 manual. That is less isolation than a per-run key, and it is what removes the
