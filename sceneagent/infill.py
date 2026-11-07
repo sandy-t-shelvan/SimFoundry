@@ -8,8 +8,11 @@ image when the caller has neither a plane render nor association output.
 from nearby plane-surface colors. That render is produced here. It is not a
 copy of an input image. LaMa is optional and off by default: the import runs
 only when ``use_lama`` is true, and a missing checkpoint does not produce a
-forged inpaint. Counts without background points still take the placeholder
-path, which is not a completed background. Gaussian ``centers`` are not
+forged inpaint. A side simple-lama would feed at 8 pixels is padded to 16
+and cropped back, because the checkpoint's reflection pad rejects the 1x1
+map that downsample produces. That call is still the real model. Counts
+without background points still take the placeholder path, which is not a
+completed background. Gaussian ``centers`` are not
 treated as that plane. This fit does not read a camera pose.
 """
 
@@ -38,6 +41,13 @@ COLOR_METHOD = "nearest_plane_sample"
 # allocate an n_hole by n_source array. Not a published threshold.
 FILL_HOLE_CHUNK = 64
 _RANK_EPS = 1e-8
+# big-lama downsamples three times by 2, then an FFC block reflection-pads
+# by 1. That pad rejects a 1x1 map. simple-lama rounds each side up to a
+# multiple of 8 and no further, so a side of 8 is fed as 8 and becomes
+# [1, 128, 1, 1]. 16 is the smallest multiple of 8 that still has 2 pixels
+# after those downs. Not a published input size.
+_LAMA_DOWNSAMPLE = 8
+_LAMA_MIN_SIDE = 16
 
 
 def write_rgb_png(path, rows):
@@ -279,11 +289,70 @@ def lama_inpaint(image_path, out_path=None, mask_path=None):
     }
 
 
+def _lama_fed_side(side: int) -> int:
+    """Side length simple-lama feeds the checkpoint, before our own pad.
+
+    ``prepare_img_and_mask`` pads up to a multiple of 8. A multiple of 8 is
+    unchanged. The model output keeps that padded size.
+    """
+    remainder = side % _LAMA_DOWNSAMPLE
+    if remainder == 0:
+        return side
+    return side + (_LAMA_DOWNSAMPLE - remainder)
+
+
+def _pad_to_lama_minimum(image: Any, mask: Any) -> tuple[Any, Any, bool]:
+    """Pad only sides the checkpoint cannot run, and do not invent a hole.
+
+    Edge replication is the image pad because reflect and symmetric both
+    reject a pad wider than the side, and a 2 pixel image needs 14. The mask
+    pad is 0 so the extra canvas is context, not a hole. Sides the library
+    already feeds at 16 or more are returned unchanged.
+    """
+    from PIL import Image
+
+    width, height = image.size
+    out_width = _LAMA_MIN_SIDE if _lama_fed_side(width) < _LAMA_MIN_SIDE else width
+    out_height = _LAMA_MIN_SIDE if _lama_fed_side(height) < _LAMA_MIN_SIDE else height
+    if out_width == width and out_height == height:
+        return image, mask, False
+    rgb = np.asarray(image.convert("RGB"))
+    padded_rgb = np.pad(
+        rgb,
+        ((0, out_height - height), (0, out_width - width), (0, 0)),
+        mode="edge",
+    )
+    levels = np.asarray(mask.convert("L"))
+    padded_mask = np.pad(
+        levels,
+        ((0, out_height - height), (0, out_width - width)),
+        mode="constant",
+        constant_values=0,
+    )
+    return (
+        Image.fromarray(padded_rgb, mode="RGB"),
+        Image.fromarray(padded_mask, mode="L"),
+        True,
+    )
+
+
 def _run_lama(image, mask):
-    """Call LaMa. Tests replace this with a fake that records the mask."""
+    """Call LaMa. Tests replace this with a fake that records the mask.
+
+    A side simple-lama would feed at 8 pixels becomes a 1x1 map, and the
+    checkpoint's reflection pad of 1 raises. Pad only those sides to 16,
+    run SimpleLama, and crop back to the size the caller passed. A side
+    already fed at 16 or more is not resized, so an image the library
+    already accepts keeps the library's output size.
+    """
     from simple_lama_inpainting import SimpleLama
 
-    return SimpleLama()(image, mask)
+    width, height = image.size
+    image, mask, padded = _pad_to_lama_minimum(image, mask)
+    result = SimpleLama()(image, mask)
+    if padded:
+        result = result.crop((0, 0, width, height))
+    return result
 
 
 def _write_lama_mask(path, hole: np.ndarray):
