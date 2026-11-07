@@ -11,3 +11,7 @@ numpy==2.4.6
 pytest==9.2.0
 trimesh==5.2.0
 pillow==13.0.0
+# Reads one GraspClutter6D scene out of the remote 7z (sceneagent.gc6d_fetch).
+py7zr==1.1.4
+# Exact nearest-neighbour distances for section 4.1 scoring (sceneagent.metrics).
+scipy==1.16.3
