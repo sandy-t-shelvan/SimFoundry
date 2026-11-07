@@ -175,11 +175,11 @@ PartSAM decomposes the object. CubePart completes hidden geometry. Articulate An
 
 ### VLM proposal
 
-- Section 3.4 uses a VLM as one vote source and as the audit. Section 3.8 names Gemini 2.5 Flash for sister edits.
+- Section 3.4 uses a VLM as one vote source and as the audit. The material-vote model in this tree is `gemini-3.8-flash`, our configuration. The PDF's Gemini 2.5 Flash sentence is the section 3.8 Meshy route, not this vote.
 - SimFoundry already calls Gemini in stages 3, 5, 6, 11 and pipeline B.
 - Input: one frame from `Fruits.mp4` and the existing Gemini key. The key is not written into the repo.
-- Output: `ledger.json` entry for the material proposal, plus the class returned by Gemini 2.5 Flash.
-- Tool: Gemini 2.5 Flash. No git URL is printed in the PDF.
+- Output: `ledger.json` entry for the material proposal. The class is not attributed to Gemini 2.5 Flash.
+- Tool: `gemini-3.8-flash`, our configuration. No git URL is printed in the PDF.
 - Depends on: a decoded frame. It does not depend on the unpublished MLP weights.
 - Done when: the ledger records that call's class and the raw response is saved. Partial until that file exists.
 - Machine: Canadian box or the developer machine. The key stays in `.env.local`.
