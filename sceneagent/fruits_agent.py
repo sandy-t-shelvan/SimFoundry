@@ -17,6 +17,7 @@ from sceneagent.agent_loop import (
 )
 from sceneagent.gemini_client import PAPER_MODEL_ID
 from sceneagent.mjcf_contract import write_physics_mjcf
+from sceneagent.orchestrator import plan_source_name, stamp_plan_source
 from sceneagent.taxonomy import MATERIAL_CLASSES
 
 # The model is asked to plan from the input state. The prompt does not
@@ -231,7 +232,9 @@ def plan_with_client(client):
 
     ``parse_plan`` drops ids that are not in ``ALLOWED_STEPS``. If that leaves
     nothing, ``order_plan`` falls back to ``default_plan()``. The fallback is
-    local Python. It does not invent a figure-5 harness reply.
+    local Python. It does not invent a figure-5 harness reply. ``plan_source``
+    is ``default_fallback`` in that case and ``harness`` when the reply named
+    steps. A fallback is recorded so it cannot be mistaken for dc2 evidence.
     """
     result = client.generate_flash(PLAN_PROMPT)
     text = result.get("text") or ""
@@ -241,6 +244,7 @@ def plan_with_client(client):
         "steps": order_plan(parsed),
         "parsed_steps": parsed,
         "used_fallback": used_fallback,
+        "plan_source": plan_source_name(used_fallback),
         "fallback": "default_plan" if used_fallback else None,
         "model_id": result.get("model_id"),
         "http_status": result.get("http_status"),
@@ -260,6 +264,8 @@ def run_fruits(
         client, paths, disk_free_gb, loader=loader, start_sam3d=start_sam3d
     )
     summary = run_agent_loop(out_dir, tools, plan_info["steps"])
+    stamp_plan_source(out_dir, plan_info["plan_source"])
+    summary["plan_source"] = plan_info["plan_source"]
     summary["plan_model"] = {
         key: plan_info[key]
         for key in (
