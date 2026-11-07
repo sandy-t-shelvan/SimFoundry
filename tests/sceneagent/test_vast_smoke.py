@@ -6,6 +6,7 @@
 import base64
 import hashlib
 import json
+import signal
 import subprocess
 from pathlib import Path
 
@@ -16,13 +17,14 @@ from sceneagent.vast_smoke import (
     DETACH_LEFTOVER_KEYS,
     FRUITS_RELATIVE,
     REMOTE_OUT,
+    REMOTE_PYTHON,
     REMOTE_REPO,
     SSH_READY_MAX_ATTEMPTS,
     SSH_READY_TIMEOUT_S,
+    KNOWN_HOST_PATH,
     InstanceNotApproved,
     SmokeError,
     SshRemote,
-    arm_own_key_delete,
     assert_request_allowed,
     call_json,
     guard_own_key_delete,
@@ -37,6 +39,7 @@ from sceneagent.vast_smoke import (
     endpoint_for,
     ephemeral_key_record,
     list_attached_ssh_keys,
+    load_known_host_line,
     load_ssh_key_fingerprints,
     main,
     mask_secret,
@@ -54,6 +57,7 @@ from sceneagent.vast_smoke import (
     normalize_run_context,
     run_smoke,
     ssh_base_argv,
+    ssh_endpoint,
     ssh_forwarding_problems,
     ssh_key_id_from_attach,
     wait_until_ssh_accepts,
@@ -77,6 +81,8 @@ def _texas(status, **extra):
         "geolocation": "Texas, US",
         "ssh_host": "ssh6.vast.ai",
         "ssh_port": 35512,
+        "public_ipaddr": "47.186.21.5",
+        "ports": {"22/tcp": [{"HostPort": "51823"}]},
         "gpu_name": "RTX 4090",
         "jupyter_token": "do-not-log",
         "extra_env": [["SECRET", "nope"]],
@@ -143,58 +149,63 @@ class _Remote:
         self.closed = True
 
 
-def test_parse_instance_id_accepts_only_the_texas_instance():
-    assert parse_instance_id(58301075) == 58301075
-    assert parse_instance_id("58301075") == 58301075
-    assert parse_instance_id(" 58301075 ") == 58301075
+def test_parse_instance_id_accepts_only_59601312():
+    assert ALLOWED_INSTANCE_ID == 59601312
+    assert parse_instance_id(59601312) == 59601312
+    assert parse_instance_id("59601312") == 59601312
+    assert parse_instance_id(" 59601312 ") == 59601312
     for value in (
+        58301075,
+        "58301075",
+        " 58301075 ",
         11111111,
-        "58301075.0",
+        "59601312.0",
         "",
         None,
         True,
         False,
-        58301075.0,
-        "58301075abc",
+        59601312.0,
+        "59601312abc",
     ):
         with pytest.raises(InstanceNotApproved):
             parse_instance_id(value)
 
 
-def test_endpoint_allowlist_is_show_start_stop_and_ssh_on_one_id():
-    method, url, body = endpoint_for("show", "58301075")
+def test_endpoint_allowlist_is_show_and_ssh_on_one_id():
+    method, url, body = endpoint_for("show", "59601312")
     assert method == "GET"
-    assert url == "https://console.vast.ai/api/v0/instances/58301075/?owner=me"
+    assert url == "https://console.vast.ai/api/v0/instances/59601312/?owner=me"
     assert body is None
-    assert endpoint_for("start", 58301075)[2] == {"state": "running"}
-    assert endpoint_for("stop", 58301075)[2] == {"state": "stopped"}
-    attached = endpoint_for("attach_ssh", 58301075, public_key=PUBLIC_KEY)
-    assert attached[0] == "POST"
-    assert attached[1].endswith("/58301075/ssh/")
-    assert attached[2] == {"ssh_key": PUBLIC_KEY}
-    detached = endpoint_for("detach_ssh", 58301075, ssh_key_id="42")
-    assert detached[0] == "DELETE"
-    assert detached[1].endswith("/58301075/ssh/42/")
+    for kind in ("start", "stop", "attach_ssh", "detach_ssh"):
+        with pytest.raises(InstanceNotApproved):
+            endpoint_for(kind, 59601312)
+    for state in ("running", "stopped"):
+        with pytest.raises(InstanceNotApproved):
+            assert_request_allowed(
+                "PUT",
+                "https://console.vast.ai/api/v0/instances/59601312/",
+                {"state": state},
+            )
     for kind in ("create", "rent", "resize", "destroy", "delete", "reboot", "label"):
         with pytest.raises(InstanceNotApproved):
-            endpoint_for(kind, 58301075)
+            endpoint_for(kind, 59601312)
     with pytest.raises(InstanceNotApproved):
         endpoint_for("show", 11111111)
     with pytest.raises(InstanceNotApproved):
-        endpoint_for(
-            "attach_ssh",
-            58301075,
-            public_key="-----BEGIN OPENSSH PRIVATE KEY-----\nsecret",
+        assert_request_allowed(
+            "POST",
+            "https://console.vast.ai/api/v0/instances/59601312/ssh/",
+            {"ssh_key": PUBLIC_KEY},
         )
     with pytest.raises(InstanceNotApproved):
         assert_request_allowed(
             "PUT",
-            "https://console.vast.ai/api/v0/instances/58301075/",
+            "https://console.vast.ai/api/v0/instances/59601312/",
             {"state": "running", "disk": 500},
         )
     with pytest.raises(InstanceNotApproved):
         assert_request_allowed(
-            "DELETE", "https://console.vast.ai/api/v0/instances/58301075/", None
+            "DELETE", "https://console.vast.ai/api/v0/instances/59601312/", None
         )
     with pytest.raises(InstanceNotApproved):
         assert_request_allowed(
@@ -203,7 +214,7 @@ def test_endpoint_allowlist_is_show_start_stop_and_ssh_on_one_id():
     with pytest.raises(InstanceNotApproved):
         assert_request_allowed(
             "GET",
-            "https://console.vast.ai/api/v0/instances/58301075/?owner=me&api_key=secret",
+            "https://console.vast.ai/api/v0/instances/59601312/?owner=me&api_key=secret",
             None,
         )
 
@@ -221,7 +232,7 @@ def test_request_json_refuses_a_forbidden_url_before_the_network(monkeypatch):
 
 def test_require_approved_instance_checks_id_and_texas():
     row = require_approved_instance({"instances": _texas("running")})
-    assert row["id"] == 58301075
+    assert row["id"] == 59601312
     with pytest.raises(InstanceNotApproved, match="missing"):
         require_approved_instance({"instances": None})
     with pytest.raises(InstanceNotApproved, match="not Texas"):
@@ -298,6 +309,11 @@ def test_child_env_drops_the_api_key(monkeypatch):
     env = child_env()
     assert "VAST_API_KEY" not in env
     assert "GITHUB_TOKEN" not in env
+    monkeypatch.setenv(
+        "VAST_SSH_PRIVATE_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret\n"
+    )
+    env = child_env()
+    assert "VAST_SSH_PRIVATE_KEY" not in env
     assert "GH_TOKEN" not in env
     blob = " ".join(env.values())
     assert "super-secret" not in blob
@@ -306,13 +322,16 @@ def test_child_env_drops_the_api_key(monkeypatch):
 
 def test_remote_command_is_the_fruits_entry_point_and_carries_no_secret():
     argv = _command()
-    assert argv[:3] == ["python3", "-m", "sceneagent"]
+    assert argv[0] == REMOTE_PYTHON
+    assert argv[1:3] == ["-m", "sceneagent"]
     assert argv[3].endswith(FRUITS_RELATIVE)
     assert argv[4:] == ["--out", REMOTE_OUT]
     script = build_remote_shell(REMOTE_REPO, REMOTE_OUT)
     assert "Fruits.mp4" in script
     assert "PYTHONPATH" in script
     assert "host_probe.json" in script
+    assert "command -v python3" not in script
+    assert "py=python" not in script
     blob = script + "\n" + build_fetch_script(REMOTE_OUT) + "\n" + " ".join(argv)
     lowered = blob.lower()
     for banned in ("vast_api_key", "bearer", "api_key", "gemini", "meshy"):
@@ -321,6 +340,20 @@ def test_remote_command_is_the_fruits_entry_point_and_carries_no_secret():
     assert "SimFoundry" not in REMOTE_REPO
     with pytest.raises(InstanceNotApproved):
         build_remote_command("/tmp/../etc", REMOTE_OUT)
+
+
+def test_missing_pinned_interpreter_exits_127_and_does_not_use_path():
+    script = build_remote_shell(REMOTE_REPO, REMOTE_OUT)
+    assert script.count(REMOTE_PYTHON) >= 2
+    completed = subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 127
+    assert completed.stderr.strip() == f"pinned interpreter missing: {REMOTE_PYTHON}"
+    assert "command -v" not in script
 
 
 def test_ssh_and_rsync_argv_do_not_carry_the_api_key(tmp_path):
@@ -336,6 +369,8 @@ def test_ssh_and_rsync_argv_do_not_carry_the_api_key(tmp_path):
     blob = " ".join(argv)
     for command, _cwd in invocations:
         blob += " " + " ".join(command)
+    assert "StrictHostKeyChecking=yes" in argv
+    assert "accept-new" not in " ".join(argv)
     assert "VAST_API_KEY" not in blob
     assert "Bearer" not in blob
     assert FRUITS_RELATIVE in blob
@@ -352,7 +387,7 @@ def test_deferred_ledger_is_not_a_pass_and_is_not_rewritten(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="deferred")
     before = (run / "ledger.json").read_bytes()
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert (run / "ledger.json").read_bytes() == before
     ledger = json.loads(before.decode("utf-8"))
     assert ledger["entries"][1]["decision"] == "deferred"
@@ -372,7 +407,7 @@ def test_reject_is_reported_failed_without_editing_the_ledger(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="reject")
     before = (run / "ledger.json").read_bytes()
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert (run / "ledger.json").read_bytes() == before
     assert manifest["passed"] is False
     assert manifest["stages"][1]["reported"] == "failed"
@@ -382,7 +417,7 @@ def test_reject_is_reported_failed_without_editing_the_ledger(tmp_path):
 def test_cpu_accept_is_not_a_gpu_pass(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="accept", use_gpu=False)
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert manifest["passed"] is False
     assert manifest["stages"][1]["reported"] == "accept_without_gpu"
 
@@ -392,7 +427,7 @@ def test_collector_copies_pipeline_plan_unchanged_and_fails_when_missing(tmp_pat
     _write_run(run, decision="accept", use_gpu=True)
     original = b'{"scene_name":"Fruits","from":"pipeline"}\n'
     (run / "plan.json").write_bytes(original)
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert manifest["passed"] is True
     assert (run / "plan.json").read_bytes() == original
     assert not (run / "plan.derived.json").exists()
@@ -403,7 +438,7 @@ def test_collector_copies_pipeline_plan_unchanged_and_fails_when_missing(tmp_pat
 
     bare = tmp_path / "bare"
     _write_run(bare, decision="accept", use_gpu=True)
-    missing = collect_artifact_manifest(bare, command=_command(), instance_id=58301075)
+    missing = collect_artifact_manifest(bare, command=_command(), instance_id=59601312)
     assert missing["passed"] is False
     assert missing["plan"] is None
     assert "plan" in missing["missing"]
@@ -424,7 +459,7 @@ def test_gpu_accept_passes_and_keeps_an_existing_plan(tmp_path):
     (run / "plan.json").write_text(json.dumps(original) + "\n", encoding="utf-8")
     before = (run / "plan.json").read_bytes()
     manifest = collect_artifact_manifest(
-        run, command=_command(), instance_id="58301075"
+        run, command=_command(), instance_id="59601312"
     )
     assert manifest["passed"] is True
     assert manifest["failure_reason"] is None
@@ -437,7 +472,7 @@ def test_cuda_probe_does_not_turn_a_deferred_ledger_into_a_pass(tmp_path):
     _write_run(
         run, decision="deferred", probe={"colmap_cuda": True, "nvidia_smi_ok": True}
     )
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert manifest["passed"] is False
     assert manifest["host_probe"]["colmap_cuda"] is True
 
@@ -445,7 +480,7 @@ def test_cuda_probe_does_not_turn_a_deferred_ledger_into_a_pass(tmp_path):
 def test_missing_ledger_is_not_invented(tmp_path):
     run = tmp_path / "run"
     run.mkdir()
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert manifest["passed"] is False
     assert "ledger" in manifest["missing"]
     assert manifest["ledger_status"] == "missing"
@@ -463,7 +498,7 @@ def test_fruits_video_deferral_is_not_a_pass(tmp_path, monkeypatch):
     run_video(FRUITS, run)
     plan_before = (run / "plan.json").read_bytes()
     before = (run / "ledger.json").read_bytes()
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert (run / "ledger.json").read_bytes() == before
     assert (run / "plan.json").read_bytes() == plan_before
     ledger = json.loads(before.decode("utf-8"))
@@ -490,7 +525,7 @@ def test_run_smoke_on_a_running_instance_does_not_stop(tmp_path):
 
     remote = _Remote(write_passing_run)
     code = run_smoke(
-        58301075,
+        59601312,
         _checkout(tmp_path),
         tmp_path / "artifacts",
         "test-key",
@@ -510,50 +545,34 @@ def test_run_smoke_on_a_running_instance_does_not_stop(tmp_path):
     assert published["passed"] is True
 
 
-def test_run_smoke_starts_and_stops_a_stopped_instance_when_the_remote_fails(tmp_path):
+def test_dispatch_refuses_a_stopped_instance_without_lifecycle_calls(tmp_path, capsys):
     calls = []
-    phase = {"started": False}
 
     def request(method, url, api_key, body=None, timeout=60):
-        calls.append((method, None if body is None else dict(body)))
+        calls.append((method, url, None if body is None else dict(body)))
         assert "test-key" not in url
         if method == "GET":
-            status = "running" if phase["started"] else "exited"
-            return 200, {"instances": _texas(status)}
-        if method == "PUT" and body == {"state": "running"}:
-            phase["started"] = True
-            return 200, {"success": True}
-        if method == "PUT" and body == {"state": "stopped"}:
-            phase["started"] = False
-            return 200, {"success": True}
+            return 200, {"instances": _texas("exited")}
         raise AssertionError((method, body))
 
-    remote = _Remote(lambda run: _write_run(run, decision="deferred"), rc=0)
-    # Only an explicit workflow_dispatch may start a stopped instance.
     code = run_smoke(
-        "58301075",
+        "59601312",
         _checkout(tmp_path),
         tmp_path / "artifacts",
         "test-key",
         request=request,
-        remote_factory=lambda _row: remote,
         sleep=lambda _seconds: None,
         trigger="dispatch",
         actor="sandy-t-shelvan",
         commit_sha="d" * 40,
     )
-    assert code == 1
-    assert calls[0][0] == "GET"
-    assert calls[1] == ("PUT", {"state": "running"})
-    assert calls[-1] == ("PUT", {"state": "stopped"})
-    ledger = json.loads(
-        (tmp_path / "artifacts" / "ledger.json").read_text(encoding="utf-8")
+    assert code == 2
+    assert [call[0] for call in calls] == ["GET"]
+    assert _puts(calls) == []
+    assert (
+        "instance stopped; this workflow does not start or stop instances"
+        in capsys.readouterr().err
     )
-    assert ledger["entries"][1]["decision"] == "deferred"
-    manifest = json.loads(
-        (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
-    )
-    assert manifest["passed"] is False
 
 
 def test_run_smoke_refuses_the_wrong_instance_before_the_network(tmp_path):
@@ -565,7 +584,7 @@ def test_run_smoke_refuses_the_wrong_instance_before_the_network(tmp_path):
 
 
 def test_run_smoke_refuses_a_missing_key_and_a_non_texas_host(tmp_path, capsys):
-    code = run_smoke(58301075, _checkout(tmp_path), tmp_path / "out", "")
+    code = run_smoke(59601312, _checkout(tmp_path), tmp_path / "out", "")
     assert code == 2
     assert "not set" in capsys.readouterr().err
 
@@ -574,7 +593,7 @@ def test_run_smoke_refuses_a_missing_key_and_a_non_texas_host(tmp_path, capsys):
         return 200, {"instances": _texas("running", geolocation="Quebec, CA")}
 
     code = run_smoke(
-        58301075,
+        59601312,
         _checkout(tmp_path),
         tmp_path / "out",
         "test-key",
@@ -595,7 +614,7 @@ def test_run_smoke_does_not_start_an_offline_instance(tmp_path):
         return 200, {"instances": _texas("offline")}
 
     code = run_smoke(
-        58301075,
+        59601312,
         _checkout(tmp_path),
         tmp_path / "out",
         "test-key",
@@ -637,7 +656,7 @@ def test_other_instance_id_is_rejected_before_any_http_call(monkeypatch, tmp_pat
     monkeypatch.setattr("sceneagent.vast_smoke.urllib.request.urlopen", boom)
     monkeypatch.setenv("VAST_API_KEY", "sf4-not-a-real-key")
     checkout = _checkout(tmp_path)
-    for other in (11111111, "1", "58301076"):
+    for other in (11111111, "1", "58301075", "58301076", 59601313):
         code = main(
             [
                 "--instance-id",
@@ -736,7 +755,7 @@ def test_run_steps_do_not_interpolate_expressions():
     for block in blocks:
         assert "${{" not in block
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "--instance-id 58301075" in text
+    assert "--instance-id 59601312" in text
     # The payload and the artifact dir stay under the runner env var.
     # Expressions are kept out of run scripts by the loop above.
     assert '"$GITHUB_WORKSPACE/payload"' in text
@@ -748,7 +767,7 @@ def test_workflow_dispatch_has_no_inputs_and_keeps_the_instance_literal():
     assert "workflow_dispatch:" in text
     assert "inputs:" not in text
     assert "inputs." not in text
-    assert "--instance-id 58301075" in text
+    assert "--instance-id 59601312" in text
     assert "pull_request_target:" in text
     for line in text.splitlines():
         assert line.strip() != "pull_request:"
@@ -770,7 +789,7 @@ def test_no_pipeline_plan_records_dc2_missing_and_writes_no_plan_file(tmp_path):
     run = tmp_path / "run"
     _write_run(run, decision="deferred")
     before = (run / "ledger.json").read_bytes()
-    manifest = collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    manifest = collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     assert list(run.glob("plan*")) == []
     assert (run / "ledger.json").read_bytes() == before
     assert manifest["dc2"] in {"missing", "failed"}
@@ -889,7 +908,7 @@ def test_published_ledger_is_byte_identical_to_the_pipeline(tmp_path):
     _write_run(run, decision="accept", use_gpu=True)
     (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
     before = (run / "ledger.json").read_bytes()
-    collect_artifact_manifest(run, command=_command(), instance_id=58301075)
+    collect_artifact_manifest(run, command=_command(), instance_id=59601312)
     artifacts = tmp_path / "artifacts"
     publish_artifacts(run, artifacts)
     assert (run / "ledger.json").read_bytes() == before
@@ -989,7 +1008,7 @@ def test_ssh_ready_exhaustion_raises():
     def sleep(_seconds):
         sleep_tick()
 
-    with pytest.raises(SmokeError, match="did not accept the ephemeral key"):
+    with pytest.raises(SmokeError, match="did not accept the configured key"):
         wait_until_ssh_accepts(
             probe,
             sleep=sleep,
@@ -1309,7 +1328,7 @@ def test_listing_attached_ssh_keys_uses_pinned_get_and_fingerprints():
         if method == "DELETE":
             raise AssertionError("detach")
         assert method == "GET"
-        assert url == "https://console.vast.ai/api/v0/instances/58301075/ssh/"
+        assert url == "https://console.vast.ai/api/v0/instances/59601312/ssh/"
         assert body is None
         return 200, {"success": True, "ssh_keys": json.dumps([_sample_ssh_key()])}
 
@@ -1356,11 +1375,11 @@ def test_show_body_without_keys_records_absence_and_makes_no_detach():
 def test_allowlist_still_rejects_ssh_list_and_instance_mutations():
     for kind in ("create", "rent", "resize", "destroy", "search"):
         with pytest.raises(InstanceNotApproved):
-            endpoint_for(kind, 58301075)
+            endpoint_for(kind, 59601312)
     with pytest.raises(InstanceNotApproved):
         assert_request_allowed(
             "DELETE",
-            "https://console.vast.ai/api/v0/instances/58301075/",
+            "https://console.vast.ai/api/v0/instances/59601312/",
             None,
         )
 
@@ -1398,7 +1417,7 @@ def test_run_smoke_does_not_publish_show_body_key_material(tmp_path):
 
     def list_request(method, url, api_key, body=None, timeout=60):
         assert method == "GET"
-        assert url.endswith("/58301075/ssh/")
+        assert url.endswith("/59601312/ssh/")
         assert body is None
         return 200, {"success": True, "ssh_keys": json.dumps([_sample_ssh_key()])}
 
@@ -1411,11 +1430,11 @@ def test_run_smoke_does_not_publish_show_body_key_material(tmp_path):
     assert "sf4-smoke" not in recorded
 
 
-PINNED_SSH_LIST = "https://console.vast.ai/api/v0/instances/58301075/ssh/"
+PINNED_SSH_LIST = "https://console.vast.ai/api/v0/instances/59601312/ssh/"
 
 
 def test_pinned_ssh_list_get_is_allowed():
-    method, url, body = endpoint_for("show_ssh_keys", 58301075)
+    method, url, body = endpoint_for("show_ssh_keys", 59601312)
     assert method == "GET"
     assert url == PINNED_SSH_LIST
     assert body is None
@@ -1439,18 +1458,18 @@ def test_pinned_ssh_list_get_is_allowed():
         ("GET", "https://console.vast.ai/api/v0/instances/ssh/", None),
         ("GET", "https://console.vast.ai/api/v0/instances/1/ssh/", None),
         ("GET", "https://console.vast.ai/api/v0/instances/58357498/ssh/", None),
-        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh", None),
-        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/", None),
-        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/extra/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/59601312/ssh", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/59601312/ssh/1/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/59601312/ssh/1/extra/", None),
         (
             "POST",
-            "https://console.vast.ai/api/v0/instances/58301075/ssh/1/",
+            "https://console.vast.ai/api/v0/instances/59601312/ssh/1/",
             {"ssh_key": PUBLIC_KEY},
         ),
-        ("PUT", "https://console.vast.ai/api/v0/instances/58301075/ssh/1/", None),
+        ("PUT", "https://console.vast.ai/api/v0/instances/59601312/ssh/1/", None),
         (
             "DELETE",
-            "https://console.vast.ai/api/v0/instances/58301075/ssh/1/extra/",
+            "https://console.vast.ai/api/v0/instances/59601312/ssh/1/extra/",
             None,
         ),
     ],
@@ -1663,6 +1682,7 @@ def test_ssh_remote_sync_retries_the_probe_then_rsyncs(tmp_path, monkeypatch):
     assert counter["probes"] == 3
     assert counter["rsync"] == 2
     assert remote.ssh_report["accepted"] is True
+    assert "detach" not in remote.ssh_report
     assert codes == []
 
 
@@ -1683,8 +1703,11 @@ def test_ssh_remote_sync_fails_cleanly_when_the_probe_bound_runs_out(
     monkeypatch.setattr("sceneagent.vast_smoke.subprocess.run", run_rsync)
     remote = _bare_remote(_bound_sleep(counter))
     remote._probe_ssh = probe
-    with pytest.raises(SmokeError, match="did not accept the ephemeral key"):
+    with pytest.raises(SmokeError, match="did not accept the configured key") as raised:
         remote._sync(_checkout(tmp_path))
+    message = str(raised.value)
+    assert "attach_ssh" not in message
+    assert "detach" not in message.lower()
     assert counter["probes"] == 6
     assert remote.ssh_report["accepted"] is False
 
@@ -1700,13 +1723,25 @@ def test_put_state_body_on_the_ssh_path_is_refused():
     with pytest.raises(InstanceNotApproved):
         assert_request_allowed(
             "PUT",
-            "https://console.vast.ai/api/v0/instances/58301075/",
+            "https://console.vast.ai/api/v0/instances/59601312/",
             {"state": "paused"},
         )
-    method, url, body = endpoint_for("start", 58301075)
-    assert method == "PUT"
-    assert url == "https://console.vast.ai/api/v0/instances/58301075/"
-    assert body == {"state": "running"}
+    with pytest.raises(InstanceNotApproved):
+        endpoint_for("start", 59601312)
+    with pytest.raises(InstanceNotApproved):
+        endpoint_for("stop", 59601312)
+    with pytest.raises(InstanceNotApproved):
+        assert_request_allowed(
+            "PUT",
+            "https://console.vast.ai/api/v0/instances/59601312/",
+            {"state": "running"},
+        )
+    with pytest.raises(InstanceNotApproved):
+        assert_request_allowed(
+            "PUT",
+            "https://console.vast.ai/api/v0/instances/59601312/",
+            {"state": "stopped"},
+        )
 
 
 def test_patch_and_put_on_the_pinned_ssh_path_are_refused():
@@ -1722,7 +1757,7 @@ def test_pinned_ssh_get_guard_accepts_only_that_path():
     refused = [
         ("GET", PINNED_SSH_LIST + "?owner=me", None),
         ("GET", "https://console.vast.ai/api/v0/instances/1/ssh/", None),
-        ("GET", "https://console.vast.ai/api/v0/instances/58301075/ssh/77/", None),
+        ("GET", "https://console.vast.ai/api/v0/instances/59601312/ssh/77/", None),
         ("GET", "https://console.vast.ai/api/v0/ssh/", None),
         ("POST", PINNED_SSH_LIST, None),
         ("PATCH", PINNED_SSH_LIST, None),
@@ -1801,61 +1836,11 @@ def _install_remote_run(monkeypatch, fail):
     monkeypatch.setattr(SshRemote, "run", fake_run)
 
 
-def test_own_key_is_detached_on_success_and_on_failure(tmp_path, monkeypatch):
+def test_running_smoke_does_not_attach_or_delete_remote_keys(tmp_path, monkeypatch):
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    for fail, expected in ((False, 0), (True, 1)):
-        calls, request = _listing_transport("one")
-        _install_remote_run(monkeypatch, fail)
-        artifacts = tmp_path / ("fail" if fail else "ok")
-        code = run_smoke(
-            ALLOWED_INSTANCE_ID,
-            _checkout(tmp_path),
-            artifacts,
-            "test-key",
-            request=request,
-            sleep=lambda _seconds: None,
-        )
-        assert code == expected
-        deletes = [url for method, url in calls if method == "DELETE"]
-        assert deletes == ["https://console.vast.ai/api/v0/instances/58301075/ssh/77/"]
-        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["own_key"]["match_count"] == 1
-        assert manifest["own_key"]["detached"] is True
-        assert "exactly one" in manifest["own_key"]["reason"]
-        assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
-
-
-def test_no_delete_when_zero_or_several_keys_match(tmp_path, monkeypatch):
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    calls, request = _listing_transport("one")
     _install_remote_run(monkeypatch, fail=False)
-    expectations = {
-        "zero": (0, "no listed key"),
-        "several": (2, "more than one"),
-    }
-    for mode, (count, reason) in expectations.items():
-        calls, request = _listing_transport(mode)
-        artifacts = tmp_path / mode
-        code = run_smoke(
-            ALLOWED_INSTANCE_ID,
-            _checkout(tmp_path),
-            artifacts,
-            "test-key",
-            request=request,
-            sleep=lambda _seconds: None,
-        )
-        assert code == 0
-        assert [url for method, url in calls if method == "DELETE"] == []
-        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["own_key"]["match_count"] == count
-        assert manifest["own_key"]["detached"] is False
-        assert reason in manifest["own_key"]["reason"]
-        assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
-
-
-def _assert_no_match(tmp_path, monkeypatch, mode):
-    calls, request = _listing_transport(mode)
-    _install_remote_run(monkeypatch, fail=False)
-    artifacts = tmp_path / mode
+    artifacts = tmp_path / "ok"
     code = run_smoke(
         ALLOWED_INSTANCE_ID,
         _checkout(tmp_path),
@@ -1863,66 +1848,17 @@ def _assert_no_match(tmp_path, monkeypatch, mode):
         "test-key",
         request=request,
         sleep=lambda _seconds: None,
+        ssh_private_key=_FAKE_PRIVATE,
+        known_host_file=_host_pin(tmp_path),
     )
-    manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
     assert code == 0
-    assert [url for method, url in calls if method == "DELETE"] == []
-    assert manifest["own_key"]["match_count"] == 0
-    assert manifest["own_key"]["detached"] is False
-    assert "ssh-ed25519" not in json.dumps(manifest["own_key"])
-
-
-def test_near_miss_listed_keys_do_not_match(tmp_path, monkeypatch):
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    for mode in ("substring", "reverse", "case"):
-        _assert_no_match(tmp_path, monkeypatch, mode)
-
-
-def test_own_key_match_rstrip_boundary(tmp_path, monkeypatch):
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    calls, request = _listing_transport("trailing")
-    _install_remote_run(monkeypatch, fail=False)
-    artifacts = tmp_path / "trailing"
-    code = run_smoke(
-        ALLOWED_INSTANCE_ID,
-        _checkout(tmp_path),
-        artifacts,
-        "test-key",
-        request=request,
-        sleep=lambda _seconds: None,
-    )
-    manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
-    assert code == 0
-    assert [url for method, url in calls if method == "DELETE"] == [
-        "https://console.vast.ai/api/v0/instances/58301075/ssh/77/"
-    ]
-    assert manifest["own_key"]["match_count"] == 1
-    assert manifest["own_key"]["detached"] is True
-    _assert_no_match(tmp_path, monkeypatch, "leading")
-
-
-def test_failed_own_key_delete_is_recorded_as_failed(tmp_path, monkeypatch):
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    for mode in ("http", "raise"):
-        calls, request = _listing_transport(mode)
-        _install_remote_run(monkeypatch, fail=False)
-        artifacts = tmp_path / mode
-        code = run_smoke(
-            ALLOWED_INSTANCE_ID,
-            _checkout(tmp_path),
-            artifacts,
-            "test-key",
-            request=request,
-            sleep=lambda _seconds: None,
-        )
-        assert code != 0
-        assert any(method == "DELETE" for method, _url in calls)
-        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
-        assert manifest["own_key"]["match_count"] == 1
-        assert manifest["own_key"]["detached"] is False
-        assert "fail" in manifest["own_key"]["reason"].lower()
-        assert manifest["ssh"]["detach"] == "failed"
-        assert manifest["ssh"]["detach"] != "detached"
+    methods = [method for method, _url in calls]
+    assert "POST" not in methods
+    assert "DELETE" not in methods
+    text = (artifacts / "manifest.json").read_text(encoding="utf-8")
+    manifest = json.loads(text)
+    assert "own_key" not in manifest
+    assert _FAKE_PRIVATE.strip() not in text
 
 
 def test_exit_code_survives_failure_manifest_error(tmp_path, monkeypatch):
@@ -1968,7 +1904,7 @@ def test_exit_code_survives_failure_manifest_error(tmp_path, monkeypatch):
         assert code == rc
 
 
-def test_detach_guard_refuses_any_other_key_id(monkeypatch):
+def test_detach_guard_refuses_every_remote_key_delete(monkeypatch):
     monkeypatch.setattr("sceneagent.vast_smoke.DETACH_LEFTOVER_KEYS", True)
     calls = []
 
@@ -1976,29 +1912,17 @@ def test_detach_guard_refuses_any_other_key_id(monkeypatch):
         calls.append((method, url))
         return 200, {"success": True}
 
-    own = "https://console.vast.ai/api/v0/instances/58301075/ssh/77/"
-    other = "https://console.vast.ai/api/v0/instances/58301075/ssh/78/"
-    elsewhere = "https://console.vast.ai/api/v0/instances/1/ssh/77/"
-    arm_own_key_delete(None)
-    for url in (own, other, elsewhere):
-        with pytest.raises(InstanceNotApproved):
+    urls = (
+        "https://console.vast.ai/api/v0/instances/59601312/ssh/77/",
+        "https://console.vast.ai/api/v0/instances/59601312/ssh/78/",
+        "https://console.vast.ai/api/v0/instances/1/ssh/77/",
+    )
+    for url in urls:
+        with pytest.raises(InstanceNotApproved, match="refusing to delete"):
             guard_own_key_delete("DELETE", url)
-        with pytest.raises(InstanceNotApproved):
+        with pytest.raises(InstanceNotApproved, match="refusing to delete"):
             call_json(request, "DELETE", url, "test-key", None, sleep=lambda _s: None)
     assert calls == []
-    arm_own_key_delete("77")
-    try:
-        with pytest.raises(InstanceNotApproved):
-            guard_own_key_delete("DELETE", other)
-        with pytest.raises(InstanceNotApproved):
-            call_json(request, "DELETE", other, "test-key", None, sleep=lambda _s: None)
-        with pytest.raises(InstanceNotApproved):
-            guard_own_key_delete("DELETE", elsewhere)
-        guard_own_key_delete("DELETE", own)
-        call_json(request, "DELETE", own, "test-key", None, sleep=lambda _s: None)
-        assert calls == [("DELETE", own)]
-    finally:
-        arm_own_key_delete(None)
 
 
 def test_ssh_argv_does_not_forward_environment():
@@ -2105,11 +2029,17 @@ def test_label_trigger_does_not_start_a_stopped_instance(tmp_path, capsys):
     )
     assert code != 0
     assert _puts(calls) == []
-    assert "instance stopped; start needs Sandeep" in capsys.readouterr().err
+    assert (
+        "instance stopped; this workflow does not start or stop instances"
+        in capsys.readouterr().err
+    )
     manifest = json.loads(
         (tmp_path / "artifacts" / "manifest.json").read_text(encoding="utf-8")
     )
-    assert manifest["failure_reason"] == "instance stopped; start needs Sandeep"
+    assert (
+        manifest["failure_reason"]
+        == "instance stopped; this workflow does not start or stop instances"
+    )
     assert manifest["passed"] is False
 
 
@@ -2128,7 +2058,10 @@ def test_request_file_trigger_does_not_start_a_stopped_instance(tmp_path, capsys
     )
     assert code != 0
     assert _puts(calls) == []
-    assert "instance stopped; start needs Sandeep" in capsys.readouterr().err
+    assert (
+        "instance stopped; this workflow does not start or stop instances"
+        in capsys.readouterr().err
+    )
 
 
 def _run_bot_smoke(tmp_path, status, trigger, actor, commit_sha):
@@ -2158,7 +2091,9 @@ def _run_bot_smoke(tmp_path, status, trigger, actor, commit_sha):
 
 # Exact text InstanceNotApproved raises for a starting instance. Do not loosen
 # this to a substring: a longer message would still contain the words.
-_STARTING_REFUSAL = "instance not running; start needs Sandeep"
+_STARTING_REFUSAL = (
+    "instance not running; this workflow does not start or stop instances"
+)
 
 
 def _assert_starting_refusal(tmp_path, capsys, calls, code):
@@ -2174,9 +2109,7 @@ def _assert_starting_refusal(tmp_path, capsys, calls, code):
 
 def test_label_trigger_refuses_a_starting_instance(tmp_path, capsys):
     # Vast reports loading while the instance is coming up. That is starting.
-    calls, code = _run_bot_smoke(
-        tmp_path, "loading", "label", "cursor[bot]", "a" * 40
-    )
+    calls, code = _run_bot_smoke(tmp_path, "loading", "label", "cursor[bot]", "a" * 40)
     _assert_starting_refusal(tmp_path, capsys, calls, code)
 
 
@@ -2202,7 +2135,10 @@ def test_bot_trigger_refuses_an_unknown_instance_state(tmp_path, capsys):
     )
     assert code != 0
     assert _puts(calls) == []
-    assert "instance state unknown; start needs Sandeep" in capsys.readouterr().err
+    assert (
+        "instance state unknown; this workflow does not start or stop instances"
+        in capsys.readouterr().err
+    )
 
 
 def test_missing_trigger_does_not_start_a_stopped_instance(tmp_path):
@@ -2219,26 +2155,25 @@ def test_missing_trigger_does_not_start_a_stopped_instance(tmp_path):
     assert _puts(calls) == []
 
 
-def test_dispatch_may_start_a_stopped_instance(tmp_path):
+def test_workflow_dispatch_cannot_start_or_stop(tmp_path):
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in text
+    assert "58301075" not in text
+    assert "--instance-id 59601312" in text
+    assert "may start" not in text.lower()
+    assert '{"state": "running"}' not in text
+    assert '{"state": "stopped"}' not in text
+    source = (ROOT / "sceneagent" / "vast_smoke.py").read_text(encoding="utf-8")
+    assert "may_start_instance" not in source
+    assert "_change_state" not in source
     calls = []
-    phase = {"started": False}
 
     def request(method, url, api_key, body=None, timeout=60):
         recorded = None if body is None else dict(body)
         calls.append((method, url, recorded))
-        if method == "GET":
-            status = "running" if phase["started"] else "exited"
-            return 200, {"instances": _texas(status)}
-        if method == "PUT" and recorded == {"state": "running"}:
-            phase["started"] = True
-            return 200, {"success": True}
-        if method == "PUT" and recorded == {"state": "stopped"}:
-            return 200, {"success": True}
-        raise AssertionError((method, recorded))
-
-    def write(run):
-        _write_run(run, decision="accept", use_gpu=True)
-        (run / "plan.json").write_bytes(b'{"scene_name":"Fruits","from":"pipeline"}\n')
+        if method != "GET":
+            raise AssertionError((method, recorded))
+        return 200, {"instances": _texas("stopped")}
 
     code = run_smoke(
         ALLOWED_INSTANCE_ID,
@@ -2246,16 +2181,13 @@ def test_dispatch_may_start_a_stopped_instance(tmp_path):
         tmp_path / "artifacts",
         "test-key",
         request=request,
-        remote_factory=lambda _row: _Remote(write),
         sleep=lambda _seconds: None,
         trigger="dispatch",
         actor="sandy-t-shelvan",
         commit_sha="c" * 40,
     )
-    assert any(
-        method == "PUT" and body == {"state": "running"} for method, _url, body in calls
-    )
-    assert code == 0
+    assert code == 2
+    assert _puts(calls) == []
 
 
 def test_orchestrator_refuses_when_payload_is_importable(tmp_path, monkeypatch, capsys):
@@ -2467,45 +2399,6 @@ def test_run_context_cannot_change_the_instance_id():
             normalize_run_context(trigger, actor, sha)
 
 
-def _assert_detach_agreement(manifest):
-    own = manifest["own_key"]
-    detach = manifest["ssh"]["detach"]
-    if own["detached"]:
-        assert own["match_count"] == 1
-        assert detach == "detached"
-    elif own["match_count"] == 1:
-        assert detach == "failed"
-    else:
-        assert own["detached"] is False
-        assert detach == "skipped"
-    assert "not detached" not in json.dumps(manifest["ssh"])
-    assert "not detached" not in json.dumps(manifest["own_key"])
-
-
-def test_manifest_ssh_detach_agrees_with_own_key(tmp_path, monkeypatch):
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    cases = (
-        ("one", False),
-        ("one", True),
-        ("zero", False),
-        ("several", False),
-    )
-    for mode, fail in cases:
-        calls, request = _listing_transport(mode)
-        _install_remote_run(monkeypatch, fail)
-        artifacts = tmp_path / f"{mode}-{'fail' if fail else 'ok'}"
-        run_smoke(
-            ALLOWED_INSTANCE_ID,
-            _checkout(tmp_path),
-            artifacts,
-            "test-key",
-            request=request,
-            sleep=lambda _seconds: None,
-        )
-        manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
-        _assert_detach_agreement(manifest)
-
-
 def test_remote_exit_code_propagates(tmp_path):
     def request(method, url, api_key, body=None, timeout=60):
         assert method == "GET"
@@ -2526,3 +2419,206 @@ def test_remote_exit_code_propagates(tmp_path):
             sleep=lambda _seconds: None,
         )
         assert code == rc
+
+
+_FAKE_PRIVATE = (
+    "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+    "bm90LWEtcmVhbC1rZXk=\n"
+    "-----END OPENSSH PRIVATE KEY-----\n"
+)
+
+
+def _host_pin(directory, host="47.186.21.5", port=51823):
+    path = Path(directory) / "known_host"
+    path.write_text(
+        f"[{host}]:{port} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForSf4SmokeOnly\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_ssh_endpoint_uses_the_direct_port_and_ignores_the_proxy():
+    row = _texas(
+        "running",
+        ssh_host="ssh5.vast.ai",
+        ssh_port=16868,
+    )
+    assert ssh_endpoint(row) == ("47.186.21.5", 51823)
+    pin_line = [
+        line.strip()
+        for line in KNOWN_HOST_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert pin_line == [
+        "[47.186.21.5]:51823 ssh-ed25519 "
+        "AAAAC3NzaC1lZDI1NTE5AAAAIFqxlHMUC7xRRWryJ7y1/3LjWJiHFLhPlb9bH05FR3Nr"
+    ]
+    assert (
+        load_known_host_line(KNOWN_HOST_PATH, "47.186.21.5", 51823).strip()
+        == (pin_line[0])
+    )
+    with pytest.raises(InstanceNotApproved, match="does not match"):
+        load_known_host_line(KNOWN_HOST_PATH, "ssh5.vast.ai", 16868)
+    numeric = _texas("running")
+    numeric["ports"] = {"22/tcp": [{"HostPort": 51823}]}
+    assert ssh_endpoint(numeric) == ("47.186.21.5", 51823)
+
+
+def test_ssh_endpoint_refuses_a_missing_or_invalid_direct_endpoint():
+    proxy = _texas("running", ssh_host="ssh5.vast.ai", ssh_port=16868)
+    missing_ip = dict(proxy)
+    missing_ip.pop("public_ipaddr")
+    with pytest.raises(SmokeError, match="public_ipaddr is missing"):
+        ssh_endpoint(missing_ip)
+    bad_ip = dict(proxy)
+    bad_ip["public_ipaddr"] = "not a host"
+    with pytest.raises(SmokeError, match="public_ipaddr is missing"):
+        ssh_endpoint(bad_ip)
+    for broken in (None, {}, {"80/tcp": [{"HostPort": "80"}]}):
+        row = dict(proxy)
+        row["ports"] = broken
+        with pytest.raises(SmokeError, match="22/tcp is missing"):
+            ssh_endpoint(row)
+    for host_port in (None, "", "abc", "0", 0, True, -1, 70000):
+        row = dict(proxy)
+        row["ports"] = {"22/tcp": [{"HostPort": host_port}]}
+        with pytest.raises(SmokeError, match="22/tcp is missing|HostPort is invalid"):
+            ssh_endpoint(row)
+
+
+def test_running_show_without_a_direct_endpoint_does_not_use_the_proxy(
+    tmp_path, capsys
+):
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        row = _texas("running", ssh_host="ssh5.vast.ai", ssh_port=16868)
+        row.pop("ports")
+        return 200, {"instances": row}
+
+    def factory(_row):
+        raise AssertionError("proxy connection")
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "out",
+        "test-key",
+        request=request,
+        remote_factory=factory,
+        sleep=lambda _seconds: None,
+    )
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "22/tcp is missing" in err
+    assert "ssh5.vast.ai" not in err
+    assert "16868" not in err
+
+
+def test_fixed_key_is_mode_0600_and_removed_on_close(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "sceneagent.vast_smoke.subprocess.run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ssh")),
+    )
+    pin = _host_pin(tmp_path)
+    remote = SshRemote(
+        _texas("running"),
+        "test-key",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("api")),
+        private_key=_FAKE_PRIVATE,
+        known_host_file=pin,
+        sleep=lambda _s: None,
+    )
+    key_path = remote.private
+    assert key_path.stat().st_mode & 0o777 == 0o600
+    assert "BEGIN OPENSSH PRIVATE KEY" not in remote.known_hosts
+    assert "StrictHostKeyChecking=yes" in ssh_base_argv(
+        str(key_path), remote.known_hosts, remote.port
+    )
+    text = key_path.read_text(encoding="utf-8")
+    assert (
+        text == _FAKE_PRIVATE if _FAKE_PRIVATE.endswith("\n") else _FAKE_PRIVATE + "\n"
+    )
+    remote.close()
+    assert not key_path.exists()
+
+
+def test_missing_secret_or_host_pin_fails_before_ssh(tmp_path, capsys, monkeypatch):
+    def explode(*_args, **_kwargs):
+        raise AssertionError("ssh")
+
+    monkeypatch.setattr("sceneagent.vast_smoke.subprocess.run", explode)
+
+    def request(method, url, api_key, body=None, timeout=60):
+        assert method == "GET"
+        assert "/ssh/" not in url
+        return 200, {"instances": _texas("running")}
+
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "out",
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+        ssh_private_key="",
+        known_host_file=_host_pin(tmp_path),
+    )
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "VAST_SSH_PRIVATE_KEY is not set." in err
+    assert "bm90" not in err
+    code = run_smoke(
+        ALLOWED_INSTANCE_ID,
+        _checkout(tmp_path),
+        tmp_path / "out2",
+        "test-key",
+        request=request,
+        sleep=lambda _seconds: None,
+        ssh_private_key=_FAKE_PRIVATE,
+        known_host_file=tmp_path / "missing-pin",
+    )
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "known host pin is not configured" in err
+    assert _FAKE_PRIVATE.strip() not in err
+
+
+def test_sigterm_raises_systemexit_and_finally_closes(monkeypatch, tmp_path):
+    installed = {}
+
+    def capture(signum, handler):
+        installed[signum] = handler
+
+    monkeypatch.setattr("sceneagent.vast_smoke.signal.signal", capture)
+    calls = []
+
+    def request(method, url, api_key, body=None, timeout=60):
+        calls.append((method, None if body is None else dict(body)))
+        assert method == "GET"
+        return 200, {"instances": _texas("running")}
+
+    class _Closing:
+        def __init__(self):
+            self.closed = False
+
+        def run(self, checkout, local_run):
+            installed[signal.SIGTERM](signal.SIGTERM, None)
+
+        def close(self):
+            self.closed = True
+
+    remote = _Closing()
+    with pytest.raises(SystemExit) as caught:
+        run_smoke(
+            ALLOWED_INSTANCE_ID,
+            _checkout(tmp_path),
+            tmp_path / "out",
+            "test-key",
+            request=request,
+            remote_factory=lambda _row: remote,
+            sleep=lambda _seconds: None,
+            handle_sigterm=True,
+        )
+    assert caught.value.code == 1
+    assert remote.closed is True
+    assert calls == [("GET", None)]

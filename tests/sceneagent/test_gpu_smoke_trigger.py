@@ -341,8 +341,10 @@ def test_cancelled_run_cannot_reach_the_start_put():
     mutant = text.replace("      !cancelled() &&\n", "", 1)
     killed = [item for item in workflow_safety_findings(mutant) if "cancelled" in item]
     assert killed == [
-        "fruits_gpu_smoke job if uses always() without !cancelled() "
-        "on the path to the start PUT"
+        (
+            "fruits_gpu_smoke job if uses always() without !cancelled() "
+            "on the path to vast_smoke"
+        )
     ]
     step_mutant = text.replace(
         "      - name: Vast GPU smoke on Fruits.mp4\n",
@@ -355,8 +357,10 @@ def test_cancelled_run_cannot_reach_the_start_put():
         if "step uses always()" in item
     ]
     assert step_killed == [
-        "fruits_gpu_smoke step uses always() without !cancelled() "
-        "on the path to the start PUT"
+        (
+            "fruits_gpu_smoke step uses always() without !cancelled() "
+            "on the path to vast_smoke"
+        )
     ]
 
 
@@ -398,6 +402,30 @@ def test_label_cleanup_does_not_run_for_a_different_label():
         expression,
         smoke_result="cancelled",
         event_label="qa-pass",
+    )
+
+
+def test_workflow_checker_rejects_retired_id_and_lifecycle_puts():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    retired = text.replace("--instance-id 59601312", "--instance-id 58301075", 1)
+    findings = workflow_safety_findings(retired)
+    assert "workflow must not name retired instance 58301075" in findings
+    assert "instance id must be the literal 59601312" in findings
+    started = text.replace(
+        "--instance-id 59601312",
+        '--instance-id 59601312 \'{"state": "running"}\'',
+        1,
+    )
+    assert "workflow must not send a Vast state running" in workflow_safety_findings(
+        started
+    )
+    stopped = text.replace(
+        "--instance-id 59601312",
+        '--instance-id 59601312 \'{"state": "stopped"}\'',
+        1,
+    )
+    assert "workflow must not send a Vast state stopped" in workflow_safety_findings(
+        stopped
     )
 
 

@@ -1,10 +1,33 @@
 # Starting the GPU smoke
 
-These runs use Sandeep's standing GPU approval for Vast instance **58301075**
+These runs use Sandeep's standing GPU approval for Vast instance **59601312**
 only. A label, a dispatch form, and `ci/gpu-run-request.json` cannot change
-that id. The workflow does not create, rent, resize, or destroy an instance.
-One run at a time: concurrency group `gpu-smoke-58301075`, and an in-progress
-run is not cancelled.
+that id. The workflow does not create, rent, resize, destroy, start, or stop
+an instance. One run at a time: concurrency group `gpu-smoke-59601312`, and
+an in-progress run is not cancelled.
+
+SSH uses one fixed private key, the Actions secret `VAST_SSH_PRIVATE_KEY`.
+This repository does not contain that secret, and this change does not create
+it. The runner writes it to a mode-0600 temp file and deletes that file on
+exit, including when SIGTERM raises `SystemExit` so `finally` runs. The smoke
+does not generate, attach, or delete a remote authorized key. Keys already on
+the instance stay until someone removes them there.
+
+`StrictHostKeyChecking=yes`. SSH connects to `public_ipaddr` and
+`ports['22/tcp'][0].HostPort` from the show response. `ssh_host` and
+`ssh_port` are not a fallback. The pin is the public known_hosts line in
+`ci/vast-ssh-known-host` for `[47.186.21.5]:51823`, fingerprint
+`SHA256:NDJOu/2d7YbJz6Wj/HgqNSraxzsNkp8Plj/QGtAShO8`. A missing or invalid
+direct endpoint, a missing secret, or a pin that does not match that
+endpoint fails before SSH. There is no `ssh-keyscan` and no
+trust-on-first-use. The failure text does not include the secret or the pin
+line.
+
+The fixed key remains authorized across runs. Revocation and rotation are
+manual. That is less isolation than a per-run key, and it is what removes the
+dependency on Vast's attach and detach API. Keep the Actions secret restricted,
+keep the host pin reviewed, and rotate the key when it should stop working.
+This workflow does not add an approval loop.
 
 The manifest records the trigger (`dispatch`, `label`, or `request-file`),
 the actor, the commit SHA under test, and `secrets_forwarded: false`.
@@ -16,9 +39,8 @@ written into the payload, and not copied from `.git`.
 Anyone who can dispatch Actions runs `.github/workflows/sceneagent-gpu-smoke.yml`
 from the Actions tab. The workflow has no inputs. The ref that was dispatched
 is the tree the GPU runs, and it is also the orchestrator on the runner.
-This is the only trigger that may start instance 58301075 when it is stopped.
-That click is Sandeep's explicit yes. A label or a request-file push never
-sends the start PUT.
+It does not start or stop instance 59601312. A stopped instance is refused.
+Starting or stopping it takes two separate user yeses outside this workflow.
 
 ## Label `run-gpu-smoke`
 
@@ -56,8 +78,9 @@ turns that requirement on without moving the secret or the checkout.
 The job logs `gpu-smoke actor=<login>`.
 
 If the instance is stopped, not running, or in an unknown state, the label
-run refuses before any start PUT. The failure manifest says
-`instance stopped; start needs Sandeep` when the show call reports stopped.
+run refuses and sends no state PUT. The failure manifest says
+`instance stopped; this workflow does not start or stop instances` when the
+show call reports stopped.
 
 ## Request file
 
@@ -65,9 +88,9 @@ Push a commit to `Main_duplicate` that changes only `ci/gpu-run-request.json`.
 This is a plain `push`, so GitHub uses the workflow file on `Main_duplicate`.
 Once that file is on `Main_duplicate`, the push starts a run by itself. It does
 not need `workflow_dispatch`, and it does not need Sandeep to click anything.
-It does not wait for `main` to be updated. It does not start a stopped
-instance. A stopped or unknown machine is refused before any PUT, with the
-same rule as a label run. Only `workflow_dispatch` may start 58301075.
+It does not wait for `main` to be updated. It does not start or stop the
+instance. A stopped, starting, or unknown machine is refused with no state
+PUT, including when the trigger is `workflow_dispatch`.
 
 The file is only a run trigger. It is not a way to land code without the QA
 and PM merge rule. The changed-path set must be exactly
