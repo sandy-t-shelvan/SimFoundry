@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from sceneagent.colmap_stage import (
     pose_commands,
     run_poses,
     sample_frame_command,
+    _run,
 )
 from sceneagent.reconstruction_gate import (
     MAX_REPROJ_PX,
@@ -53,6 +55,7 @@ from sceneagent.sf5_colmap_evidence import (
     assert_no_symlink,
     build_manifest,
     counts_as_fruits_evidence,
+    during_sample_is_terminal,
     evidence_kwargs,
     execute,
     fruits_probe_matches,
@@ -745,6 +748,32 @@ def test_calibration_failure_stays_a_reject(tmp_path, monkeypatch):
     assert ledger["failed_step"] == "color_calibration"
     assert ledger["reason"] == "calibration boom"
     assert "was off" not in ledger["reason"]
+
+
+def test_during_sample_does_not_stop_colmap():
+    assert during_sample_is_terminal({"meets_budget": False, "min_free_mib": 1}) is False
+
+
+def test_gpu_stage_drains_pipes_while_sampling(tmp_path):
+    script = tmp_path / "flood.py"
+    script.write_text(
+        "import sys\n"
+        "chunk = b'x' * 4096\n"
+        "for _ in range(64):\n"
+        "    sys.stdout.buffer.write(chunk)\n"
+        "    sys.stderr.buffer.write(chunk)\n",
+        encoding="utf-8",
+    )
+    result = _run(
+        [sys.executable, str(script)],
+        timeout_s=5,
+        on_gpu_sample=lambda: {"logged": True},
+        sample_interval_s=10,
+    )
+    assert result["timed_out"] is False
+    assert result["returncode"] == 0
+    assert len(result["stdout_tail"]) == 2000
+    assert len(result["stderr_tail"]) == 2000
 
 
 def test_package_source_does_not_control_other_processes():

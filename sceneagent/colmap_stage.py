@@ -30,6 +30,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -493,6 +494,40 @@ def _stage_env():
     return env
 
 
+def _read_stream(stream, chunks):
+    """Drain one pipe so a logging child cannot block on a full buffer."""
+    try:
+        while True:
+            piece = stream.read(4096)
+            if not piece:
+                break
+            chunks.append(piece)
+    except (OSError, ValueError):
+        return
+
+
+def _start_stream_readers(proc):
+    stdout_chunks = []
+    stderr_chunks = []
+    threads = (
+        threading.Thread(
+            target=_read_stream, args=(proc.stdout, stdout_chunks), daemon=True
+        ),
+        threading.Thread(
+            target=_read_stream, args=(proc.stderr, stderr_chunks), daemon=True
+        ),
+    )
+    for thread in threads:
+        thread.start()
+    return threads, stdout_chunks, stderr_chunks
+
+
+def _join_streams(threads, stdout_chunks, stderr_chunks):
+    for thread in threads:
+        thread.join(timeout=5)
+    return "".join(stdout_chunks), "".join(stderr_chunks)
+
+
 def _stop_our_child(proc):
     """Stop the stage this process started. No other process is signaled."""
     if proc.poll() is not None:
@@ -542,6 +577,7 @@ def _run(command, timeout_s=600, *, on_gpu_sample=None, sample_interval_s=10):
         text=True,
         env=env,
     )
+    readers, stdout_chunks, stderr_chunks = _start_stream_readers(proc)
     samples = []
 
     def on_sample():
@@ -558,11 +594,14 @@ def _run(command, timeout_s=600, *, on_gpu_sample=None, sample_interval_s=10):
         )
     except Exception:
         _stop_our_child(proc)
+        _join_streams(readers, stdout_chunks, stderr_chunks)
         raise
     timed_out = watched["status"] == "timeout"
     if timed_out:
         _stop_our_child(proc)
-    stdout, stderr = proc.communicate()
+    else:
+        proc.wait()
+    stdout, stderr = _join_streams(readers, stdout_chunks, stderr_chunks)
     return {
         "command": command,
         "returncode": None if timed_out else proc.returncode,

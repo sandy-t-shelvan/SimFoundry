@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 from sceneagent import sf5_colmap_evidence as package
-from sceneagent.colmap_stage import sample_frame_command
+from sceneagent.colmap_stage import _run, sample_frame_command
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "sceneagent" / "sf5_colmap_evidence.py"
@@ -235,6 +235,18 @@ MUTANTS = (
         '    if "color_calibration" not in poses:\n        return "off"',
     ),
     (
+        "during_sample_stops_colmap",
+        "package",
+        '    """\n    return False\n',
+        '    """\n    return True\n',
+    ),
+    (
+        "gpu_stage_pipes_not_drained",
+        "colmap",
+        "        thread.start()\n",
+        "        pass\n",
+    ),
+    (
         "native_extract_becomes_fps",
         "colmap",
         '"-fps_mode",\n            "passthrough",',
@@ -324,6 +336,7 @@ def _oracle_package(mod) -> None:
         == "failed"
     )
     assert mod.calibration_outcome({"color_calibrate": False}) == "off"
+    assert mod.during_sample_is_terminal({"meets_budget": False}) is False
     assert mod.path_is_forbidden("/workspace/sceneagent-simfoundry/secret") is True
     assert mod.path_is_forbidden("/tmp/fitted_splat/a") is True
     assert mod.path_is_forbidden("/workspace/fruits-fullrate-colmap/sparse/0") is True
@@ -396,6 +409,31 @@ def _oracle_colmap(mod) -> None:
     assert omitted == ["ffmpeg", "-y", "-i", "clip.mp4", "images/%04d.jpg"]
     default = mod.sample_frame_command("ffmpeg", "clip.mp4", "images/%04d.jpg")
     assert "fps=1" in default and "16" in default
+    if hasattr(mod, "_run"):
+        _assert_stage_pipes_drain(mod._run)
+
+
+def _assert_stage_pipes_drain(run):
+    script = (
+        "import sys\n"
+        "chunk = b'x' * 4096\n"
+        "for _ in range(64):\n"
+        "    sys.stdout.buffer.write(chunk)\n"
+        "    sys.stderr.buffer.write(chunk)\n"
+    )
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "flood.py"
+        path.write_text(script, encoding="utf-8")
+        result = run(
+            [__import__("sys").executable, str(path)],
+            timeout_s=5,
+            on_gpu_sample=lambda: {"logged": True},
+            sample_interval_s=10,
+        )
+    assert result["timed_out"] is False
+    assert result["returncode"] == 0
 
 
 def test_unmutated_oracles_pass():
@@ -424,4 +462,4 @@ def test_every_mutant_is_killed():
                 continue
             survived.append(name)
     assert survived == []
-    assert len(MUTANTS) == 38
+    assert len(MUTANTS) == 40

@@ -446,6 +446,15 @@ def memory_meets_budget(rows: list[dict[str, Any]], budget: int) -> bool:
     return bool(rows) and all(row["free_mib"] >= budget for row in rows)
 
 
+def during_sample_is_terminal(_reading: dict[str, Any]) -> bool:
+    """A mid-stage reading is a log. It does not stop COLMAP.
+
+    6144 MiB is headroom required before a GPU stage starts. COLMAP is
+    expected to consume some of that memory while the stage runs.
+    """
+    return False
+
+
 def summarize_free_samples(samples: list[int]) -> dict[str, Any]:
     """Lowest free MiB among the samples taken. Not an exact true peak."""
     lowest = min(samples) if samples else None
@@ -799,18 +808,32 @@ def execute(request: dict[str, Any]) -> int:
                 )
 
         def on_gpu_sample():
-            reading = query_gpu_memory(reader, budget)
+            try:
+                reading = query_gpu_memory(reader, budget)
+            except EvidenceError as exc:
+                gpu_log.append(
+                    {
+                        "stage": "during",
+                        "when": "during",
+                        "source": source,
+                        "query_error": str(exc),
+                        "exact_true_peak": False,
+                        "stops_the_stage": False,
+                    }
+                )
+                return None
             frees = [row["free_mib"] for row in reading["rows"]]
             gpu_log.append(
                 {
                     "stage": "during",
                     "when": "during",
                     "source": source,
+                    "stops_the_stage": during_sample_is_terminal(reading),
                     **reading,
                     **summarize_free_samples(frees),
                 }
             )
-            if not reading["meets_budget"]:
+            if during_sample_is_terminal(reading):
                 raise GpuBudgetError(
                     "GPU free memory during a stage is below the budget"
                 )
