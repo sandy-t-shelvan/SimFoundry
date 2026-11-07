@@ -77,6 +77,7 @@ something usable on its own.
 | Run4 (PR #32 gives the mapper room) and the Cut 1 merge (PR #28) | Run4 meets the 10239 bar (240 or more of 300 registered); `main` has Cut 1; `main`'s gpu-smoke names 59601312 |
 | Remove the old QA/PM gate code and slim the GPU workflow | `gpu_smoke_trigger.py` gate lines, workflow lines 72–90, `docs/GPU_SMOKE_TRIGGERS.md` and their tests are gone; gpu-smoke runs on push with a path filter |
 | KAN-29: GPU query timeout is a resource exit (3), not an identity exit (2) | Test for the exit code |
+| Refresh stale facts in the plan of record and canvas (no status word changes) | Section 1's `caf16b7` branch and Windows paths; "CI installs only numpy and pytest" (now ruff, mypy, two pytest jobs, actionlint); LaMa row's instance 58301075 (now 59601312); "color calibration is still undone" (code exists in `ingest_assets`, the live run is what's pending); canvas "KAN-15 on hold until Cut 1 merges" (Cut 1 has merged); canvas next-phase 2 blocker "1 fps / 16-frame cap" (run4 and SF-5 now bypass it) |
 | Close KAN-30 | Superseded: PR #26 made SSH direct-only |
 
 After this phase, PRs target `main` and `Main_duplicate` retires (agreed 2026-11-07).
@@ -97,7 +98,7 @@ Chamfer" (score path exists, row stays partial until a score file).
 |---|---|---|
 | Poses on the bin: `run_colmap_on_images` with an exhaustive matcher option | 13 registered views and the gate document; if COLMAP can't register them, decision 2 applies | yes |
 | Full-scene splat: reuse pipeline A's `2c_train_bg_splat.py` and its `ns_eval.json` | A splatfacto checkpoint from the bin poses, plus held-out PSNR/SSIM/LPIPS | yes |
-| SF-15 (KAN-16): text prompt → `run_groundingdino` boxes → SAM vit_h masks | Masks for all 13 bin views, plus Fruits at paper stride, with boxes and prompts recorded | yes |
+| SF-15 (KAN-16): text prompt → `run_groundingdino` boxes → SAM vit_h masks, then prompt-to-object filtering (a SimFoundry addition, comment 10304) | Masks for all 13 bin views (every view: the paper's every-10th stride is for video and would leave 2 of 13), plus Fruits at paper stride, with boxes and prompts recorded | yes |
 
 Canvas rows touched: "GroundingDINO" (missing → can be Accepted), "SAM masks" (coverage), "COLMAP camera
 poses" on a second input.
@@ -120,7 +121,8 @@ grouping, which the canvas lists as not exercised).
 | Ticket | Done when | GPU |
 |---|---|---|
 | SF-29 (new): SAM 3D on 59601312 and a per-object wrapper | Install pinned and recorded; one `.glb` per grouped object; nothing else substituted | yes |
-| Place and score: `similarity_icp` per object from its stored pose, then one similarity to the GT frame and `score_reconstruction` | The score file, named with point counts, alignment rule and matcher | yes |
+| SF-8 part 2 (KAN-8): `similarity_icp` per object from its stored SAM 3D pose, with the silhouette filled | Residuals per object; this is the GPU package comment 10318 held until SF-15 and the SAM 3D ticket exist | yes |
+| Place and score: one similarity to the GT frame and `score_reconstruction` | The score file, named with point counts, alignment rule and matcher | yes |
 
 Point at which Cut 2 has its headline result. The alignment gate stays `undecided` unless thresholds are
 passed (phase 5's SF-27). The score file does not need the gate to accept.
@@ -149,8 +151,8 @@ This is what "with SceneAgent" means in the paper: the agent looks at renders an
 
 MessyKitchens score (aggregator already exists); SF-17 LangSplat-style lift; SF-23 background
 orientation; SF-25 sisters; SF-26 scripted expert; pi0.5 LoRA; 4D (section 3.6); fracture; Meshy;
-Unreal; hybrid scenes; CubePart and Articulate Anything (canvas phase 3, SF-10); the SF-8 and SF-9 live
-GPU packages, which SF-15 and SF-29 unblock and which can be pulled in if a phase finishes early.
+Unreal; hybrid scenes; CubePart and Articulate Anything (canvas phase 3, SF-10); the SF-9 background-plane
+GPU package, which can be pulled in if a phase finishes early. (SF-8 part 2 is in phase 4.)
 
 ## Risks
 
