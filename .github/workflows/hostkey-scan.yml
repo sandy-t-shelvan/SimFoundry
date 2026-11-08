@@ -1,0 +1,21 @@
+# Throwaway: read instance 58301075's public SSH host key once so it can be
+# reviewed and pinned in ci/vast-ssh-known-host. No secrets. Not for main.
+name: hostkey-scan
+on:
+  push:
+    branches: [claude/hostkey-scan]
+permissions:
+  contents: read
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Scan 47.186.21.5:51808 twice and print fingerprints
+        run: |
+          set -euo pipefail
+          for attempt in 1 2; do
+            ssh-keyscan -T 15 -t ed25519 -p 51808 47.186.21.5 2>/dev/null | tee "scan$attempt.txt"
+            ssh-keygen -lf "scan$attempt.txt"
+          done
+          cmp scan1.txt scan2.txt && echo "both scans identical"
