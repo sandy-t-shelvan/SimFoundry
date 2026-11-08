@@ -1,5 +1,6 @@
-# Throwaway: read instance 58301075's public SSH host key once so it can be
-# reviewed and pinned in ci/vast-ssh-known-host. No secrets. Not for main.
+# Throwaway (not for main): print the PUBLIC half of VAST_SSH_PRIVATE_KEY so it
+# can be authorized on instance 58301075. The private key is written mode 0600
+# to a temp file, never echoed, and removed. Only ssh-keygen -y output is shown.
 name: hostkey-scan
 on:
   push:
@@ -7,15 +8,19 @@ on:
 permissions:
   contents: read
 jobs:
-  scan:
+  ci-public-key:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Scan 47.186.21.5:51808 twice and print fingerprints
+      - name: Derive the CI key's public half and fingerprint
+        env:
+          VAST_SSH_PRIVATE_KEY: ${{ secrets.VAST_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          for attempt in 1 2; do
-            ssh-keyscan -T 15 -t ed25519 -p 51808 47.186.21.5 2>/dev/null | tee "scan$attempt.txt"
-            ssh-keygen -lf "scan$attempt.txt"
-          done
-          cmp scan1.txt scan2.txt && echo "both scans identical"
+          umask 077
+          key="$(mktemp)"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$VAST_SSH_PRIVATE_KEY" > "$key"
+          ssh-keygen -y -f "$key" > ci_key.pub
+          cat ci_key.pub
+          ssh-keygen -lf ci_key.pub
