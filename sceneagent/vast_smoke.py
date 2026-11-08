@@ -729,14 +729,18 @@ def rsync_invocations(
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
     scene = checkout / "sceneagent"
     excludes = _rsync_exclude_args()
-    # --mkpath: a fresh box has no /workspace/sf4-smoke, and rsync otherwise
-    # creates only the last path component (run4, 2026-11-07).
+    # A fresh box has no /workspace/sf4-smoke, and rsync creates only the last
+    # path component (run4, 2026-11-07). --mkpath needs rsync 3.2.3 on both
+    # ends and instance 58301075 has 3.1.3, so the remote side runs mkdir -p
+    # first; every rsync version accepts --rsync-path. ``repo`` is a checked
+    # absolute path with no shell metacharacters (require_remote_dir).
+    make_parent = f"--rsync-path=mkdir -p {repo} && rsync"
     return [
         (
             [
                 "rsync",
                 "-a",
-                "--mkpath",
+                make_parent,
                 *excludes,
                 "-e",
                 ssh_e,
@@ -750,7 +754,7 @@ def rsync_invocations(
                 "rsync",
                 "-a",
                 "-R",
-                "--mkpath",
+                make_parent,
                 *excludes,
                 "-e",
                 ssh_e,

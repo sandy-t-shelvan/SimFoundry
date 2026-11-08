@@ -392,7 +392,31 @@ def test_rsync_creates_the_missing_remote_parent(tmp_path):
     assert invocations
     for command, _cwd in invocations:
         assert command[0] == "rsync"
-        assert "--mkpath" in command
+        # --mkpath needs rsync 3.2.3 on both ends; instance 58301075 has
+        # 3.1.3 and refused it (2026-11-08). The remote side makes the
+        # directory itself instead, which every rsync version accepts.
+        assert "--mkpath" not in command
+        assert f"--rsync-path=mkdir -p {REMOTE_REPO} && rsync" in command
+
+
+def test_rsync_path_creates_the_destination_with_a_real_rsync(tmp_path):
+    import shutil
+    import subprocess
+
+    if shutil.which("rsync") is None:
+        pytest.skip("rsync is not installed")
+    checkout = _checkout(tmp_path)
+    fake_ssh = tmp_path / "fake_ssh"
+    # Stands in for ssh: drop the options and host, run the remote command here.
+    fake_ssh.write_text('#!/bin/sh\nwhile [ "$1" != "host" ]; do shift; done\nshift\nexec sh -c "$*"\n')
+    fake_ssh.chmod(0o755)
+    dest = tmp_path / "remote" / "sf4-smoke" / "repo"
+    for command, cwd in rsync_invocations(checkout, "host", 22, "/k", "/kh", str(dest)):
+        command = [str(fake_ssh) if part.startswith("ssh ") else part for part in command]
+        command = [part.replace("root@host:", "host:") for part in command]
+        subprocess.run(command, cwd=cwd, check=True, capture_output=True)
+    assert (dest / "sceneagent").is_dir()
+    assert (dest / FRUITS_RELATIVE).is_file()
 
 
 def test_ssh_key_id_comes_from_the_attach_response_only():
