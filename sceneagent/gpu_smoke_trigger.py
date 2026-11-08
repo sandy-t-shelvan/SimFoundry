@@ -26,6 +26,13 @@ REQUEST_FILE = "ci/gpu-run-request.json"
 LABEL_ACTORS = ("sandy-t-shelvan", "cursor[bot]")
 REQUEST_FIELDS = ("ticket_id", "reason")
 _ZERO_SHA = "0" * 40
+DISPATCH_INPUTS = """    inputs:
+      pipeline:
+        description: GPU pipeline to run
+        type: choice
+        options: [run4, bin]
+        default: run4
+"""
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _TICKET_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 _REASON_RE = re.compile(r"(?=.*\S)[^\n\r]+")
@@ -586,8 +593,14 @@ def workflow_safety_findings(text: str) -> list[str]:
     for forbidden in ("pull_request:", "schedule:", "issue_comment:", "workflow_run:"):
         if forbidden in on_lines:
             findings.append(f"{forbidden} is not a gpu-smoke trigger")
-    if "inputs:" in text or "inputs." in text:
-        findings.append("workflow_dispatch must stay free of inputs")
+    # The one allowed input is a fixed pipeline choice. It cannot carry an
+    # instance id, a ref or a secret; vast_smoke's argparse re-checks it.
+    dispatch = text.split("  workflow_dispatch:\n", 1)[-1].split(
+        "  pull_request_target:", 1
+    )[0]
+    rest = text.replace(DISPATCH_INPUTS, "", 1).replace("inputs.pipeline", "")
+    if dispatch != DISPATCH_INPUTS or "inputs:" in rest or "inputs." in rest:
+        findings.append("workflow_dispatch may only take the run4/bin pipeline choice")
     if "- Main_duplicate" not in on_block:
         findings.append("request-file push must be limited to Main_duplicate")
     if "- main" in on_lines:
