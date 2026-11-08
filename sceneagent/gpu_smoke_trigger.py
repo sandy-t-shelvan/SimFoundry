@@ -3,7 +3,7 @@
 
 """Decide which GPU-smoke triggers may run. This module never calls Vast.
 
-The instance id is not a parameter here. ``59601312`` is fixed in the
+The instance id is not a parameter here. ``58301075`` is fixed in the
 workflow and in ``sceneagent.vast_smoke``. A request file that names any
 other field, including an instance id, is rejected. No trigger starts or
 stops that instance.
@@ -594,18 +594,18 @@ def workflow_safety_findings(text: str) -> list[str]:
         findings.append("request-file push must not include main")
     if "ci/gpu-run-request.json" not in on_block:
         findings.append("request-file push must filter on ci/gpu-run-request.json")
-    if "58301075" in text:
-        findings.append("workflow must not name retired instance 58301075")
+    if "59601312" in text:
+        findings.append("workflow must not name retired instance 59601312")
     if re.search(r"""["']state["']\s*:\s*["']running["']""", text):
         findings.append("workflow must not send a Vast state running")
     if re.search(r"""["']state["']\s*:\s*["']stopped["']""", text):
         findings.append("workflow must not send a Vast state stopped")
-    if "group: gpu-smoke-59601312" not in text:
-        findings.append("concurrency group gpu-smoke-59601312 is missing")
+    if "group: gpu-smoke-58301075" not in text:
+        findings.append("concurrency group gpu-smoke-58301075 is missing")
     if "cancel-in-progress: false" not in text:
         findings.append("cancel-in-progress must be false")
     before_jobs = text.split("jobs:", 1)[0]
-    if "group: gpu-smoke-59601312" in before_jobs:
+    if "group: gpu-smoke-58301075" in before_jobs:
         findings.append(
             "concurrency must be on the smoke job so an unrelated label does not take the group"
         )
@@ -615,8 +615,8 @@ def workflow_safety_findings(text: str) -> list[str]:
         findings.append(
             "VAST_SSH_PRIVATE_KEY must be passed from the Actions secret in exactly one step"
         )
-    if "--instance-id 59601312" not in text:
-        findings.append("instance id must be the literal 59601312")
+    if "--instance-id 58301075" not in text:
+        findings.append("instance id must be the literal 58301075")
     actors = workflow_label_actors(text)
     if tuple(actors) != LABEL_ACTORS:
         findings.append(
@@ -647,8 +647,8 @@ def workflow_safety_findings(text: str) -> list[str]:
         findings.append("the smoke job must not hold pull-requests: write")
     if "contents: read" not in smoke:
         findings.append("the smoke job needs contents: read")
-    if "group: gpu-smoke-59601312" not in smoke:
-        findings.append("the smoke job must use concurrency group gpu-smoke-59601312")
+    if "group: gpu-smoke-58301075" not in smoke:
+        findings.append("the smoke job must use concurrency group gpu-smoke-58301075")
     if "cancel-in-progress: false" not in smoke:
         findings.append("the smoke job must set cancel-in-progress false")
     guard_run = "\n".join(_step_run(step) for step in _steps(guard))
@@ -673,8 +673,8 @@ def workflow_safety_findings(text: str) -> list[str]:
             findings.append("the keyed step must run in the orchestrator checkout")
         if "python -m sceneagent.vast_smoke" not in run:
             findings.append("the keyed step must run sceneagent.vast_smoke")
-        if "--instance-id 59601312" not in run:
-            findings.append("the keyed step must pass instance 59601312 as a literal")
+        if "--instance-id 58301075" not in run:
+            findings.append("the keyed step must pass instance 58301075 as a literal")
         if "VAST_SSH_PRIVATE_KEY" in run:
             findings.append(
                 "keyed run script must not print or interpolate the ssh private key"
