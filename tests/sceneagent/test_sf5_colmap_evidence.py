@@ -402,7 +402,7 @@ def test_gpu_budget_is_explicit_and_fail_closed():
 def test_launch_command_is_exact():
     text = render_launch_command(CODE_SHA)
     assert "BLOCKED" not in text
-    assert INSTANCE_ID == "58301075"
+    assert INSTANCE_ID == "59601312"
     assert APPROVED_RELATIVE in text
     assert APPROVED_SHA256 in text
     assert CODE_SHA in text

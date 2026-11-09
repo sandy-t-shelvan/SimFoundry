@@ -141,9 +141,9 @@ def test_bin_manifest_requires_its_own_ledger_items(tmp_path):
     (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
     command = build_remote_command(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
     passed = collect_artifact_manifest(
-        run, command=command, instance_id=58301075, pipeline="bin"
+        run, command=command, instance_id=59601312, pipeline="bin"
     )
     assert passed["passed"] is True
     assert passed["video"] == "GraspClutter6D 000091"
-    as_video = collect_artifact_manifest(run, command=command, instance_id=58301075)
+    as_video = collect_artifact_manifest(run, command=command, instance_id=59601312)
     assert as_video["passed"] is False
