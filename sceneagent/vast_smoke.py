@@ -128,7 +128,7 @@ section folders; ls -la / /root /workspace 2>&1
 section tree; find /root /workspace -mindepth 1 -maxdepth 2 -not -name '.*' 2>/dev/null | sort | head -300
 section sizes; du -sh /root/* /workspace/* 2>/dev/null | sort -h | tail -40
 section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /workspace/models -mindepth 1 -maxdepth 3 -not -name '.*' 2>/dev/null | sort | head -300
-# Globs over the usual env roots, not find /: a full-disk walk takes
+# Globs over the usual conda and mamba roots, not find /: a full-disk walk takes
 # minutes on a hosted CI runner, where the probe test also runs.
 section interpreters; for d in /usr /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do [ -x "$d/bin/python3" ] && echo "$d/bin/python3"; done
 section colmap_binaries; for d in /usr /usr/local /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do c="$d/bin/colmap"; [ -x "$c" ] && echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
