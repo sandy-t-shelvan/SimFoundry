@@ -120,6 +120,11 @@ section torch; python3 -c 'import torch; print(torch.__version__, torch.version.
 section folders; ls -la / /root /workspace 2>&1
 section tree; find /root /workspace -mindepth 1 -maxdepth 2 -not -name '.*' 2>/dev/null | sort | head -300
 section sizes; du -sh /root/* /workspace/* 2>/dev/null | sort -h | tail -40
+section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /workspace/models -mindepth 1 -maxdepth 3 -not -name '.*' 2>/dev/null | sort | head -300
+section interpreters; find / -xdev \( -path /proc -o -path /sys -o -path /root/jammy \) -prune -o -path '*/bin/python3' -print 2>/dev/null | grep -v '/pkgs/' | sort | head -60
+section colmap_binaries; find / -xdev \( -path /proc -o -path /sys -o -path /root/jammy \) -prune -o -name colmap -type f -perm -u+x -print 2>/dev/null | head -20 | while read -r c; do echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
+section colmap_cuda_attempt; cat /root/colmap-cuda-install.meta 2>&1; echo; tail -15 /root/colmap-cuda-install.log 2>&1
+section install_notes_headings; grep -E '^#' /root/texas_58301075_install.md 2>&1 | head -60
 """
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
 PY7ZR_PIN = "py7zr==1.1.4"
