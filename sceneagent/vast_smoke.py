@@ -145,8 +145,8 @@ for m in ("numpy","scipy","trimesh","PIL","py7zr","torch"):
     try: v.append(m+"="+__import__(m).__version__)
     except Exception as e: v.append(m+"=MISSING")
 print(" ".join(v))' 2>&1 | tail -1)"; done
-section phase2_packages; for py in /opt/conda/bin/python3 /root/.local/share/mamba/envs/nerf/bin/python3 /root/.local/share/mamba/envs/gsam2/bin/python3; do echo "$py:"; [ -x "$py" ] && timeout 120 "$py" -m pip list 2>/dev/null | grep -iE '^(nerfstudio|gsplat|groundingdino|segment|sam-2|sam2|transformers|supervision|torch |opencv)' ; ls "$(dirname "$py")" 2>/dev/null | grep -E '^ns-(train|eval|export|process-data)$' | tr '\n' ' '; echo; done
-section checkpoints; find -L /root/SceneagentX/third_party /root/.cache/huggingface/hub /root/.cache/torch /workspace/models /root/sam-3d-objects/checkpoints -maxdepth 4 \( -name '*.pth' -o -name '*.pt' -o -name '*.safetensors' -o -name '*.ckpt' \) -size +1M 2>/dev/null | public | head -60
+section phase2_packages; for py in /opt/conda/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3; do [ -x "$py" ] || continue; echo "$py:"; timeout 120 "$py" -m pip list 2>/dev/null | grep -iE '^(nerfstudio|gsplat|groundingdino|segment|sam-2|sam2|transformers|supervision|torch |opencv)' ; ls "$(dirname "$py")" 2>/dev/null | grep -E '^ns-(train|eval|export|process-data)$' | tr '\n' ' '; echo; done
+section checkpoints; find -L /root/SceneagentX/third_party /root/.cache/huggingface/hub /root/.cache/torch /workspace/models /root/sam-3d-objects/checkpoints /root/SimFoundry/checkpoints /root/miniforge3/envs/groundingdino -maxdepth 4 \( -name '*.pth' -o -name '*.pt' -o -name '*.safetensors' -o -name '*.ckpt' \) -size +1M 2>/dev/null | public | head -60
 section third_party; ls /root/SceneagentX/third_party /root/.cache/huggingface/hub 2>&1 | public | head -60
 """
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
