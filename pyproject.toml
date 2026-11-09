@@ -63,9 +63,3 @@ module = [
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
-
-# bin_splat reuses pipeline A's stdlib-only ns_eval_report. The rest of the
-# simfoundry package needs OmniGibson and is not part of this check.
-[[tool.mypy.overrides]]
-module = ["simfoundry", "simfoundry.*"]
-follow_imports = "silent"

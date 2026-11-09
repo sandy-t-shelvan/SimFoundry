@@ -188,3 +188,31 @@ def test_ply_vertex_count_reads_only_the_header(tmp_path):
     ply.write_bytes(b"ply\nformat ascii 1.0\nelement vertex 42\nend_header\n\x00\x01")
     assert bin_splat.ply_vertex_count(ply) == 42
     assert bin_splat.ply_vertex_count(tmp_path / "missing.ply") == 0
+
+
+def test_sceneagent_does_not_import_simfoundry():
+    # The GPU payload ships sceneagent alone (vast_smoke.rsync_invocations);
+    # run 42694109248 died on `from simfoundry...` in bin_splat.
+    root = Path(bin_splat.__file__).parent
+    for path in root.rglob("*.py"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith(("from simfoundry", "import simfoundry")), (
+                path
+            )
+
+
+def test_eval_with_eval_mode_all_is_not_reported_as_held_out(tmp_path):
+    _passing_bin(tmp_path)
+
+    class AllViews(FakeNerfstudio):
+        def __call__(self, argv, **kwargs):
+            done = super().__call__(argv, **kwargs)
+            if argv[0] == "ns-train":
+                for config in Path(tmp_path).glob("splat/outputs/**/config.yml"):
+                    config.write_text("eval_mode: all\n")
+            return done
+
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=AllViews()) == 0
+    report = json.loads((tmp_path / "ns_eval.json").read_text())
+    assert report["ok"] is False and "eval_mode is all" in report["error"]

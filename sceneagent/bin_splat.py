@@ -10,8 +10,11 @@ with ``ns-process-data images --skip-colmap`` instead of re-posing a video.
 
 The ``ns-*`` tools come from :data:`NS_BIN`, not from the pinned interpreter's
 env, and run without this process's ``PYTHONPATH`` so their own env imports
-cleanly. ``ns-eval`` is report-only, as in pipeline A. The ledger accepts the
-splat when ``ns-export`` leaves a PLY with at least one Gaussian.
+cleanly. ``ns-eval`` is report-only, as in pipeline A. Pipeline A's
+``simfoundry.pipeline.ns_eval_report`` is not imported: the GPU payload ships
+``sceneagent`` alone, so :func:`heldout_eval` is the short version here. The
+ledger accepts the splat when ``ns-export`` leaves a PLY with at least one
+Gaussian.
 
     python -m sceneagent.bin_splat --out /workspace/sf4-smoke/run
 """
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -27,8 +31,6 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
-
-from simfoundry.pipeline.ns_eval_report import write_heldout_ns_eval_report
 
 from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, run_bin_poses
 
@@ -38,7 +40,7 @@ NS_BIN = "/root/.local/share/mamba/envs/nerf/bin"
 CUDA_HOME = "/usr/local/cuda-12.1"
 METHOD = "splatfacto"
 MAX_NUM_ITERATIONS = 30000
-STEP_TIMEOUT_S = {"process-data": 900, "train": 3600, "export": 900}
+STEP_TIMEOUT_S = {"process-data": 900, "train": 3600, "eval": 900, "export": 900}
 SPLAT_DIRNAME = "splat"
 ITEM = "full-scene splat"
 
@@ -159,6 +161,51 @@ def _run_step(
     return record
 
 
+def heldout_eval(
+    config: Path, report: Path, cwd: Path, env: dict[str, str], runner: Runner
+) -> dict[str, Any]:
+    """One ``ns-eval`` of ``config``. Never raises; null metrics on any failure.
+
+    The default nerfstudio-data split holds out a fraction of the views, so
+    these are held-out numbers. A config with ``eval_mode: all`` would not be.
+    """
+    raw = report.with_name(".ns_eval_raw.json")
+    raw.unlink(missing_ok=True)
+    argv = [
+        "ns-eval",
+        "--load-config",
+        str(config.resolve()),
+        "--output-path",
+        str(raw),
+    ]
+    record = _run_step("eval", argv, cwd, env, runner)
+    payload: dict[str, Any] = {
+        "ok": False,
+        "argv": argv,
+        "returncode": record["returncode"],
+        "psnr": None,
+        "ssim": None,
+        "lpips": None,
+    }
+    if "eval_mode: all" in config.read_text(encoding="utf-8", errors="replace"):
+        payload["error"] = "eval_mode is all, so ns-eval would not be held out"
+    elif record["returncode"] != 0:
+        payload["error"] = record["output_tail"][-500:]
+    else:
+        try:
+            results = json.loads(raw.read_text(encoding="utf-8"))["results"]
+            metrics = {k: float(results[k]) for k in ("psnr", "ssim", "lpips")}
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            payload["error"] = f"unreadable ns-eval output: {exc}"
+        else:
+            if all(math.isfinite(v) for v in metrics.values()):
+                payload.update(metrics, ok=True)
+            else:
+                payload["error"] = "non-finite ns-eval metrics"
+    report.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
 def _latest_config(outputs: Path) -> Path | None:
     configs = sorted(
         outputs.glob("**/config.yml"), key=lambda p: p.stat().st_mtime, reverse=True
@@ -188,17 +235,10 @@ def train_splat(
             return evidence
     config = _latest_config(splat / "outputs")
     evidence["config"] = None if config is None else str(config)
-    evidence["ns_eval"] = write_heldout_ns_eval_report(
-        load_config=config,
-        report_path=out / "ns_eval.json",
-        argv_prefix=[],
-        cwd=splat,
-        env=env,
-        run=runner,
-    )
     if config is None:
         evidence["failed_step"] = "train"
         return evidence
+    evidence["ns_eval"] = heldout_eval(config, out / "ns_eval.json", splat, env, runner)
     export = splat / "export"
     record = _run_step(
         "export",
