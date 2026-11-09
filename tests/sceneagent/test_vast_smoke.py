@@ -2764,3 +2764,11 @@ def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_con
             assert "| public" in line, line
         if "find " in line and "-not" in line:
             assert "-not -path '*/.*'" in line, line
+
+
+def test_non_probe_runs_remove_a_stale_inventory_before_running():
+    for pipeline in ("run4", "bin"):
+        script = build_remote_shell("/workspace/r", "/workspace/o", pipeline=pipeline)
+        assert "rm -f /workspace/o/inventory.txt" in script
+    probe = build_remote_shell("/workspace/r", "/workspace/o", pipeline="probe")
+    assert "rm -f" not in probe

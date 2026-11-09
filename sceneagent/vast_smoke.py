@@ -664,6 +664,8 @@ def build_remote_shell(
         f"export PYTHONPATH={shlex.quote(repo + ':' + REMOTE_PYDEPS)}",
         f'export PATH={shlex.quote(str(Path(REMOTE_PYTHON).parent) + ":" + REMOTE_COLMAP_BIN)}:"$PATH"',
         f"mkdir -p {shlex.quote(out)}",
+        # Only a probe run may publish an inventory; never fetch a stale one.
+        f"rm -f {shlex.quote(out + '/inventory.txt')}",
         host_probe_command(out),
     ]
     if pipeline == "bin":
