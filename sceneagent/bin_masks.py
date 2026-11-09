@@ -10,7 +10,7 @@ would leave two of them.
 SAM is the paper's vit_h (plan decision 3). Instance 58301075 has SAM 2 but no
 vit_h, so this module installs ``segment-anything`` into its own target
 directory and downloads the vit_h checkpoint into ``/workspace/models``,
-checking the SHA-256 prefix in the file name. GroundingDINO and torch come
+checking its published SHA-256. GroundingDINO and torch come
 from the box's ``gsam2`` env, which runs :mod:`sceneagent.mask_worker`.
 
     python -m sceneagent.bin_masks --out /workspace/sf4-smoke/run
@@ -48,8 +48,9 @@ GDINO_CONFIG = (
 GDINO_WEIGHTS = f"{GSAM_ROOT}/gdino_checkpoints/groundingdino_swint_ogc.pth"
 SAM_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
 SAM_WEIGHTS = "/workspace/models/sam/sam_vit_h_4b8939.pth"
-# torch.hub convention: the file name ends in the first hex digits of its SHA-256.
-SAM_SHA256_PREFIX = "4b8939"
+# Published SHA-256 of sam_vit_h_4b8939.pth. The "4b8939" in the name is an MD5
+# prefix, not a SHA-256 one (masks run 42695882028 read a7bf3b02f3eb...).
+SAM_SHA256 = "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e"
 SAM_PIP = "segment-anything==1.0"
 MASK_PYDEPS = "/workspace/sf4-smoke/pydeps-gsam2"
 
@@ -73,7 +74,7 @@ def ensure_sam_weights(
     *,
     download: Callable[[str, Path], None] | None = None,
 ) -> dict[str, Any]:
-    """Download vit_h once and check its hash prefix. A bad file is removed."""
+    """Download vit_h once and check its SHA-256. A bad file is removed."""
     fetched = False
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,10 +83,10 @@ def ensure_sam_weights(
         partial.replace(path)
         fetched = True
     digest = sha256_of(path)
-    if not digest.startswith(SAM_SHA256_PREFIX):
+    if digest != SAM_SHA256:
         path.unlink()
         raise ValueError(
-            f"{path.name} SHA-256 {digest[:12]} does not start {SAM_SHA256_PREFIX}"
+            f"{path.name} SHA-256 {digest[:12]}... is not the published {SAM_SHA256[:12]}..."
         )
     return {"path": str(path), "sha256": digest, "downloaded": fetched, "url": url}
 

@@ -190,9 +190,7 @@ def test_missing_images_run_the_bin_poses_first(tmp_path):
 
 def test_weights_are_downloaded_once_and_hash_checked(tmp_path, monkeypatch):
     payload = b"vit_h"
-    monkeypatch.setattr(
-        bin_masks, "SAM_SHA256_PREFIX", hashlib.sha256(payload).hexdigest()[:6]
-    )
+    monkeypatch.setattr(bin_masks, "SAM_SHA256", hashlib.sha256(payload).hexdigest())
     target = tmp_path / "sam" / "w.pth"
     fetched = []
 
@@ -209,7 +207,7 @@ def test_weights_are_downloaded_once_and_hash_checked(tmp_path, monkeypatch):
 def test_a_wrong_hash_removes_the_file(tmp_path):
     target = tmp_path / "w.pth"
     target.write_bytes(b"not sam")
-    with pytest.raises(ValueError, match="does not start"):
+    with pytest.raises(ValueError, match="is not the published"):
         bin_masks.ensure_sam_weights(target, "https://x/w.pth")
     assert not target.exists()
 
