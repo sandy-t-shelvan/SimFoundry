@@ -819,12 +819,8 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         "        default: run4\n      instance_id:\n        type: string\n",
         1,
     )
-    assert "workflow_dispatch may only take the run4/bin/splat/masks/probe pipeline choice" in (
-        workflow_safety_findings(extra)
-
-
     assert (
-        "workflow_dispatch may only take the run4/bin/splat/probe pipeline choice"
+        "workflow_dispatch may only take the run4/bin/splat/masks/probe pipeline choice"
         in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
@@ -2749,15 +2745,21 @@ def test_splat_pipeline_runs_bin_splat_and_needs_three_ledger_items():
     assert "py7zr" in script  # poses may need the dataset fetch
 
 
-<<<<<<< HEAD
 def test_masks_pipeline_runs_bin_masks():
     from sceneagent.vast_smoke import FETCH_NAMES, PIPELINES, build_remote_command
 
     argv = build_remote_command("/workspace/r", "/workspace/o", pipeline="masks")
-    assert argv == [REMOTE_PYTHON, "-m", "sceneagent.bin_masks", "--out", "/workspace/o"]
+    assert argv == [
+        REMOTE_PYTHON,
+        "-m",
+        "sceneagent.bin_masks",
+        "--out",
+        "/workspace/o",
+    ]
     assert PIPELINES["masks"][0] == ("benchmark scene", "SAM masks")
     assert "masks_evidence.json" in FETCH_NAMES
-=======
+
+
 def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_contents(
     tmp_path,
 ):
@@ -2802,4 +2804,3 @@ def test_non_probe_runs_remove_a_stale_inventory_before_running():
         assert "rm -f /workspace/o/inventory.txt" in script
     probe = build_remote_shell("/workspace/r", "/workspace/o", pipeline="probe")
     assert "rm -f" not in probe
->>>>>>> claude/cut2-bin-splat
