@@ -113,6 +113,10 @@ PIPELINES = {
 # (no env/printenv), so no secret can land in the report.
 PROBE_SCRIPT = r"""
 section() { printf '\n## %s\n' "$1"; }
+# The inventory is uploaded as an Actions artifact, readable beyond the operator.
+# Listings skip hidden paths and any name that looks like a credential; no file
+# contents are printed.
+public() { grep -viE 'key|token|secret|cred|passw|\.pem|netrc|id_rsa|id_ed25519|\.env'; }
 section date; date -u
 section gpu; nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv 2>&1
 section os; head -3 /etc/os-release 2>&1; uname -r
@@ -124,21 +128,19 @@ section conda_envs; for d in /root/miniforge3 /root/miniconda3 /opt/conda /root/
 section tools; for t in colmap colmap4 glomap ffmpeg ffprobe ns-train ns-eval git git-lfs rsync tmux 7z; do printf '%s: ' "$t"; command -v "$t" || echo missing; done
 section colmap; colmap -h 2>&1 | head -3
 section torch; python3 -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())' 2>&1 | tail -1
-section folders; ls -la / /root /workspace 2>&1
-section tree; find /root /workspace -mindepth 1 -maxdepth 2 -not -name '.*' 2>/dev/null | sort | head -300
-section sizes; du -sh /root/* /workspace/* 2>/dev/null | sort -h | tail -40
-section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /workspace/models -mindepth 1 -maxdepth 3 -not -name '.*' 2>/dev/null | sort | head -300
+section folders; ls / /root /workspace 2>&1 | public
+section tree; find /root /workspace -mindepth 1 -maxdepth 2 -not -path '*/.*' 2>/dev/null | public | sort | head -300
+section sizes; du -sh /root/* /workspace/* 2>/dev/null | public | sort -h | tail -40
+section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /workspace/models -mindepth 1 -maxdepth 3 -not -path '*/.*' 2>/dev/null | public | sort | head -300
 # Globs over the usual conda and mamba roots, not find /: a full-disk walk takes
 # minutes on a hosted CI runner, where the probe test also runs.
 section interpreters; for d in /usr /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do [ -x "$d/bin/python3" ] && echo "$d/bin/python3"; done
 section colmap_binaries; for d in /usr /usr/local /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do c="$d/bin/colmap"; [ -x "$c" ] && echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
-section colmap_cuda_attempt; cat /root/colmap-cuda-install.meta 2>&1; echo; tail -15 /root/colmap-cuda-install.log 2>&1
 section python_imports; for py in /opt/colmap-cuda/bin/python3 /opt/conda/bin/python3 /root/.local/share/mamba/envs/sa/bin/python3 /root/.local/share/mamba/envs/nerf/bin/python3 /root/.local/share/mamba/envs/gsam2/bin/python3; do echo "$py: $(timeout 60 "$py" -c 'import sys; v=[sys.version.split()[0]]
 for m in ("numpy","scipy","trimesh","PIL","py7zr","torch"):
     try: v.append(m+"="+__import__(m).__version__)
     except Exception as e: v.append(m+"=MISSING")
 print(" ".join(v))' 2>&1 | tail -1)"; done
-section install_notes_headings; grep -E '^#' /root/texas_58301075_install.md 2>&1 | head -60
 """
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
 PY7ZR_PIN = "py7zr==1.1.4"

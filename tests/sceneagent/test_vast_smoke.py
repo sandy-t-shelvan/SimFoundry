@@ -2726,3 +2726,41 @@ def test_bin_shell_puts_cuda_colmap_on_path_and_py7zr_outside_the_shared_env():
     assert f"pip install --quiet --target {REMOTE_PYDEPS} {PY7ZR_PIN}" in script
     # The path line comes before anything that resolves colmap.
     assert script.index("export PATH=") < script.index("sceneagent.bin_run")
+
+
+def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_contents(
+    tmp_path,
+):
+    import subprocess
+
+    from sceneagent.vast_smoke import PROBE_SCRIPT
+
+    # Security review on PR #37: the inventory is a public artifact.
+    assert "ls -la" not in PROBE_SCRIPT
+    assert "cat /root" not in PROBE_SCRIPT and "tail -15 /root" not in PROBE_SCRIPT
+    public = next(
+        line for line in PROBE_SCRIPT.splitlines() if line.startswith("public()")
+    )
+    names = (
+        "gemini.key\nmodels\nauthorized_keys\napi_token.txt\nid_ed25519\nsam\n.env\n"
+    )
+    done = subprocess.run(
+        ["bash", "-c", f"{public}\npublic"],
+        input=names,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.stdout.split() == ["models", "sam"]
+    for line in PROBE_SCRIPT.splitlines():
+        if line.startswith(
+            (
+                "section folders",
+                "section tree",
+                "section sizes",
+                "section workspace_tree",
+            )
+        ):
+            assert "| public" in line, line
+        if "find " in line and "-not" in line:
+            assert "-not -path '*/.*'" in line, line
