@@ -296,7 +296,12 @@ def run_bin_splat(
         failed = evidence.get("failed_step")
         entry = {"item": ITEM, "method": METHOD}
         if failed:
-            entry.update(decision="reject", failed_step=failed)
+            # Failed runs publish only the manifest, which carries this reason.
+            tails = [r["output_tail"] for r in evidence["steps"] if r["step"] == failed]
+            last = tails[-1].strip().splitlines()[-3:] if tails else []
+            if failed == "export" and not evidence.get("gaussians"):
+                last.append(f"no Gaussians in {evidence.get('ply')}")
+            entry.update(decision="reject", failed_step=failed, reason=" | ".join(last))
         else:
             entry.update(
                 decision="accept",

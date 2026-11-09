@@ -118,6 +118,7 @@ def test_a_failed_train_stops_before_export_and_rejects(tmp_path):
         "method": "splatfacto",
         "decision": "reject",
         "failed_step": "train",
+        "reason": "boom",
     }
 
 
@@ -127,6 +128,8 @@ def test_an_empty_export_is_rejected(tmp_path):
     assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake) == 1
     evidence = json.loads((tmp_path / "splat_evidence.json").read_text())
     assert evidence["failed_step"] == "export"
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["reason"].endswith("no Gaussians in " + evidence["ply"])
 
 
 def test_a_timeout_is_recorded_as_124(tmp_path):
