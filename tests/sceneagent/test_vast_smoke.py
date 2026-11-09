@@ -2714,3 +2714,15 @@ def test_probe_runs_here_and_its_manifest_passes_on_the_inventory(tmp_path):
     )
     assert missing["passed"] is False
     assert missing["failure_reason"] == "inventory.txt was not written"
+
+
+def test_bin_shell_puts_cuda_colmap_on_path_and_py7zr_outside_the_shared_env():
+    from sceneagent.vast_smoke import PY7ZR_PIN, REMOTE_COLMAP_BIN, REMOTE_PYDEPS
+
+    script = build_remote_shell("/workspace/r", "/workspace/o", pipeline="bin")
+    bindir = REMOTE_PYTHON.rsplit("/", 1)[0]
+    assert f'export PATH={bindir}:{REMOTE_COLMAP_BIN}:"$PATH"' in script
+    assert f"export PYTHONPATH=/workspace/r:{REMOTE_PYDEPS}" in script
+    assert f"pip install --quiet --target {REMOTE_PYDEPS} {PY7ZR_PIN}" in script
+    # The path line comes before anything that resolves colmap.
+    assert script.index("export PATH=") < script.index("sceneagent.bin_run")

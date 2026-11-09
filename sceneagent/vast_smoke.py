@@ -72,11 +72,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
 
+from sceneagent.simfoundry_python import SIMFOUNDRY_PYTHON
+
 API_ORIGIN = "https://console.vast.ai"
 ALLOWED_INSTANCE_ID = 58301075
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
-REMOTE_PYTHON = "/root/miniforge3/envs/simfoundry/bin/python3"
+REMOTE_PYTHON = SIMFOUNDRY_PYTHON
+# COLMAP 3.11.1 with CUDA on 58301075; /usr/bin/colmap there is 3.6 without
+# CUDA. Placed after the interpreter's bin on PATH, before everything else.
+REMOTE_COLMAP_BIN = "/opt/colmap-cuda/bin"
+# py7zr goes here rather than into the shared ``sa`` env.
+REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
@@ -650,13 +657,15 @@ def build_remote_shell(
         "  exit 127",
         "fi",
         f"cd {shlex.quote(repo)}",
-        f"export PYTHONPATH={shlex.quote(repo)}",
+        f"export PYTHONPATH={shlex.quote(repo + ':' + REMOTE_PYDEPS)}",
+        f'export PATH={shlex.quote(str(Path(REMOTE_PYTHON).parent) + ":" + REMOTE_COLMAP_BIN)}:"$PATH"',
         f"mkdir -p {shlex.quote(out)}",
         host_probe_command(out),
     ]
     if pipeline == "bin":
         lines.append(
-            f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet {PY7ZR_PIN}"
+            f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet "
+            f"--target {shlex.quote(REMOTE_PYDEPS)} {PY7ZR_PIN}"
         )
     lines += [
         quoted,
