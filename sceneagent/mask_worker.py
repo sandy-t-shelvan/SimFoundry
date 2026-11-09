@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""GPU half of SF-15: runs inside the box's gsam2 env, started by ``bin_masks``.
+"""GPU half of SF-15: runs inside the box's groundingdino env, started by ``bin_masks``.
 
 For each PNG in ``--images``: GroundingDINO boxes for ``--prompt``, the
 filter in :func:`sceneagent.mask_filter.filter_detections`, then one SAM vit_h

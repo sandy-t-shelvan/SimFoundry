@@ -3,7 +3,7 @@
 """Prompt-to-object filtering for SF-15 (a SimFoundry addition, KAN-4 comment 10304).
 
 Standard library only: :mod:`sceneagent.mask_worker` imports it inside the
-box's gsam2 env, which has no trimesh or the rest of ``sceneagent.pipeline``.
+box's groundingdino env, which has no trimesh or the rest of ``sceneagent.pipeline``.
 """
 
 from __future__ import annotations

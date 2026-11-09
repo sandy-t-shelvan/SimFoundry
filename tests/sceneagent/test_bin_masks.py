@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""SF-15 orchestration and filtering, with a fake gsam2 worker: no GPU."""
+"""SF-15 orchestration and filtering, with a fake mask worker: no GPU."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def _bin_images(out: Path, n: int = VIEWS) -> None:
     )
 
 
-class FakeGsam2:
+class FakeMaskEnv:
     """segment_anything import check, optional pip, then the worker."""
 
     def __init__(self, kept_per_view=2, has_sam=True, worker_rc=0):
@@ -121,7 +121,7 @@ def _never_poses(out, data):
 
 def test_all_views_with_masks_are_accepted_and_recorded(tmp_path):
     _bin_images(tmp_path)
-    fake = FakeGsam2()
+    fake = FakeMaskEnv()
     rc = bin_masks.run_bin_masks(
         tmp_path, poses=_never_poses, runner=fake, weights=_weights
     )
@@ -136,7 +136,7 @@ def test_all_views_with_masks_are_accepted_and_recorded(tmp_path):
         evidence["filter"]["max_box_area_fraction"] == mask_filter.MAX_BOX_AREA_FRACTION
     )
     worker_argv, worker_kwargs = fake.calls[-1]
-    assert worker_argv[0] == bin_masks.GSAM2_PYTHON
+    assert worker_argv[0] == bin_masks.MASK_PYTHON
     assert worker_argv[worker_argv.index("--sam-weights") + 1] == bin_masks.SAM_WEIGHTS
     assert worker_kwargs["env"]["PYTHONPATH"].endswith(bin_masks.MASK_PYDEPS)
 
@@ -146,7 +146,7 @@ def test_a_view_without_masks_rejects(tmp_path):
     rc = bin_masks.run_bin_masks(
         tmp_path,
         poses=_never_poses,
-        runner=FakeGsam2(kept_per_view=0),
+        runner=FakeMaskEnv(kept_per_view=0),
         weights=_weights,
     )
     assert rc == 1
@@ -156,7 +156,7 @@ def test_a_view_without_masks_rejects(tmp_path):
 
 def test_missing_segment_anything_installs_into_its_own_target(tmp_path):
     _bin_images(tmp_path)
-    fake = FakeGsam2(has_sam=False)
+    fake = FakeMaskEnv(has_sam=False)
     bin_masks.run_bin_masks(tmp_path, poses=_never_poses, runner=fake, weights=_weights)
     pip = next(argv for argv, _ in fake.calls if "pip" in argv)
     assert pip[-3:] == ["--target", bin_masks.MASK_PYDEPS, bin_masks.SAM_PIP]
@@ -165,7 +165,7 @@ def test_missing_segment_anything_installs_into_its_own_target(tmp_path):
 def test_a_worker_failure_rejects_with_its_exit_code(tmp_path):
     _bin_images(tmp_path)
     rc = bin_masks.run_bin_masks(
-        tmp_path, poses=_never_poses, runner=FakeGsam2(worker_rc=3), weights=_weights
+        tmp_path, poses=_never_poses, runner=FakeMaskEnv(worker_rc=3), weights=_weights
     )
     assert rc == 1
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
@@ -183,7 +183,7 @@ def test_missing_images_run_the_bin_poses_first(tmp_path):
         return 0
 
     rc = bin_masks.run_bin_masks(
-        tmp_path, poses=poses, runner=FakeGsam2(), weights=_weights
+        tmp_path, poses=poses, runner=FakeMaskEnv(), weights=_weights
     )
     assert rc == 0 and called == [tmp_path]
 
@@ -204,11 +204,22 @@ def test_weights_are_downloaded_once_and_hash_checked(tmp_path, monkeypatch):
     assert fetched == ["https://x/w.pth"]
 
 
-def test_a_wrong_hash_removes_the_file(tmp_path):
+def test_a_wrong_hash_on_an_existing_file_raises_and_leaves_it(tmp_path):
     target = tmp_path / "w.pth"
     target.write_bytes(b"not sam")
     with pytest.raises(ValueError, match="is not the published"):
         bin_masks.ensure_sam_weights(target, "https://x/w.pth")
+    assert target.read_bytes() == b"not sam"  # someone else's checkout
+
+
+def test_a_wrong_hash_on_a_download_removes_it(tmp_path):
+    target = tmp_path / "w.pth"
+
+    def download(url, path):
+        path.write_bytes(b"truncated")
+
+    with pytest.raises(ValueError, match="is not the published"):
+        bin_masks.ensure_sam_weights(target, "https://x/w.pth", download=download)
     assert not target.exists()
 
 

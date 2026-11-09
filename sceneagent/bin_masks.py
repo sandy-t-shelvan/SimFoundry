@@ -7,11 +7,12 @@ prompt-to-object filtering (a SimFoundry addition, KAN-4 comment 10304). Every
 one of the 13 views is masked: the paper's every-10th stride is for video and
 would leave two of them.
 
-SAM is the paper's vit_h (plan decision 3). Instance 58301075 has SAM 2 but no
-vit_h, so this module installs ``segment-anything`` into its own target
-directory and downloads the vit_h checkpoint into ``/workspace/models``,
-checking its published SHA-256. GroundingDINO and torch come
-from the box's ``gsam2`` env, which runs :mod:`sceneagent.mask_worker`.
+SAM is the paper's vit_h (plan decision 3). On instance 59601312 the box's
+``groundingdino`` env already has GroundingDINO, ``segment_anything`` and
+torch, and ``/root/SimFoundry/checkpoints`` already holds both checkpoints;
+that env runs :mod:`sceneagent.mask_worker`. The vit_h file is checked against
+its published SHA-256 before use. Only when a file is missing does this module
+download it (and install ``segment-anything`` into its own target directory).
 
     python -m sceneagent.bin_masks --out /workspace/sf4-smoke/run
 """
@@ -38,21 +39,20 @@ from sceneagent.mask_filter import (
     TEXT_THRESHOLD,
 )
 
-# The gsam2 env on 58301075 (probe run 42693162920): GroundingDINO 0.1.0 from
-# Grounded-SAM-2, torch 2.14.1+cu130.
-GSAM2_PYTHON = "/root/.local/share/mamba/envs/gsam2/bin/python3"
-GSAM_ROOT = "/root/SceneagentX/third_party/Grounded-SAM-2"
-GDINO_CONFIG = (
-    f"{GSAM_ROOT}/grounding_dino/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-)
-GDINO_WEIGHTS = f"{GSAM_ROOT}/gdino_checkpoints/groundingdino_swint_ogc.pth"
+# The groundingdino env on 59601312 (probe run 42714221807): GroundingDINO 0.1.0
+# from the box's SimFoundry checkout, segment_anything 1.0, torch 2.5.1+cu124.
+MASK_PYTHON = "/root/miniforge3/envs/groundingdino/bin/python3"
+GDINO_ROOT = "/root/SimFoundry/deps/GroundingDINO"
+GDINO_CONFIG = f"{GDINO_ROOT}/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+CHECKPOINTS = "/root/SimFoundry/checkpoints"
+GDINO_WEIGHTS = f"{CHECKPOINTS}/groundingdino_swint_ogc.pth"
 SAM_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
-SAM_WEIGHTS = "/workspace/models/sam/sam_vit_h_4b8939.pth"
+SAM_WEIGHTS = f"{CHECKPOINTS}/sam_vit_h_4b8939.pth"
 # Published SHA-256 of sam_vit_h_4b8939.pth. The "4b8939" in the name is an MD5
 # prefix, not a SHA-256 one (masks run 42695882028 read a7bf3b02f3eb...).
 SAM_SHA256 = "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e"
 SAM_PIP = "segment-anything==1.0"
-MASK_PYDEPS = "/workspace/sf4-smoke/pydeps-gsam2"
+MASK_PYDEPS = "/workspace/sf4-smoke/pydeps-masks"
 
 WORKER_TIMEOUT_S = 1800
 ITEM = "SAM masks"
@@ -74,7 +74,11 @@ def ensure_sam_weights(
     *,
     download: Callable[[str, Path], None] | None = None,
 ) -> dict[str, Any]:
-    """Download vit_h once and check its SHA-256. A bad file is removed."""
+    """Check vit_h's SHA-256, downloading it first only if it is missing.
+
+    A bad file this call downloaded is removed. A bad file that was already
+    there belongs to someone else's checkout and is left alone.
+    """
     fetched = False
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,7 +88,8 @@ def ensure_sam_weights(
         fetched = True
     digest = sha256_of(path)
     if digest != SAM_SHA256:
-        path.unlink()
+        if fetched:
+            path.unlink()
         raise ValueError(
             f"{path.name} SHA-256 {digest[:12]}... is not the published {SAM_SHA256[:12]}..."
         )
@@ -99,7 +104,7 @@ def _http_download(url: str, target: Path) -> None:
 
 def worker_command(images: Path, masks: Path) -> list[str]:
     return [
-        GSAM2_PYTHON,
+        MASK_PYTHON,
         "-m",
         "sceneagent.mask_worker",
         "--images",
@@ -130,13 +135,13 @@ def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def _ensure_segment_anything(runner: Runner) -> dict[str, Any]:
-    check = [GSAM2_PYTHON, "-c", "import segment_anything"]
+    check = [MASK_PYTHON, "-c", "import segment_anything"]
     env = worker_environment()
     done = runner(check, env=env, capture_output=True, text=True, check=False)
     if done.returncode == 0:
         return {"installed": False}
     install = [
-        GSAM2_PYTHON,
+        MASK_PYTHON,
         "-m",
         "pip",
         "install",
