@@ -106,6 +106,10 @@ PIPELINES = {
     "sceneagent": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
     "run4": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
     "bin": (("benchmark scene", "COLMAP camera poses"), "GraspClutter6D 000091"),
+    "splat": (
+        ("benchmark scene", "COLMAP camera poses", "full-scene splat"),
+        "GraspClutter6D 000091",
+    ),
     "probe": ((), "host inventory"),
 }
 # Read-only host inventory for a new or changed box. Plain shell, so it runs
@@ -155,6 +159,8 @@ FETCH_NAMES = (
     "host_probe.json",
     "run4_evidence.json",
     "bin_evidence.json",
+    "splat_evidence.json",
+    "ns_eval.json",
     "inventory.txt",
 )
 PUBLIC_FIELDS = (
@@ -584,6 +590,8 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
     if pipeline == "bin":
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_run", "--out", out]
+    if pipeline == "splat":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_splat", "--out", out]
     if pipeline == "probe":
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline != "run4":
@@ -667,7 +675,7 @@ def build_remote_shell(
         f"mkdir -p {shlex.quote(out)}",
         host_probe_command(out),
     ]
-    if pipeline == "bin":
+    if pipeline in ("bin", "splat"):
         lines.append(
             f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet "
             f"--target {shlex.quote(REMOTE_PYDEPS)} {PY7ZR_PIN}"
@@ -1847,6 +1855,8 @@ def publish_artifacts(
             "manifest.json",
             "run4_evidence.json",
             "bin_evidence.json",
+            "splat_evidence.json",
+            "ns_eval.json",
             "inventory.txt",
         }:
             continue
