@@ -51,7 +51,30 @@ def colmap_major(banner):
     return 3
 
 
-def pose_commands(database, image_dir, sparse_dir, use_gpu, major=3):
+MATCHERS = ("sequential_matcher", "exhaustive_matcher")
+
+
+def pose_commands(
+    database, image_dir, sparse_dir, use_gpu, major=3, matcher=MATCHERS[0]
+):
+    """Extract, match, map. ``matcher`` is sequential (video) or exhaustive.
+
+    Exhaustive matching is for a few unordered stills, such as the 13
+    GraspClutter6D views; it takes the same GPU flag and no overlap window.
+    """
+    if matcher not in MATCHERS:
+        raise ValueError(f"unknown COLMAP matcher {matcher}")
+    commands = _sequential_pose_commands(
+        database, image_dir, sparse_dir, use_gpu, major
+    )
+    if matcher == "exhaustive_matcher":
+        step = commands[1]
+        cut = step.index("--SequentialMatching.overlap")
+        commands[1] = [step[0], matcher, *step[2:cut], *step[cut + 2 :]]
+    return commands
+
+
+def _sequential_pose_commands(database, image_dir, sparse_dir, use_gpu, major=3):
     """Three sequential steps. ``use_gpu`` is the SIFT device flag, 0 or 1.
 
     COLMAP 3.7 names the device ``SiftExtraction.use_gpu``. COLMAP 4.2 names

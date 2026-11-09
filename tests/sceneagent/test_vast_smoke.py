@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from sceneagent.gpu_smoke_trigger import DISPATCH_INPUTS, workflow_safety_findings
 from sceneagent.vast_smoke import (
     ALLOWED_INSTANCE_ID,
     DETACH_LEFTOVER_KEYS,
@@ -804,11 +805,20 @@ def test_run_steps_do_not_interpolate_expressions():
     assert '"$GITHUB_WORKSPACE/sf4-artifacts"' in text
 
 
-def test_workflow_dispatch_has_no_inputs_and_keeps_the_instance_literal():
+def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance_literal():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in text
-    assert "inputs:" not in text
-    assert "inputs." not in text
+    assert DISPATCH_INPUTS in text
+    assert workflow_safety_findings(text) == []
+    extra = text.replace(
+        "        default: run4\n",
+        "        default: run4\n      instance_id:\n        type: string\n",
+        1,
+    )
+    assert "workflow_dispatch may only take the run4/bin pipeline choice" in (
+        workflow_safety_findings(extra)
+    )
+    assert "inputs.instance_id" not in text
     assert "--instance-id 58301075" in text
     assert "pull_request_target:" in text
     for line in text.splitlines():

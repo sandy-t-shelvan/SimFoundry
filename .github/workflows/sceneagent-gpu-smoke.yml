@@ -15,6 +15,12 @@ name: sceneagent-gpu-smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      pipeline:
+        description: GPU pipeline to run
+        type: choice
+        options: [run4, bin]
+        default: run4
   pull_request_target:
     types: [labeled]
   push:
@@ -155,11 +161,14 @@ jobs:
           VAST_API_KEY: ${{ secrets.VAST_API_KEY }}
           VAST_SSH_PRIVATE_KEY: ${{ secrets.VAST_SSH_PRIVATE_KEY }}
           SMOKE_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event_name == 'pull_request_target' && 'label' || github.event_name == 'push' && 'request-file' || 'invalid' }}
+          # Only a manual run chooses; labels and request files stay run4.
+          SMOKE_PIPELINE: ${{ github.event_name == 'workflow_dispatch' && inputs.pipeline || 'run4' }}
           SMOKE_ACTOR: ${{ github.actor }}
           CHECKED_OUT_SHA: ${{ env.CHECKED_OUT_SHA }}
         run: |
           set -euo pipefail
           : "${SMOKE_TRIGGER:?}"
+          : "${SMOKE_PIPELINE:?}"
           : "${SMOKE_ACTOR:?}"
           : "${CHECKED_OUT_SHA:?}"
           measured=$(cat "$GITHUB_WORKSPACE/sf4-artifacts/checked_out_commit.txt")
@@ -167,7 +176,7 @@ jobs:
             echo "checked-out commit evidence does not match git rev-parse" >&2
             exit 1
           fi
-          python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$CHECKED_OUT_SHA" --pipeline run4
+          python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$CHECKED_OUT_SHA" --pipeline "$SMOKE_PIPELINE"
 
       - name: Upload plan, ledger, and manifest
         if: success()
@@ -181,6 +190,7 @@ jobs:
             sf4-artifacts/ledger.json
             sf4-artifacts/manifest.json
             sf4-artifacts/run4_evidence.json
+            sf4-artifacts/bin_evidence.json
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.

@@ -94,6 +94,14 @@ SSH_READY_BACKOFF_CAP_S = 8.0
 # operator removes it. This flag does not authorize a detach.
 DETACH_LEFTOVER_KEYS = False
 REQUIRED_LEDGER_ITEMS = ("video", "COLMAP camera poses")
+# What each pipeline must put in its ledger, and the input it records.
+PIPELINES = {
+    "sceneagent": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
+    "run4": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
+    "bin": (("benchmark scene", "COLMAP camera poses"), "GraspClutter6D 000091"),
+}
+# gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
+PY7ZR_PIN = "py7zr==1.1.4"
 FETCH_NAMES = (
     "ledger.json",
     "plan.json",
@@ -103,6 +111,7 @@ FETCH_NAMES = (
     "tool_probe.json",
     "host_probe.json",
     "run4_evidence.json",
+    "bin_evidence.json",
 )
 PUBLIC_FIELDS = (
     "id",
@@ -529,6 +538,8 @@ def build_remote_command(
     fruits = f"{repo}/{FRUITS_RELATIVE}"
     if pipeline == "sceneagent":
         return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
+    if pipeline == "bin":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_run", "--out", out]
     if pipeline != "run4":
         raise InstanceNotApproved("refusing pipeline")
     argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]
@@ -600,6 +611,12 @@ def build_remote_shell(
         f"export PYTHONPATH={shlex.quote(repo)}",
         f"mkdir -p {shlex.quote(out)}",
         host_probe_command(out),
+    ]
+    if pipeline == "bin":
+        lines.append(
+            f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet {PY7ZR_PIN}"
+        )
+    lines += [
         quoted,
     ]
     script = "\n".join(lines) + "\n"
@@ -1613,6 +1630,7 @@ def collect_artifact_manifest(
     own_key: dict[str, Any] | None = None,
     run_context: dict[str, str] | None = None,
     secret_forwarding: SecretForwarding | None = None,
+    pipeline: str = "sceneagent",
 ) -> dict[str, Any]:
     """Record the run. Never rewrite ``ledger.json`` or invent ``plan.json``.
 
@@ -1644,7 +1662,7 @@ def collect_artifact_manifest(
         ]
     present_items = {stage["item"] for stage in stages}
     missing_items = [
-        name for name in REQUIRED_LEDGER_ITEMS if name not in present_items
+        name for name in PIPELINES[pipeline][0] if name not in present_items
     ]
     missing_files: list[str] = []
     if ledger_bytes is None:
@@ -1664,7 +1682,7 @@ def collect_artifact_manifest(
     )
     manifest = {
         "instance_id": approved,
-        "video": FRUITS_RELATIVE,
+        "video": PIPELINES[pipeline][1],
         "command": command,
         "plan": "plan.json" if plan_path.is_file() else None,
         "ledger": "ledger.json" if ledger_bytes is not None else None,
@@ -1764,6 +1782,7 @@ def publish_artifacts(
             "ledger.json",
             "manifest.json",
             "run4_evidence.json",
+            "bin_evidence.json",
         }:
             continue
         target = artifact_dir / rel
@@ -2279,7 +2298,7 @@ def run_smoke(
     except InstanceNotApproved as exc:
         _emit(str(exc), "")
         return 2
-    if pipeline not in {"sceneagent", "run4"}:
+    if pipeline not in PIPELINES:
         _emit("refusing pipeline", "")
         return 2
     try:
@@ -2402,6 +2421,7 @@ def run_smoke(
                 own_key=own_key,
                 run_context=context,
                 secret_forwarding=forwarding,
+                pipeline=pipeline,
             )
             publish_artifacts(local_run, Path(artifact_dir), api_key=key)
             published = True
@@ -2486,9 +2506,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trigger", choices=sorted(_TRIGGER_NAMES), default="")
     parser.add_argument("--actor", default="")
     parser.add_argument("--commit-sha", default="")
-    parser.add_argument(
-        "--pipeline", choices=("sceneagent", "run4"), default="sceneagent"
-    )
+    parser.add_argument("--pipeline", choices=sorted(PIPELINES), default="sceneagent")
     args = parser.parse_args(argv)
     return run_smoke(
         args.instance_id,

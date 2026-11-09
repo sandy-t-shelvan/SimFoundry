@@ -549,7 +549,8 @@ def test_workflow_runs_run4_and_records_the_checked_out_commit():
     assert workflow_safety_findings(text) == []
     assert text.count("secrets.VAST_SSH_PRIVATE_KEY") == 1
     assert "git rev-parse HEAD" in text
-    assert "--pipeline run4" in text
+    assert '--pipeline "$SMOKE_PIPELINE"' in text
+    assert "inputs.pipeline || 'run4'" in text
     assert "--commit-sha \"$CHECKED_OUT_SHA\"" in text
     assert "StrictHostKeyChecking" not in text
     keyed = text.split("name: Vast GPU smoke on Fruits.mp4", 1)[1].split("name: Upload", 1)[0]
