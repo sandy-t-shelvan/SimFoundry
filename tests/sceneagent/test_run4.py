@@ -103,7 +103,7 @@ def _analyzer_text(
 
 
 def test_pinned_interpreter_is_the_simfoundry_env_and_names_a_missing_file(tmp_path):
-    assert SIMFOUNDRY_PYTHON == "/root/.local/share/mamba/envs/sa/bin/python3"
+    assert SIMFOUNDRY_PYTHON == "/root/miniforge3/envs/simfoundry/bin/python3"
     assert REMOTE_PYTHON == SIMFOUNDRY_PYTHON
     missing = tmp_path / "missing-python"
     with pytest.raises(PinnedInterpreterMissing, match=f"pinned interpreter missing: {missing}"):

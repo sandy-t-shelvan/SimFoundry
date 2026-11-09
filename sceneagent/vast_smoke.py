@@ -79,10 +79,10 @@ ALLOWED_INSTANCE_ID = 59601312
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
 REMOTE_PYTHON = SIMFOUNDRY_PYTHON
-# COLMAP 3.11.1 with CUDA on 58301075; /usr/bin/colmap there is 3.6 without
-# CUDA. Placed after the interpreter's bin on PATH, before everything else.
-REMOTE_COLMAP_BIN = "/opt/colmap-cuda/bin"
-# py7zr goes here rather than into the shared ``sa`` env.
+# COLMAP 3.11.1 with CUDA on 59601312 (probe run 42713577064). Placed after the
+# interpreter's bin on PATH, before everything else.
+REMOTE_COLMAP_BIN = "/usr/local/bin"
+# py7zr goes here rather than into the shared simfoundry env.
 REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
@@ -136,7 +136,7 @@ section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /wo
 # minutes on a hosted CI runner, where the probe test also runs.
 section interpreters; for d in /usr /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do [ -x "$d/bin/python3" ] && echo "$d/bin/python3"; done
 section colmap_binaries; for d in /usr /usr/local /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do c="$d/bin/colmap"; [ -x "$c" ] && echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
-section python_imports; for py in /opt/colmap-cuda/bin/python3 /opt/conda/bin/python3 /root/.local/share/mamba/envs/sa/bin/python3 /root/.local/share/mamba/envs/nerf/bin/python3 /root/.local/share/mamba/envs/gsam2/bin/python3; do echo "$py: $(timeout 60 "$py" -c 'import sys; v=[sys.version.split()[0]]
+section python_imports; for py in /usr/bin/python3 /opt/*/bin/python3 /opt/conda/envs/*/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3 /root/miniconda3/envs/*/bin/python3; do [ -x "$py" ] || continue; echo "$py: $(timeout 60 "$py" -c 'import sys; v=[sys.version.split()[0]]
 for m in ("numpy","scipy","trimesh","PIL","py7zr","torch"):
     try: v.append(m+"="+__import__(m).__version__)
     except Exception as e: v.append(m+"=MISSING")
