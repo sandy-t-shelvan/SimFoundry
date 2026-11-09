@@ -124,6 +124,11 @@ section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /wo
 section interpreters; find / -xdev \( -path /proc -o -path /sys -o -path /root/jammy \) -prune -o -path '*/bin/python3' -print 2>/dev/null | grep -v '/pkgs/' | sort | head -60
 section colmap_binaries; find / -xdev \( -path /proc -o -path /sys -o -path /root/jammy \) -prune -o -name colmap -type f -perm -u+x -print 2>/dev/null | head -20 | while read -r c; do echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
 section colmap_cuda_attempt; cat /root/colmap-cuda-install.meta 2>&1; echo; tail -15 /root/colmap-cuda-install.log 2>&1
+section python_imports; for py in /opt/colmap-cuda/bin/python3 /opt/conda/bin/python3 /root/.local/share/mamba/envs/sa/bin/python3 /root/.local/share/mamba/envs/nerf/bin/python3 /root/.local/share/mamba/envs/gsam2/bin/python3; do echo "$py: $(timeout 60 "$py" -c 'import sys; v=[sys.version.split()[0]]
+for m in ("numpy","scipy","trimesh","PIL","py7zr","torch"):
+    try: v.append(m+"="+__import__(m).__version__)
+    except Exception as e: v.append(m+"=MISSING")
+print(" ".join(v))' 2>&1 | tail -1)"; done
 section install_notes_headings; grep -E '^#' /root/texas_58301075_install.md 2>&1 | head -60
 """
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
