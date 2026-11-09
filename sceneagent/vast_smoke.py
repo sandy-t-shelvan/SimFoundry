@@ -128,8 +128,10 @@ section folders; ls -la / /root /workspace 2>&1
 section tree; find /root /workspace -mindepth 1 -maxdepth 2 -not -name '.*' 2>/dev/null | sort | head -300
 section sizes; du -sh /root/* /workspace/* 2>/dev/null | sort -h | tail -40
 section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /workspace/models -mindepth 1 -maxdepth 3 -not -name '.*' 2>/dev/null | sort | head -300
-section interpreters; find / -xdev \( -path /proc -o -path /sys -o -path /root/jammy \) -prune -o -path '*/bin/python3' -print 2>/dev/null | grep -v '/pkgs/' | sort | head -60
-section colmap_binaries; find / -xdev \( -path /proc -o -path /sys -o -path /root/jammy \) -prune -o -name colmap -type f -perm -u+x -print 2>/dev/null | head -20 | while read -r c; do echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
+# Globs over the usual env roots, not find /: a full-disk walk takes
+# minutes on a hosted CI runner, where the probe test also runs.
+section interpreters; for d in /usr /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do [ -x "$d/bin/python3" ] && echo "$d/bin/python3"; done
+section colmap_binaries; for d in /usr /usr/local /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do c="$d/bin/colmap"; [ -x "$c" ] && echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
 section colmap_cuda_attempt; cat /root/colmap-cuda-install.meta 2>&1; echo; tail -15 /root/colmap-cuda-install.log 2>&1
 section python_imports; for py in /opt/colmap-cuda/bin/python3 /opt/conda/bin/python3 /root/.local/share/mamba/envs/sa/bin/python3 /root/.local/share/mamba/envs/nerf/bin/python3 /root/.local/share/mamba/envs/gsam2/bin/python3; do echo "$py: $(timeout 60 "$py" -c 'import sys; v=[sys.version.split()[0]]
 for m in ("numpy","scipy","trimesh","PIL","py7zr","torch"):
