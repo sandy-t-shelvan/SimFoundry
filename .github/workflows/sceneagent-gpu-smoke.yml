@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin]
+        options: [run4, bin, probe]
         default: run4
   pull_request_target:
     types: [labeled]
@@ -191,6 +191,7 @@ jobs:
             sf4-artifacts/manifest.json
             sf4-artifacts/run4_evidence.json
             sf4-artifacts/bin_evidence.json
+            sf4-artifacts/inventory.txt
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.

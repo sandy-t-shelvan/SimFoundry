@@ -409,11 +409,15 @@ def test_rsync_path_creates_the_destination_with_a_real_rsync(tmp_path):
     checkout = _checkout(tmp_path)
     fake_ssh = tmp_path / "fake_ssh"
     # Stands in for ssh: drop the options and host, run the remote command here.
-    fake_ssh.write_text('#!/bin/sh\nwhile [ "$1" != "host" ]; do shift; done\nshift\nexec sh -c "$*"\n')
+    fake_ssh.write_text(
+        '#!/bin/sh\nwhile [ "$1" != "host" ]; do shift; done\nshift\nexec sh -c "$*"\n'
+    )
     fake_ssh.chmod(0o755)
     dest = tmp_path / "remote" / "sf4-smoke" / "repo"
     for command, cwd in rsync_invocations(checkout, "host", 22, "/k", "/kh", str(dest)):
-        command = [str(fake_ssh) if part.startswith("ssh ") else part for part in command]
+        command = [
+            str(fake_ssh) if part.startswith("ssh ") else part for part in command
+        ]
         command = [part.replace("root@host:", "host:") for part in command]
         subprocess.run(command, cwd=cwd, check=True, capture_output=True)
     assert (dest / "sceneagent").is_dir()
@@ -815,7 +819,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         "        default: run4\n      instance_id:\n        type: string\n",
         1,
     )
-    assert "workflow_dispatch may only take the run4/bin pipeline choice" in (
+    assert "workflow_dispatch may only take the run4/bin/probe pipeline choice" in (
         workflow_safety_findings(extra)
     )
     assert "inputs.instance_id" not in text
@@ -2674,3 +2678,39 @@ def test_sigterm_raises_systemexit_and_finally_closes(monkeypatch, tmp_path):
     assert caught.value.code == 1
     assert remote.closed is True
     assert calls == [("GET", None)]
+
+
+def test_probe_is_plain_shell_and_never_prints_the_environment():
+    script = build_remote_shell(REMOTE_REPO, REMOTE_OUT, pipeline="probe")
+    # It reports whether the pinned env exists; it never requires or runs it.
+    assert "pinned interpreter missing" not in script
+    assert "exit 127" not in script
+    assert f"{REMOTE_PYTHON} -m" not in script
+    assert f"{REMOTE_OUT}/inventory.txt" in script
+    for banned in ("printenv", "\nenv", " env ", "set\n", "export -p"):
+        assert banned not in script
+
+
+def test_probe_runs_here_and_its_manifest_passes_on_the_inventory(tmp_path):
+    import subprocess
+
+    out = tmp_path / "run"
+    script = build_remote_shell(REMOTE_REPO, str(out), pipeline="probe")
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr
+    text = (out / "inventory.txt").read_text()
+    for section in ("## gpu", "## disk", "## conda_envs", "## tools", "## tree"):
+        assert section in text
+    command = build_remote_command(REMOTE_REPO, str(out), pipeline="probe")
+    ok = collect_artifact_manifest(
+        out, command=command, instance_id=58301075, pipeline="probe"
+    )
+    assert ok["passed"] is True
+    (out / "inventory.txt").unlink()
+    missing = collect_artifact_manifest(
+        out, command=command, instance_id=58301075, pipeline="probe"
+    )
+    assert missing["passed"] is False
+    assert missing["failure_reason"] == "inventory.txt was not written"

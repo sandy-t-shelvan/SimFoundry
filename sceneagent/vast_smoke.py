@@ -99,7 +99,28 @@ PIPELINES = {
     "sceneagent": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
     "run4": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
     "bin": (("benchmark scene", "COLMAP camera poses"), "GraspClutter6D 000091"),
+    "probe": ((), "host inventory"),
 }
+# Read-only host inventory for a new or changed box. Plain shell, so it runs
+# before any SceneAgent environment exists. It never prints the environment
+# (no env/printenv), so no secret can land in the report.
+PROBE_SCRIPT = r"""
+section() { printf '\n## %s\n' "$1"; }
+section date; date -u
+section gpu; nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv 2>&1
+section os; head -3 /etc/os-release 2>&1; uname -r
+section cpu_ram; nproc; free -g 2>&1
+section disk; df -h / /workspace /root 2>&1
+section cuda; ls -d /usr/local/cuda* 2>&1; nvcc --version 2>&1 | tail -2
+section python; for t in python python3 conda mamba micromamba; do printf '%s: ' "$t"; command -v "$t" || echo missing; done; python3 --version 2>&1
+section conda_envs; for d in /root/miniforge3 /root/miniconda3 /opt/conda /root/anaconda3; do [ -d "$d/envs" ] && { echo "$d/envs:"; ls "$d/envs"; }; done; [ -x /root/miniforge3/envs/simfoundry/bin/python3 ] && echo "simfoundry env: present" || echo "simfoundry env: missing"
+section tools; for t in colmap colmap4 glomap ffmpeg ffprobe ns-train ns-eval git git-lfs rsync tmux 7z; do printf '%s: ' "$t"; command -v "$t" || echo missing; done
+section colmap; colmap -h 2>&1 | head -3
+section torch; python3 -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())' 2>&1 | tail -1
+section folders; ls -la / /root /workspace 2>&1
+section tree; find /root /workspace -mindepth 1 -maxdepth 2 -not -name '.*' 2>/dev/null | sort | head -300
+section sizes; du -sh /root/* /workspace/* 2>/dev/null | sort -h | tail -40
+"""
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
 PY7ZR_PIN = "py7zr==1.1.4"
 FETCH_NAMES = (
@@ -112,6 +133,7 @@ FETCH_NAMES = (
     "host_probe.json",
     "run4_evidence.json",
     "bin_evidence.json",
+    "inventory.txt",
 )
 PUBLIC_FIELDS = (
     "id",
@@ -540,6 +562,8 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
     if pipeline == "bin":
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_run", "--out", out]
+    if pipeline == "probe":
+        return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline != "run4":
         raise InstanceNotApproved("refusing pipeline")
     argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]
@@ -597,6 +621,14 @@ def build_remote_shell(
     """
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
+    if pipeline == "probe":
+        # No pinned interpreter yet on a new box; the probe is plain shell.
+        script = (
+            f"mkdir -p {shlex.quote(out)}\n{{\n{PROBE_SCRIPT}\n}} > "
+            f"{shlex.quote(out + '/inventory.txt')} 2>&1\necho inventory written\n"
+        )
+        _reject_secret_text(script)
+        return script
     argv = build_remote_command(repo, out, pipeline=pipeline, commit_sha=commit_sha)
     quoted = " ".join(shlex.quote(part) for part in argv)
     py = shlex.quote(REMOTE_PYTHON)
@@ -1672,7 +1704,12 @@ def collect_artifact_manifest(
     reason = _failure_reason(
         stages, missing_items if ledger is not None else [], missing_files
     )
-    passed = (
+    if pipeline == "probe":
+        # A probe has no plan or ledger; its result is the inventory file.
+        inventory = run_dir / "inventory.txt"
+        missing_files = [] if inventory.is_file() else ["inventory"]
+        reason = None if inventory.is_file() else "inventory.txt was not written"
+    passed = (pipeline == "probe" and reason is None) or (
         ledger_bytes is not None
         and plan_path.is_file()
         and not missing_items
@@ -1711,7 +1748,10 @@ def collect_artifact_manifest(
         manifest["own_key"] = own
     if ssh is not None:
         manifest["ssh"] = _public_ssh_report(ssh)
-    manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
+    if pipeline == "probe":
+        manifest["complete"] = (run_dir / "inventory.txt").is_file()
+    else:
+        manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
     if not manifest["complete"]:
         manifest["passed"] = False
     _apply_run_record(manifest, run_context, secret_forwarding)
@@ -1783,6 +1823,7 @@ def publish_artifacts(
             "manifest.json",
             "run4_evidence.json",
             "bin_evidence.json",
+            "inventory.txt",
         }:
             continue
         target = artifact_dir / rel
