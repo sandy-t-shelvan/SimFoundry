@@ -92,8 +92,9 @@ def run_colmap_on_images(
     gpu_check: Callable[[str], dict[str, Any]],
     command_runner: Callable[[list[str]], dict[str, Any]],
     analyzer: Callable[[Path], dict[str, Any]] | None = None,
+    matcher: str = MATCHER,
 ) -> dict[str, Any]:
-    """Run the sequential COLMAP commands after one memory check each.
+    """Run the COLMAP commands after one memory check each.
 
     ``pose_commands`` chooses the matcher. This function does not swap in
     vocab-tree matching. A failed check raises :class:`GpuHeadroomError`
@@ -122,9 +123,11 @@ def run_colmap_on_images(
         }
     use_gpu = use_gpu_from_banner(banner_text)
     major = colmap_major(banner_text)
-    commands = pose_commands(database, image_dir, sparse, use_gpu, major=major)
+    commands = pose_commands(
+        database, image_dir, sparse, use_gpu, major=major, matcher=matcher
+    )
     for argv in commands:
-        if argv[1] != MATCHER and argv[1] not in {
+        if argv[1] != matcher and argv[1] not in {
             "feature_extractor",
             "mapper",
         }:
@@ -144,7 +147,10 @@ def run_colmap_on_images(
                 "registered_names": {},
                 "name_errors": {},
             }
-    frame_count = len(list(image_dir.glob("*.jpg")))
+    # Video frames are JPG; GraspClutter6D stills are PNG and are not re-encoded.
+    frame_count = len(list(image_dir.glob("*.jpg"))) + len(
+        list(image_dir.glob("*.png"))
+    )
     gate = accept_reconstruction(
         sparse,
         frame_count,
