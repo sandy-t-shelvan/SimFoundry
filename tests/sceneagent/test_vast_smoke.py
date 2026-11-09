@@ -821,6 +821,11 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
     )
     assert "workflow_dispatch may only take the run4/bin/splat/masks/probe pipeline choice" in (
         workflow_safety_findings(extra)
+
+
+    assert (
+        "workflow_dispatch may only take the run4/bin/splat/probe pipeline choice"
+        in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
     assert "--instance-id 58301075" in text
@@ -2732,12 +2737,19 @@ def test_splat_pipeline_runs_bin_splat_and_needs_three_ledger_items():
     from sceneagent.vast_smoke import PIPELINES, build_remote_command
 
     argv = build_remote_command("/workspace/r", "/workspace/o", pipeline="splat")
-    assert argv == [REMOTE_PYTHON, "-m", "sceneagent.bin_splat", "--out", "/workspace/o"]
+    assert argv == [
+        REMOTE_PYTHON,
+        "-m",
+        "sceneagent.bin_splat",
+        "--out",
+        "/workspace/o",
+    ]
     assert PIPELINES["splat"][0][-1] == "full-scene splat"
     script = build_remote_shell("/workspace/r", "/workspace/o", pipeline="splat")
     assert "py7zr" in script  # poses may need the dataset fetch
 
 
+<<<<<<< HEAD
 def test_masks_pipeline_runs_bin_masks():
     from sceneagent.vast_smoke import FETCH_NAMES, PIPELINES, build_remote_command
 
@@ -2745,3 +2757,49 @@ def test_masks_pipeline_runs_bin_masks():
     assert argv == [REMOTE_PYTHON, "-m", "sceneagent.bin_masks", "--out", "/workspace/o"]
     assert PIPELINES["masks"][0] == ("benchmark scene", "SAM masks")
     assert "masks_evidence.json" in FETCH_NAMES
+=======
+def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_contents(
+    tmp_path,
+):
+    import subprocess
+
+    from sceneagent.vast_smoke import PROBE_SCRIPT
+
+    # Security review on PR #37: the inventory is a public artifact.
+    assert "ls -la" not in PROBE_SCRIPT
+    assert "cat /root" not in PROBE_SCRIPT and "tail -15 /root" not in PROBE_SCRIPT
+    public = next(
+        line for line in PROBE_SCRIPT.splitlines() if line.startswith("public()")
+    )
+    names = (
+        "gemini.key\nmodels\nauthorized_keys\napi_token.txt\nid_ed25519\nsam\n.env\n"
+    )
+    done = subprocess.run(
+        ["bash", "-c", f"{public}\npublic"],
+        input=names,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.stdout.split() == ["models", "sam"]
+    for line in PROBE_SCRIPT.splitlines():
+        if line.startswith(
+            (
+                "section folders",
+                "section tree",
+                "section sizes",
+                "section workspace_tree",
+            )
+        ):
+            assert "| public" in line, line
+        if "find " in line and "-not" in line:
+            assert "-not -path '*/.*'" in line, line
+
+
+def test_non_probe_runs_remove_a_stale_inventory_before_running():
+    for pipeline in ("run4", "bin"):
+        script = build_remote_shell("/workspace/r", "/workspace/o", pipeline=pipeline)
+        assert "rm -f /workspace/o/inventory.txt" in script
+    probe = build_remote_shell("/workspace/r", "/workspace/o", pipeline="probe")
+    assert "rm -f" not in probe
+>>>>>>> claude/cut2-bin-splat
