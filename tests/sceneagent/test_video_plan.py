@@ -57,7 +57,7 @@ def test_run_video_writes_plan_json_with_the_shared_writer(tmp_path, monkeypatch
     assert "decision" not in json.dumps(written["steps"])
     original = (out / "plan.json").read_bytes()
     collect_artifact_manifest(
-        out, command=["python3", "-m", "sceneagent"], instance_id=58301075
+        out, command=["python3", "-m", "sceneagent"], instance_id=59601312
     )
     artifacts = tmp_path / "artifacts"
     publish_artifacts(out, artifacts)

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/sandy-t-shelvan/SimFoundry/blob/Main_duplicate/ci/gpu-run-request.schema.json",
   "title": "GPU smoke request",
-  "description": "Trigger document only. It cannot name an instance. The workflow always uses instance 58301075 and rejects every other field. This schema file is not the trigger path.",
+  "description": "Trigger document only. It cannot name an instance. The workflow always uses instance 59601312 and rejects every other field. This schema file is not the trigger path.",
   "type": "object",
   "additionalProperties": false,
   "required": ["ticket_id", "reason"],

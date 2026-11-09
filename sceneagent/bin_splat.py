@@ -34,10 +34,11 @@ from typing import Any
 
 from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, run_bin_poses
 
-# nerfstudio 1.1.4 and gsplat 1.0.0 on instance 58301075 (probe run 42693162920).
-NS_BIN = "/root/.local/share/mamba/envs/nerf/bin"
-# That env's torch is cu121; gsplat compiles its kernels against this toolkit.
-CUDA_HOME = "/usr/local/cuda-12.1"
+# nerfstudio 1.1.5 and gsplat 1.5.3 on instance 59601312 (probe run 42714221807):
+# the env pipeline A's 2c_train_bg_splat.py is run from.
+NS_BIN = "/root/miniforge3/envs/nerfstudio_simfoundry/bin"
+# That env's torch is 2.7.1+cu128; gsplat builds against the matching toolkit.
+CUDA_HOME = "/usr/local/cuda-12.8"
 METHOD = "splatfacto"
 MAX_NUM_ITERATIONS = 30000
 STEP_TIMEOUT_S = {"process-data": 900, "train": 3600, "eval": 900, "export": 900}
