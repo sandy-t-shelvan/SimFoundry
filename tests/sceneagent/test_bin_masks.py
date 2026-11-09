@@ -169,7 +169,7 @@ def test_a_worker_failure_rejects_with_its_exit_code(tmp_path):
     )
     assert rc == 1
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
-    assert "mask worker exited 3" in entry["reason"]
+    assert "mask worker exited 3: cuda oom" in entry["reason"]
     evidence = json.loads((tmp_path / "masks_evidence.json").read_text())
     assert evidence["worker"]["output_tail"] == "cuda oom"
 

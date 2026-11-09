@@ -225,7 +225,11 @@ def run_bin_masks(
             "output_tail": ((done.stderr or "") or (done.stdout or ""))[-2000:],
         }
         if done.returncode != 0:
-            raise RuntimeError(f"mask worker exited {done.returncode}")
+            # Failed runs publish only the manifest, which carries this reason.
+            tail = evidence["worker"]["output_tail"].strip().splitlines()[-3:]
+            raise RuntimeError(
+                f"mask worker exited {done.returncode}: " + " | ".join(tail)
+            )
         detections = json.loads((masks / "detections.json").read_text(encoding="utf-8"))
         summary = summarize(detections)
         evidence["summary"] = summary
@@ -237,7 +241,7 @@ def run_bin_masks(
                 reason=f"{summary['views_with_masks']} of {VIEWS} views kept a mask",
             )
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
-        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[:500])
+        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
     ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
