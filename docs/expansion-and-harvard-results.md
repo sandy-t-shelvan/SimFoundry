@@ -35,6 +35,21 @@ Not yet separated: how much of the 0.058 → 0.067 gain comes from centred ICP s
 
 **GPU box.** Instance 58301075 again from 2026-11-10 (59601312 was deleted). PR #50 repins the workflow and sets the tool paths from two read-only probes.
 
+**Rerun on 58301075 (2026-11-10, PR #50, same code as main).**
+
+| Step | Result |
+|---|---|
+| Poses | 13/13 |
+| Splat | 134,219 Gaussians, PSNR 23.84 |
+| Masks | 94, identical to the old box |
+| Grouping | 14 objects (12 in 2+ views) |
+| SAM 3D | 14 of 14 meshed |
+| Score | **F1@1cm 0.079, matched Chamfer 0.070 m** ([run 42916527232](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42916527232)) |
+
+That is above the paper's 6.9% for original SimFoundry, but it comes from the box's older nerfstudio, not a method change: fewer Gaussians, then 14 groups instead of 25. M1 counts a score file per *change*, so this run is the new baseline that Cut 3's SF-30 to SF-32 are measured against.
+
+The score files were never committed before PR #50: `.gitignore`'s `*core*` matched "score". PR #50 and PR #44 add them, with `docs/results/` excepted.
+
 ### Roadmap to the MVP (2026-11-10)
 
 **MVP definition.** One command takes a captured video to an Isaac Lab scene in which:
