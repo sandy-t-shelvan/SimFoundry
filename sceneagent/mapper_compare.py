@@ -39,7 +39,9 @@ import numpy as np
 
 from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE
 
-COLMAP4 = "/opt/colmap-4.1.1/bin/colmap"
+# COLMAP 4.1.1 with CUDA (has global_mapper) on 58301075, inside the nerf env
+# (probe run 42908214934). 59601312 had it at /opt/colmap-4.1.1/bin/colmap.
+COLMAP4 = "/root/.local/share/mamba/envs/nerf/bin/colmap"
 FRUITS_FRAMES = "/workspace/sf4-smoke/run/images"
 ITEM = "mapper comparison"
 STEP_TIMEOUT_S = 2400
