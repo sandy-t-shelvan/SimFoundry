@@ -50,7 +50,9 @@ REQUIRED = ("benchmark scene", "COLMAP camera poses", ITEM)
 # scalars nerfstudio 1.1.5 stores in its own checkpoint (run 42719027002).
 # ns-eval and ns-export therefore start through this launcher, which adds
 # exactly those numpy types to torch's safe list, as torch's error advises.
-# Every other global stays refused.
+# Every other global stays refused. Torch before 2.4 has no safe list and
+# loads full pickles by default (58301075's nerf env is 2.1.2, run 42909583876),
+# so there the launcher only starts the script.
 SAFE_LOAD = """\
 import sys
 from importlib import import_module
@@ -58,10 +60,11 @@ from importlib import import_module
 import numpy
 import torch
 
-torch.serialization.add_safe_globals(
-    [numpy.core.multiarray.scalar, numpy.dtype]
-    + [type(numpy.dtype(code)) for code in "?bBhHiIlLqQefdg"]
-)
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals(
+        [numpy.core.multiarray.scalar, numpy.dtype]
+        + [type(numpy.dtype(code)) for code in "?bBhHiIlLqQefdg"]
+    )
 module = {"ns-eval": "nerfstudio.scripts.eval", "ns-export": "nerfstudio.scripts.exporter"}
 sys.argv = sys.argv[1:]
 import_module(module[sys.argv[0]]).entrypoint()
