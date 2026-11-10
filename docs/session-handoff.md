@@ -15,11 +15,12 @@ box. The plan is [`cut2-plan.md`](cut2-plan.md). Updated 2026-11-10 (after PRs #
 
 ## Living docs: update these as the work goes
 
-Sandeep asked (2026-11-10) that three documents follow every result, not only the cut plans:
+Sandeep asked (2026-11-10) that these follow every result, not only the cut plans:
 
 1. [`docs/expansion-and-harvard-results.md`](expansion-and-harvard-results.md), the plan of record: the "Cut 2 board" and "Next cuts" under Status.
 2. [`docs/canvases/sceneagent-paper-gaps.canvas.tsx`](canvases/sceneagent-paper-gaps.canvas.tsx): the dated callout and each row's `ticket` field. A status word moves only when its Jira ticket is Accepted (comment 10222).
 3. The paper-map artifact, [SceneAgent Paper Map](https://claude.ai/artifact/4mKRLY3RvCZ2LYuntQfiBx): the "Our code" and "To build" lines per block and the status line under the title.
+4. Jira (project KAN): edit the tickets themselves as work lands, not only comments. That covers status (In Progress, In Review; Done stays with QA and PM), done criteria marked met or not met with proof links, and descriptions corrected when scope or box changes. The road to the MVP is epics KAN-33 (Cut 3), KAN-34 (Cut 4) and KAN-35 (Cut 5, MVP), with SF-30 to SF-46 as KAN-36 to KAN-52.
 
 ## The GPU box: 59601312
 
