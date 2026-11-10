@@ -7,12 +7,12 @@ prompt-to-object filtering (a SimFoundry addition, KAN-4 comment 10304). Every
 one of the 13 views is masked: the paper's every-10th stride is for video and
 would leave two of them.
 
-SAM is the paper's vit_h (plan decision 3). On instance 59601312 the box's
-``groundingdino`` env already has GroundingDINO, ``segment_anything`` and
-torch, and ``/root/SimFoundry/checkpoints`` already holds both checkpoints;
-that env runs :mod:`sceneagent.mask_worker`. The vit_h file is checked against
-its published SHA-256 before use. Only when a file is missing does this module
-download it (and install ``segment-anything`` into its own target directory).
+SAM is the paper's vit_h (plan decision 3). On instance 58301075 the box's
+``gsam2`` env has GroundingDINO and torch, and runs
+:mod:`sceneagent.mask_worker`; ``/workspace/models/sam`` holds vit_h. The vit_h
+file is checked against its published SHA-256 before use. Only when a file is
+missing does this module download it, and ``segment-anything`` is installed
+into its own target directory when the env lacks it.
 
     python -m sceneagent.bin_masks --out /workspace/sf4-smoke/bin
 """
@@ -40,15 +40,18 @@ from sceneagent.mask_filter import (
     TEXT_THRESHOLD,
 )
 
-# The groundingdino env on 59601312 (probe run 42714221807): GroundingDINO 0.1.0
-# from the box's SimFoundry checkout, segment_anything 1.0, torch 2.5.1+cu124.
-MASK_PYTHON = "/root/miniforge3/envs/groundingdino/bin/python3"
-GDINO_ROOT = "/root/SimFoundry/deps/GroundingDINO"
+# The gsam2 env on 58301075 (probe run 42908214934): GroundingDINO 0.1.0 from
+# Grounded-SAM-2, torch 2.14.1+cu130.
+MASK_PYTHON = "/root/.local/share/mamba/envs/gsam2/bin/python3"
+# Grounded-SAM-2's GroundingDINO imports itself as ``grounding_dino.*``, so its
+# checkout root goes on the worker's path (masks run of 2026-11-09 on this box:
+# "No module named 'grounding_dino'").
+GSAM_ROOT = "/root/SceneagentX/third_party/Grounded-SAM-2"
+GDINO_ROOT = f"{GSAM_ROOT}/grounding_dino"
 GDINO_CONFIG = f"{GDINO_ROOT}/groundingdino/config/GroundingDINO_SwinT_OGC.py"
-CHECKPOINTS = "/root/SimFoundry/checkpoints"
-GDINO_WEIGHTS = f"{CHECKPOINTS}/groundingdino_swint_ogc.pth"
+GDINO_WEIGHTS = f"{GSAM_ROOT}/gdino_checkpoints/groundingdino_swint_ogc.pth"
 SAM_URL = "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
-SAM_WEIGHTS = f"{CHECKPOINTS}/sam_vit_h_4b8939.pth"
+SAM_WEIGHTS = "/workspace/models/sam/sam_vit_h_4b8939.pth"
 # Published SHA-256 of sam_vit_h_4b8939.pth. The "4b8939" in the name is an MD5
 # prefix, not a SHA-256 one (masks run 42695882028 read a7bf3b02f3eb...).
 SAM_SHA256 = "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e"
@@ -132,10 +135,13 @@ def worker_command(images: Path, masks: Path) -> list[str]:
 
 
 def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
-    """This repo and the segment-anything target dir; not the sa env's py7zr deps."""
+    """This repo, Grounded-SAM-2's root and the segment-anything target dir.
+
+    Not the sa env's py7zr deps.
+    """
     env = dict(os.environ if base is None else base)
     repo = str(Path(__file__).resolve().parent.parent)
-    env["PYTHONPATH"] = os.pathsep.join([repo, MASK_PYDEPS])
+    env["PYTHONPATH"] = os.pathsep.join([repo, GSAM_ROOT, MASK_PYDEPS])
     return env
 
 

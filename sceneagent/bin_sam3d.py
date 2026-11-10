@@ -28,12 +28,13 @@ from typing import Any
 
 from sceneagent.bin_run import SCENE, SOURCE
 
-# The sam3d-objects env and checkout on 59601312 (probe run 42759520898):
-# sam3d_objects 0.0.1 editable from /root/software/sam-3d-objects, pytorch3d
-# 0.7.8, kaolin 0.17.0, moge 1.0.0. The checkout is read, never written.
-SAM3D_ENV = "/root/miniforge3/envs/sam3d-objects"
+# The sam3d10 env and checkout on 58301075 (probe run 42908974589):
+# sam3d_objects 0.0.1 editable from /root/sam-3d-objects, pytorch3d 0.7.8,
+# kaolin 0.17.0, moge 1.0.0. The box's other env, sam3d, has no pytorch3d.
+# The checkout is read, never written.
+SAM3D_ENV = "/opt/conda/envs/sam3d10"
 SAM3D_PYTHON = f"{SAM3D_ENV}/bin/python3"
-SAM3D_ROOT = "/root/software/sam-3d-objects"
+SAM3D_ROOT = "/root/sam-3d-objects"
 # Where setup.md's download leaves pipeline.yaml (checkpoints/hf), where an
 # unfinished move leaves it, and the Hugging Face cache. First match wins.
 CONFIG_CANDIDATES = (

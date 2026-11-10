@@ -130,7 +130,7 @@ def test_a_view_of_the_wrong_size_is_refused_before_colmap(tmp_path):
 
 
 def test_stray_frames_and_old_colmap_state_never_reach_colmap(tmp_path):
-    # Splat run 42741443604 on 59601312 posed 313 images: run4's 300 Fruits
+    # Splat run 42741443604 on 58301075 posed 313 images: run4's 300 Fruits
     # frames were still in the shared images dir beside the 13 bin views.
     run = tmp_path / "run"
     (run / "images").mkdir(parents=True)
@@ -191,11 +191,11 @@ def test_bin_manifest_requires_its_own_ledger_items(tmp_path):
     (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
     command = build_remote_command(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
     passed = collect_artifact_manifest(
-        run, command=command, instance_id=59601312, pipeline="bin"
+        run, command=command, instance_id=58301075, pipeline="bin"
     )
     assert passed["passed"] is True
     assert passed["video"] == "GraspClutter6D 000091"
-    as_video = collect_artifact_manifest(run, command=command, instance_id=59601312)
+    as_video = collect_artifact_manifest(run, command=command, instance_id=58301075)
     assert as_video["passed"] is False
 
 
@@ -213,14 +213,14 @@ def test_bin_manifest_ignores_other_pipelines_entries_in_the_shared_ledger(tmp_p
     (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
     command = build_remote_command(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
     manifest = collect_artifact_manifest(
-        run, command=command, instance_id=59601312, pipeline="bin"
+        run, command=command, instance_id=58301075, pipeline="bin"
     )
     assert manifest["passed"] is True
     assert [s["item"] for s in manifest["stages"]][-1] == "full-scene splat"
     entries[1]["decision"] = "reject"
     (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
     manifest = collect_artifact_manifest(
-        run, command=command, instance_id=59601312, pipeline="bin"
+        run, command=command, instance_id=58301075, pipeline="bin"
     )
     assert manifest["passed"] is False
 
