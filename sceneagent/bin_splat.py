@@ -25,6 +25,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -44,6 +45,27 @@ MAX_NUM_ITERATIONS = 30000
 STEP_TIMEOUT_S = {"process-data": 900, "train": 3600, "eval": 900, "export": 900}
 SPLAT_DIRNAME = "splat"
 ITEM = "full-scene splat"
+REQUIRED = ("benchmark scene", "COLMAP camera poses", ITEM)
+# torch >= 2.6 loads checkpoints with weights_only=True and refuses the numpy
+# scalars nerfstudio 1.1.5 stores in its own checkpoint (run 42719027002).
+# ns-eval and ns-export therefore start through this launcher, which adds
+# exactly those numpy types to torch's safe list, as torch's error advises.
+# Every other global stays refused.
+SAFE_LOAD = """\
+import sys
+from importlib import import_module
+
+import numpy
+import torch
+
+torch.serialization.add_safe_globals(
+    [numpy.core.multiarray.scalar, numpy.dtype]
+    + [type(numpy.dtype(code)) for code in "?bBhHiIlLqQefdg"]
+)
+module = {"ns-eval": "nerfstudio.scripts.eval", "ns-export": "nerfstudio.scripts.exporter"}
+sys.argv = sys.argv[1:]
+import_module(module[sys.argv[0]]).entrypoint()
+"""
 
 Runner = Callable[..., Any]
 
@@ -118,6 +140,11 @@ def splat_commands(out: Path, model: Path) -> list[tuple[str, list[str]]]:
     ]
 
 
+def checkpoint_tool(tool: str, args: list[str]) -> list[str]:
+    """``ns-eval`` or ``ns-export`` through :data:`SAFE_LOAD` in the nerfstudio env."""
+    return [f"{NS_BIN}/python", "-c", SAFE_LOAD, tool, *args]
+
+
 def ply_vertex_count(path: Path) -> int:
     """``element vertex N`` from a PLY header; 0 when absent or unreadable."""
     try:
@@ -172,17 +199,11 @@ def heldout_eval(
     """
     raw = report.with_name(".ns_eval_raw.json")
     raw.unlink(missing_ok=True)
-    argv = [
-        "ns-eval",
-        "--load-config",
-        str(config.resolve()),
-        "--output-path",
-        str(raw),
-    ]
-    record = _run_step("eval", argv, cwd, env, runner)
+    args = ["--load-config", str(config.resolve()), "--output-path", str(raw)]
+    record = _run_step("eval", checkpoint_tool("ns-eval", args), cwd, env, runner)
     payload: dict[str, Any] = {
         "ok": False,
-        "argv": argv,
+        "argv": ["ns-eval", *args],
         "returncode": record["returncode"],
         "psnr": None,
         "ssim": None,
@@ -241,20 +262,12 @@ def train_splat(
         return evidence
     evidence["ns_eval"] = heldout_eval(config, out / "ns_eval.json", splat, env, runner)
     export = splat / "export"
-    record = _run_step(
-        "export",
-        [
-            "ns-export",
-            "gaussian-splat",
-            "--load-config",
-            str(config.resolve()),
-            "--output-dir",
-            str(export.resolve()),
-        ],
-        splat,
-        env,
-        runner,
-    )
+    # ns-export can exit 0 without writing a splat (pipeline A's note), so a
+    # PLY left by an earlier run must not be counted as this run's.
+    shutil.rmtree(export, ignore_errors=True)
+    args = ["gaussian-splat", "--load-config", str(config.resolve())]
+    args += ["--output-dir", str(export.resolve())]
+    record = _run_step("export", checkpoint_tool("ns-export", args), splat, env, runner)
     evidence["steps"].append(record)
     plys = sorted(export.glob("*.ply"))
     evidence["ply"] = str(plys[0]) if plys else None
@@ -315,8 +328,10 @@ def run_bin_splat(
     (out / "splat_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
-    passed = all(e.get("decision") == "accept" for e in entries) and len(entries) == 3
-    return 0 if passed else 1
+    # The ledger is shared with other bin pipelines (masks); only this run's
+    # own items decide its result.
+    decisions = {e.get("item"): e.get("decision") for e in entries}
+    return 0 if all(decisions.get(item) == "accept" for item in REQUIRED) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
