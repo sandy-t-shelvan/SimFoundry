@@ -136,6 +136,8 @@ BIN_PIPELINES = frozenset({"bin", "splat", "masks", "association"})
 def remote_out(pipeline: str) -> str:
     """The run dir on the box: the bin pipelines' own, else run4's."""
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
+
+
 # Read-only host inventory for a new or changed box. Plain shell, so it runs
 # before any SceneAgent environment exists. It never prints the environment
 # (no env/printenv), so no secret can land in the report.
