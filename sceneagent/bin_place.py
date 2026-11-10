@@ -11,8 +11,10 @@ the flip to OpenCV's camera, the DA3 metres per splat unit
 (``association_evidence.json``), the view's COLMAP pose and the nerfstudio
 dataparser transform, giving one similarity from mesh to splat. The GLB's
 axes relative to that pose's local frame are not documented, so three
-frame fixes (none, and a quarter turn about x either way) are tried, plus
-the plain quarter-turn seeds with no pose; the lowest two-way distance
+frame fixes (none, and a quarter turn about x either way) are tried under
+both camera conventions (``CAMERA_FLIPS``), plus
+quarter-turn seeds at SAM 3D's size; every fit's scale stays within
+``SCALE_BOUND`` of SAM 3D's own; the lowest two-way distance
 (:func:`fit_score`) wins and is recorded, with each pose start's score
 before and after ICP. The silhouette is the mean Jaccard index of each object mask
 and the placed mesh's samples projected into that view, dilated by
@@ -79,6 +81,14 @@ REFERENCE_IMAGE = 1
 GATE = "ours_iteration_1"
 # PyTorch3D camera (+x left, +y up, +z forward) to OpenCV (+x right, +y down).
 P3D_TO_OPENCV = np.diag([-1.0, -1.0, 1.0])
+# Which camera convention the SAM 3D pose is in is not documented either: the
+# pipeline's names say PyTorch3D, but the second bin place run (42761784197)
+# started every object 1.4-5 splat units from its Gaussians with that flip,
+# the size of a mirror image across the view centre. Both are tried.
+CAMERA_FLIPS = {"p3d": P3D_TO_OPENCV, "opencv": np.eye(3)}
+# A fit's scale stays within this factor of SAM 3D's own scale. Ours: the
+# Gaussian sets carry stray points, and unbounded fits grew to 1.5 m there.
+SCALE_BOUND = 2.0
 FRAME_FIXES = {
     "none": np.eye(3),
     "x+90": np.array([[1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]]),
@@ -114,6 +124,7 @@ def pose_to_splat(
     dataparser_scale: float,
     metres_per_unit: float,
     frame_fix: np.ndarray,
+    camera_flip: np.ndarray = P3D_TO_OPENCV,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """The similarity (s, R, t) from GLB coordinates to the splat frame.
 
@@ -128,11 +139,9 @@ def pose_to_splat(
     t_c = np.asarray(image["tvec"], dtype=float)
     t_r, t_t = transform[:, :3], transform[:, 3]
     k = dataparser_scale * metres_per_unit
-    rotation = t_r @ r_c.T @ P3D_TO_OPENCV @ r_q @ frame_fix
+    rotation = t_r @ r_c.T @ camera_flip @ r_q @ frame_fix
     scale = s / metres_per_unit
-    translation = dataparser_scale * (
-        t_r @ r_c.T @ (P3D_TO_OPENCV @ t_q / k - t_c) + t_t
-    )
+    translation = dataparser_scale * (t_r @ r_c.T @ (camera_flip @ t_q / k - t_c) + t_t)
     return scale, rotation, translation
 
 
@@ -157,6 +166,7 @@ def observed_icp(
     start: tuple[float, np.ndarray, np.ndarray],
     iterations: int = 30,
     keep: float = TRIM_KEEP,
+    scale_range: tuple[float, float] | None = None,
 ) -> tuple[float, np.ndarray, np.ndarray]:
     """Trimmed similarity ICP that pairs each observed point with the mesh.
 
@@ -175,7 +185,14 @@ def observed_icp(
         moved = apply_similarity(source, scale, rotation, translation)
         distance, index = _nearest_to(target, moved)
         chosen = np.argsort(distance)[:count]
-        scale, rotation, translation = umeyama(source[index[chosen]], target[chosen])
+        paired, observed = source[index[chosen]], target[chosen]
+        scale, rotation, translation = umeyama(paired, observed)
+        if scale_range is not None and not scale_range[0] <= scale <= scale_range[1]:
+            # Hold the scale at the bound and refit the translation for it.
+            scale = float(np.clip(scale, *scale_range))
+            translation = observed.mean(axis=0) - scale * (
+                rotation @ paired.mean(axis=0)
+            )
     return float(scale), rotation, translation
 
 
@@ -224,10 +241,11 @@ def residual_input(
 
 
 def seed_starts(
-    source: np.ndarray, target: np.ndarray
+    source: np.ndarray, target: np.ndarray, scale: float | None = None
 ) -> dict[str, tuple[float, np.ndarray, np.ndarray]]:
-    """The pose-free quarter-turn seeds, centred on the target at its RMS size."""
-    scale, _, _ = initial_similarity(source, target)
+    """Quarter-turn seeds centred on the target, at ``scale`` or the RMS size ratio."""
+    if scale is None:
+        scale, _, _ = initial_similarity(source, target)
     starts = {}
     for k, rotation in enumerate(rotation_seeds()):
         translation = target.mean(axis=0) - scale * (rotation @ source.mean(axis=0))
@@ -239,17 +257,23 @@ def best_icp(
     source: np.ndarray,
     target: np.ndarray,
     starts: dict[str, tuple[float, np.ndarray, np.ndarray]],
+    prior_scale: float | None = None,
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
     """ICP from each pose start and each seed; keep the lowest two-way score.
 
-    Returns the winning start's name, the residual input for
-    ``measure_residuals`` and, per pose start, its score before and after ICP.
+    With ``prior_scale`` (SAM 3D's own size in splat units) the seeds start
+    at that size and every fit stays within ``SCALE_BOUND`` of it. Returns
+    the winning start's name, the residual input for ``measure_residuals``
+    and, per pose start, its score before and after ICP.
     """
+    bounds = None
+    if prior_scale is not None:
+        bounds = (prior_scale / SCALE_BOUND, prior_scale * SCALE_BOUND)
     tried: dict[str, Any] = {}
     best: tuple[str, tuple[float, np.ndarray, np.ndarray], float] | None = None
-    for name, start in {**starts, **seed_starts(source, target)}.items():
+    for name, start in {**starts, **seed_starts(source, target, prior_scale)}.items():
         try:
-            fitted = observed_icp(source, target, start)
+            fitted = observed_icp(source, target, start, scale_range=bounds)
         except ValueError:  # every pair on one mesh point: Umeyama has no spread
             continue
         score = fit_score(source, target, fitted)
@@ -384,17 +408,20 @@ def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
         target = inputs["positions"][inputs["sets"][f"object_{number}"]]
         source = sample_mesh(glb, ICP_SOURCE_POINTS)
         starts = {
-            f"sam3d_pose/{fix}": pose_to_splat(
+            f"sam3d_pose/{camera}/{fix}": pose_to_splat(
                 obj["pose"],
                 images[obj["view"]],
                 transform,
                 dp_scale,
                 m_per_unit,
                 matrix,
+                flip,
             )
+            for camera, flip in CAMERA_FLIPS.items()
             for fix, matrix in FRAME_FIXES.items()
         }
-        start_name, result, tried = best_icp(source, target, starts)
+        prior = next(iter(starts.values()))[0]
+        start_name, result, tried = best_icp(source, target, starts, prior)
         dense = sample_mesh(glb, POINTS_PER_OBJECT, seed=1)
         cloud = apply_similarity(
             dense, result["scale"], result["rotation"], result["translation"]
@@ -426,7 +453,7 @@ def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
             placed=True,
             start=start_name,
             starts_tried=tried,
-            pose_scale=round(starts["sam3d_pose/none"][0], 5),
+            pose_scale=round(prior, 5),
             scale=result["scale"],
             residuals={
                 k: residuals[k]

@@ -155,3 +155,31 @@ def test_place_is_a_bin_pipeline():
     assert remote_out("place") == REMOTE_BIN_OUT
     assert PIPELINES["place"][0][-2:] == ("ICP residuals", "bin score")
     assert "bin_score.json" in FETCH_NAMES
+
+
+def test_scale_stays_within_the_bound_of_the_prior():
+    # A target with stray points far out pulls an unbounded fit large.
+    rng = np.random.default_rng(19)
+    source = rng.uniform(-0.5, 0.5, size=(1500, 3))
+    target = np.vstack([source, rng.uniform(-6, 6, size=(1500, 3))])
+    start = (1.0, np.eye(3), np.zeros(3))
+    free = bin_place.observed_icp(source, target, start, keep=1.0)
+    held = bin_place.observed_icp(
+        source, target, start, keep=1.0, scale_range=(0.5, 2.0)
+    )
+    assert free[0] > 2.0
+    assert 0.5 <= held[0] <= 2.0
+
+
+def test_the_opencv_convention_skips_the_flip():
+    pose = {
+        "rotation": [1.0, 0, 0, 0],
+        "translation": [0.2, 0.1, 1.0],
+        "scale": [1, 1, 1],
+    }
+    image = {"qvec": [1.0, 0, 0, 0], "tvec": [0.0, 0.0, 0.0]}
+    eye = np.hstack([np.eye(3), np.zeros((3, 1))])
+    args = (pose, image, eye, 1.0, 1.0, np.eye(3))
+    _, _, t_p3d = bin_place.pose_to_splat(*args, bin_place.CAMERA_FLIPS["p3d"])
+    _, _, t_cv = bin_place.pose_to_splat(*args, bin_place.CAMERA_FLIPS["opencv"])
+    assert np.allclose(t_p3d, [-0.2, -0.1, 1.0]) and np.allclose(t_cv, [0.2, 0.1, 1.0])
