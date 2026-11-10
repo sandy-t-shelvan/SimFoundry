@@ -266,7 +266,7 @@ def test_checkpoint_tools_allow_only_numpy_types_through_torch_load():
 
 
 def test_poses_from_other_images_are_not_reused(tmp_path):
-    # The 59601312 bin evidence of run 42741443604: 313 inputs, 300 registered.
+    # The 58301075 bin evidence of run 42741443604: 313 inputs, 300 registered.
     _passing_bin(tmp_path)
     evidence = json.loads((tmp_path / "bin_evidence.json").read_text())
     evidence["quality_bar"]["inputs"] = 313

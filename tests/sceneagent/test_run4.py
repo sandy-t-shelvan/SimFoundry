@@ -535,7 +535,7 @@ def test_remote_run4_command_keeps_the_pinned_interpreter(tmp_path):
             commit_sha="nope",
         )
     code = run_smoke(
-        59601312,
+        58301075,
         tmp_path,
         tmp_path / "artifacts",
         "",
