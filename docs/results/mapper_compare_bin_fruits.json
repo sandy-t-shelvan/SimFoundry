@@ -1,0 +1,199 @@
+{
+  "colmap": "/opt/colmap-4.1.1/bin/colmap",
+  "variants": [
+    {
+      "dataset": "bin",
+      "matcher": "exhaustive_matcher",
+      "mapper": "mapper",
+      "steps": [
+        {
+          "step": "exhaustive_matcher",
+          "returncode": 0,
+          "seconds": 0.9,
+          "tail": [
+            "I20261110 05:45:07.374936 19135 pairing.cc:180] Generating exhaustive image pairs...",
+            "I20261110 05:45:07.375042 19135 pairing.cc:213] Processing block [1/1, 1/1]",
+            "I20261110 05:45:07.559770 19135 feature_matching.cc:217] in 0.185s",
+            "I20261110 05:45:07.559851 19135 timer.cc:90] Elapsed time: 0.007 [minutes]"
+          ]
+        },
+        {
+          "step": "mapper",
+          "returncode": 0,
+          "seconds": 8.8,
+          "tail": [
+            "I20261110 05:45:15.230990 19268 incremental_pipeline.cc:79] Retriangulation and Global bundle adjustment",
+            "I20261110 05:45:16.277981 19268 incremental_pipeline.cc:79] Retriangulation and Global bundle adjustment",
+            "I20261110 05:45:16.449121 19268 incremental_pipeline.cc:723] Keeping successful reconstruction",
+            "I20261110 05:45:16.465233 19268 timer.cc:90] Elapsed time: 0.141 [minutes]"
+          ]
+        }
+      ],
+      "map_seconds": 8.8,
+      "models": 1,
+      "registered": 13,
+      "points": 6411,
+      "mean_obs_per_image": 2359.230769230769,
+      "mean_reproj_err_px": 0.48865242184195573,
+      "pose_accuracy": {
+        "cameras": 13,
+        "camera_rms_m": 0.0035409534244069305,
+        "camera_max_m": 0.010423293366883907
+      }
+    },
+    {
+      "dataset": "bin",
+      "matcher": "exhaustive_matcher",
+      "mapper": "global_mapper",
+      "steps": [
+        {
+          "step": "global_mapper",
+          "returncode": 0,
+          "seconds": 36.0,
+          "tail": [
+            "I20261110 05:45:52.813982 20168 global_mapper.cc:552] Iterative retriangulation and refinement done in 13.8126 seconds",
+            "I20261110 05:45:52.815624 20168 global_pipeline.cc:110] Reconstruction done in 35.3966 seconds",
+            "I20261110 05:45:52.818040 20168 global_pipeline.cc:122] Extracting colors ...",
+            "W20261110 05:45:52.960551 20168 global_pipeline.cc:57] Less than 50% of cameras have prior focal lengths. The global mapper depends on reasonably good focal length priors to perform well. Consider running 'colmap view_graph_calibrator' before 'colmap global_mapper' or providing camera calibrations manually."
+          ]
+        }
+      ],
+      "map_seconds": 36.0,
+      "models": 1,
+      "registered": 13,
+      "points": 6305,
+      "mean_obs_per_image": 2334.846153846154,
+      "mean_reproj_err_px": 0.4837206201991253,
+      "pose_accuracy": {
+        "cameras": 13,
+        "camera_rms_m": 0.0035488408714806127,
+        "camera_max_m": 0.010451150827696381
+      }
+    },
+    {
+      "dataset": "fruits",
+      "matcher": "sequential_matcher",
+      "mapper": "mapper",
+      "steps": [
+        {
+          "step": "sequential_matcher",
+          "returncode": 0,
+          "seconds": 3.1,
+          "tail": [
+            "I20261110 05:45:56.378345 22344 feature_matching.cc:217] in 0.004s",
+            "I20261110 05:45:56.378391 22344 pairing.cc:485] Processing image [300/300]",
+            "I20261110 05:45:56.378417 22344 feature_matching.cc:217] in 0.000s",
+            "I20261110 05:45:56.378445 22344 timer.cc:90] Elapsed time: 0.042 [minutes]"
+          ]
+        },
+        {
+          "step": "mapper",
+          "returncode": 0,
+          "seconds": 1946.9,
+          "tail": [
+            "W20261110 06:18:01.902030 22477 levenberg_marquardt_strategy.cc:123] Linear solver failure. Failed to compute a step: CHOLMOD warning: Matrix not positive definite.",
+            "W20261110 06:18:02.639333 22477 levenberg_marquardt_strategy.cc:123] Linear solver failure. Failed to compute a step: CHOLMOD warning: Matrix not positive definite.",
+            "I20261110 06:18:23.259065 22477 incremental_pipeline.cc:723] Keeping successful reconstruction",
+            "I20261110 06:18:23.349134 22477 timer.cc:90] Elapsed time: 32.441 [minutes]"
+          ]
+        }
+      ],
+      "map_seconds": 1946.9,
+      "models": 2,
+      "registered": 300,
+      "points": 15785,
+      "mean_obs_per_image": 355.1933333333333,
+      "mean_reproj_err_px": 1.068077861559417
+    },
+    {
+      "dataset": "fruits",
+      "matcher": "sequential_matcher",
+      "mapper": "global_mapper",
+      "steps": [
+        {
+          "step": "global_mapper",
+          "returncode": 0,
+          "seconds": 547.6,
+          "tail": [
+            "I20261110 06:27:31.929334 33740 global_mapper.cc:552] Iterative retriangulation and refinement done in 169.54 seconds",
+            "I20261110 06:27:31.933224 33740 global_pipeline.cc:110] Reconstruction done in 545.381 seconds",
+            "I20261110 06:27:31.946125 33740 global_pipeline.cc:122] Extracting colors ...",
+            "W20261110 06:27:32.308830 33740 global_pipeline.cc:57] Less than 50% of cameras have prior focal lengths. The global mapper depends on reasonably good focal length priors to perform well. Consider running 'colmap view_graph_calibrator' before 'colmap global_mapper' or providing camera calibrations manually."
+          ]
+        }
+      ],
+      "map_seconds": 547.6,
+      "models": 1,
+      "registered": 300,
+      "points": 11232,
+      "mean_obs_per_image": 328.55333333333334,
+      "mean_reproj_err_px": 1.0564981069421213
+    },
+    {
+      "dataset": "fruits",
+      "matcher": "exhaustive_matcher",
+      "mapper": "global_mapper",
+      "steps": [
+        {
+          "step": "exhaustive_matcher",
+          "returncode": 0,
+          "seconds": 25.4,
+          "tail": [
+            "I20261110 06:27:58.672973 35979 feature_matching.cc:217] in 0.598s",
+            "I20261110 06:27:58.673091 35979 pairing.cc:213] Processing block [6/6, 6/6]",
+            "I20261110 06:27:59.085672 35979 feature_matching.cc:217] in 0.413s",
+            "I20261110 06:27:59.085767 35979 timer.cc:90] Elapsed time: 0.414 [minutes]"
+          ]
+        },
+        {
+          "step": "global_mapper",
+          "returncode": 0,
+          "seconds": 458.2,
+          "tail": [
+            "I20261110 06:35:36.738216 36112 global_mapper.cc:552] Iterative retriangulation and refinement done in 195.662 seconds",
+            "I20261110 06:35:36.753181 36112 global_pipeline.cc:110] Reconstruction done in 446.221 seconds",
+            "I20261110 06:35:36.770677 36112 global_pipeline.cc:122] Extracting colors ...",
+            "W20261110 06:35:37.171942 36112 global_pipeline.cc:57] Less than 50% of cameras have prior focal lengths. The global mapper depends on reasonably good focal length priors to perform well. Consider running 'colmap view_graph_calibrator' before 'colmap global_mapper' or providing camera calibrations manually."
+          ]
+        }
+      ],
+      "map_seconds": 458.2,
+      "models": 1,
+      "registered": 300,
+      "points": 18308,
+      "mean_obs_per_image": 569.5733333333334,
+      "mean_reproj_err_px": 1.1498220201978604
+    }
+  ],
+  "inputs": {
+    "bin": 13,
+    "fruits": 300
+  },
+  "bin_extract": {
+    "step": "feature_extractor",
+    "returncode": 0,
+    "seconds": 1.9,
+    "tail": [
+      "I20261110 05:45:01.046912 18731 feature_extraction.cc:285]   Camera:          #1 - SIMPLE_RADIAL",
+      "I20261110 05:45:01.046937 18731 feature_extraction.cc:289]   Focal Length:    2304.00px",
+      "I20261110 05:45:01.046964 18731 feature_extraction.cc:294]   Features:        8636 (SIFT)",
+      "I20261110 05:45:01.089159 18601 timer.cc:90] Elapsed time: 0.022 [minutes]"
+    ]
+  },
+  "fruits_extract": {
+    "step": "feature_extractor",
+    "returncode": 0,
+    "seconds": 5.5,
+    "tail": [
+      "I20261110 05:45:06.609930 18998 feature_extraction.cc:285]   Camera:          #1 - SIMPLE_RADIAL",
+      "I20261110 05:45:06.609941 18998 feature_extraction.cc:289]   Focal Length:    1536.00px",
+      "I20261110 05:45:06.609956 18998 feature_extraction.cc:294]   Features:        1840 (SIFT)",
+      "I20261110 05:45:06.632661 18868 timer.cc:90] Elapsed time: 0.084 [minutes]"
+    ]
+  },
+  "run": {
+    "gpu_smoke_run": 42764025739,
+    "commit": "c79cd42",
+    "instance": 59601312
+  }
+}
