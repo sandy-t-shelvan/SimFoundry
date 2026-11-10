@@ -57,7 +57,13 @@ from sceneagent.association import (
 from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS
 
 ITEM = "Gaussian association"
-REQUIRED = ("benchmark scene", "COLMAP camera poses", "full-scene splat", "SAM masks", ITEM)
+REQUIRED = (
+    "benchmark scene",
+    "COLMAP camera poses",
+    "full-scene splat",
+    "SAM masks",
+    ITEM,
+)
 GT_OBJECTS = 20
 EXTENT_PERCENTILES = (5.0, 95.0)
 EXTENT_RULE = (
@@ -176,7 +182,9 @@ def qvec_to_rotation(qvec: list[float]) -> np.ndarray:
     )
 
 
-def splat_to_colmap(points: np.ndarray, transform: np.ndarray, scale: float) -> np.ndarray:
+def splat_to_colmap(
+    points: np.ndarray, transform: np.ndarray, scale: float
+) -> np.ndarray:
     """Invert ``p = scale * (T @ [x; 1])`` for N x 3 splat-frame points."""
     transform = np.asarray(transform, dtype=float)
     rotation, translation = transform[:, :3], transform[:, 3]
@@ -312,7 +320,9 @@ def camera_centers_colmap(images: dict[str, dict[str, Any]]) -> dict[str, np.nda
     }
 
 
-def camera_centers_metric(scene_gt: dict[str, Any], names: list[str]) -> dict[str, np.ndarray]:
+def camera_centers_metric(
+    scene_gt: dict[str, Any], names: list[str]
+) -> dict[str, np.ndarray]:
     """Metric camera centers in the frame of one object seen in every view.
 
     ``scene_gt.json`` gives each object's model-to-camera pose in mm, so
@@ -359,7 +369,9 @@ def _latest_dataparser_transforms(splat_dir: Path) -> Path | None:
 
 def associate(out: Path, data: Path) -> dict[str, Any]:
     """Run equation (1) on every view and group the masks. Raises on missing inputs."""
-    bar = json.loads((out / "bin_evidence.json").read_text(encoding="utf-8"))["quality_bar"]
+    bar = json.loads((out / "bin_evidence.json").read_text(encoding="utf-8"))[
+        "quality_bar"
+    ]
     model = out / "sparse" / str(bar["model"])
     cameras = read_cameras_bin(model / "cameras.bin")
     images = read_images_bin(model / "images.bin")
@@ -369,10 +381,15 @@ def associate(out: Path, data: Path) -> dict[str, Any]:
     if transforms_path is None:
         raise ValueError("no dataparser_transforms.json under splat/outputs")
     frame = json.loads(transforms_path.read_text(encoding="utf-8"))
-    transform, scale = np.asarray(frame["transform"], dtype=float), float(frame["scale"])
+    transform, scale = (
+        np.asarray(frame["transform"], dtype=float),
+        float(frame["scale"]),
+    )
     positions = read_ply_xyz(ply)
     world = splat_to_colmap(positions, transform, scale)
-    detections = json.loads((out / "masks" / "detections.json").read_text(encoding="utf-8"))
+    detections = json.loads(
+        (out / "masks" / "detections.json").read_text(encoding="utf-8")
+    )
 
     masks: list[dict[str, Any]] = []
     views: dict[str, Any] = {}
@@ -426,7 +443,7 @@ def associate(out: Path, data: Path) -> dict[str, Any]:
         metric = {}
     m_per_unit = metres_per_unit(camera_centers_colmap(images), metric, scale)
     return {
-        "positions": int(len(positions)),
+        "positions": len(positions),
         "ply": str(ply),
         "colmap_model": str(model),
         "dataparser_transforms": str(transforms_path),
@@ -452,7 +469,11 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "scene": SCENE,
         "rule": {
-            "equation_1": {"eps_a": EPS_A, "eps_r": EPS_R, "cell": "min(16, round(short_side/192))"},
+            "equation_1": {
+                "eps_a": EPS_A,
+                "eps_r": EPS_R,
+                "cell": "min(16, round(short_side/192))",
+            },
             "grouping": {
                 "centroid": f"<= min({CENTROID_ABS}, {CENTROID_EXTENT_SCALE} e)",
                 "containment_min": CONTAINMENT_MIN,
@@ -465,7 +486,13 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
         },
         "inputs": {
             k: result[k]
-            for k in ("ply", "colmap_model", "dataparser_transforms", "positions", "scale")
+            for k in (
+                "ply",
+                "colmap_model",
+                "dataparser_transforms",
+                "positions",
+                "scale",
+            )
         },
         "metres_per_unit": m,
         "eps_a_m": None if m is None else round(EPS_A * m, 4),
@@ -485,7 +512,11 @@ def write_sets(path: Path, result: dict[str, Any]) -> None:
     """Per-object Gaussian indices for phase 4 (``object_<n>`` int32 arrays)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
-        path, **{f"object_{o['object']}": o["ids"].astype(np.int32) for o in result["objects"]}
+        path,
+        **{
+            f"object_{o['object']}": o["ids"].astype(np.int32)
+            for o in result["objects"]
+        },
     )
 
 
