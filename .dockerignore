@@ -1,0 +1,27 @@
+# Keep the build context to the repo's own code and small data.
+.git
+deps
+Data
+data
+assets
+cache
+.cache
+checkpoints
+reports
+results
+runs
+exps
+pulled
+**/__pycache__
+**/*.pyc
+*.log
+.ruff_cache
+.mypy_cache
+.pytest_cache
+*.egg-info
+# Never ship credentials into an image.
+api_keys.txt
+GEMINI_API_KEY.txt
+.env
+.env.*
+tools/*instance*.json
