@@ -12,8 +12,9 @@ the flip to OpenCV's camera, the DA3 metres per splat unit
 dataparser transform, giving one similarity from mesh to splat. The GLB's
 axes relative to that pose's local frame are not documented, so three
 frame fixes (none, and a quarter turn about x either way) are tried under
-both camera conventions (``CAMERA_FLIPS``), plus
-quarter-turn seeds at SAM 3D's size; every fit's scale stays within
+both camera conventions (``CAMERA_FLIPS``), each also moved onto the
+Gaussians' centre (:func:`centred_starts`), plus quarter-turn seeds at
+SAM 3D's size; every fit's scale stays within
 ``SCALE_BOUND`` of SAM 3D's own; the lowest two-way distance
 (:func:`fit_score`) wins and is recorded, with each pose start's score
 before and after ICP. The silhouette is the mean Jaccard index of each object mask
@@ -240,6 +241,30 @@ def residual_input(
     }
 
 
+def centred_starts(
+    pose_starts: dict[str, tuple[float, np.ndarray, np.ndarray]],
+    source: np.ndarray,
+    target: np.ndarray,
+) -> dict[str, tuple[float, np.ndarray, np.ndarray]]:
+    """Each SAM 3D start's rotation and scale, moved onto the Gaussians' centre.
+
+    SAM 3D places the object with its own camera (MoGe depth and estimated
+    intrinsics), which the third bin place run (42762718646) found a median
+    3.7 splat units off; its rotation and size do not depend on that
+    camera's intrinsics. So this start keeps both and takes the
+    translation from the object's own Gaussians. Ours.
+    """
+    centre = target.mean(axis=0)
+    return {
+        name.replace("sam3d_pose/", "sam3d_centred/"): (
+            scale,
+            rotation,
+            centre - scale * (rotation @ source.mean(axis=0)),
+        )
+        for name, (scale, rotation, _) in pose_starts.items()
+    }
+
+
 def seed_starts(
     source: np.ndarray, target: np.ndarray, scale: float | None = None
 ) -> dict[str, tuple[float, np.ndarray, np.ndarray]]:
@@ -420,6 +445,7 @@ def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
             for camera, flip in CAMERA_FLIPS.items()
             for fix, matrix in FRAME_FIXES.items()
         }
+        starts.update(centred_starts(starts, source, target))
         prior = next(iter(starts.values()))[0]
         start_name, result, tried = best_icp(source, target, starts, prior)
         dense = sample_mesh(glb, POINTS_PER_OBJECT, seed=1)
