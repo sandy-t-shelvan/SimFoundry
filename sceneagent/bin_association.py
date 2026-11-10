@@ -20,9 +20,17 @@ folded into ``T``). Centers are taken back to the COLMAP world to project,
 and depths and distances are multiplied by ``scale``. Depths and distances
 are therefore in the splat's units, which are this run's "reconstruction
 units". ``T``'s rotation is orthonormal, so the scale is the only change of
-length. ``metres_per_unit`` is reported from the dataset's metric camera
-centers (``scene_gt.json``), for reading the cuts in metres. It does not
-change them.
+length.
+
+Units. The paper's cuts are in "reconstruction units", and it reports its
+kitchen at 0.90-0.93 m per unit. A splat unit here is about 0.2 m, which
+would make the 0.10-unit centroid gate 2 cm (first bin run: 94 masks, 62
+objects, 288 overlapping pairs kept apart by that gate alone). So the splat
+unit is measured in metres from the views (:mod:`sceneagent.bin_scale`,
+Depth Anything 3 metric depth, RGB only) and every length is converted to
+the paper's 0.915 m unit before the cuts. The constants are unchanged. The
+dataset's metric camera centers (``scene_gt.json``) give a second
+metres-per-unit figure that is reported only, as a check on the first.
 
 ``e`` in ``min(0.10, 0.6 e)`` is not defined in the paper. Here it is the
 longest side of the 5th-95th percentile box of a mask's Gaussian centers,
@@ -37,7 +45,9 @@ from __future__ import annotations
 import argparse
 import json
 import struct
+import subprocess
 import sys
+from collections.abc import Callable
 from itertools import combinations
 from pathlib import Path
 from typing import Any
@@ -56,6 +66,13 @@ from sceneagent.association import (
     masks_same_object,
 )
 from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS
+from sceneagent.bin_scale import (
+    PAPER_METRES_PER_UNIT,
+    SCALE_RULE,
+    cell_ratios,
+    run_depth,
+)
+from sceneagent.bin_scale import summarize as summarize_scale
 
 ITEM = "Gaussian association"
 REQUIRED = (
@@ -373,8 +390,26 @@ def _latest_dataparser_transforms(splat_dir: Path) -> Path | None:
     return found[0] if found else None
 
 
-def associate(out: Path, data: Path) -> dict[str, Any]:
-    """Run equation (1) on every view and group the masks. Raises on missing inputs."""
+def focal_px(camera: dict[str, Any]) -> float:
+    """Mean of fx and fy for the supported COLMAP models."""
+    p = camera["params"]
+    if camera["model"] in ("PINHOLE", "OPENCV"):
+        return (p[0] + p[1]) / 2.0
+    return float(p[0])
+
+
+def associate(
+    out: Path,
+    data: Path,
+    *,
+    depth: Callable[[Path, Path], dict[str, Any]] = run_depth,
+) -> dict[str, Any]:
+    """Measure the unit, run equation (1) on every view and group the masks.
+
+    Lengths are converted to the paper's units (``PAPER_METRES_PER_UNIT``)
+    with the DA3 scale before any cut; the cuts themselves are unchanged.
+    Raises on missing inputs or a failed depth worker.
+    """
     bar = json.loads((out / "bin_evidence.json").read_text(encoding="utf-8"))[
         "quality_bar"
     ]
@@ -397,16 +432,40 @@ def associate(out: Path, data: Path) -> dict[str, Any]:
         (out / "masks" / "detections.json").read_text(encoding="utf-8")
     )
 
+    projected = {}
+    for view in sorted(detections):
+        if view in images:
+            image = images[view]
+            camera = cameras[image["camera_id"]]
+            u, v, z = project(world, image, camera)
+            projected[view] = (u, v, z * scale, camera)
+
+    depth_dir = out / "depth"
+    depth_meta = depth(out / "images", depth_dir)
+    ratios = []
+    for view, (u, v, z_units, camera) in projected.items():
+        stored = np.load(depth_dir / f"{Path(view).stem}.npz")["depth"]
+        size = (camera["width"], camera["height"])
+        ratios.append(cell_ratios(u, v, z_units, stored, size, focal_px(camera)))
+    unit = summarize_scale(ratios)
+    unit.update(
+        model=depth_meta.get("model"),
+        package=depth_meta.get("package"),
+        da3_views=depth_meta.get("views"),
+        rule=SCALE_RULE,
+        paper_metres_per_unit=PAPER_METRES_PER_UNIT,
+    )
+    to_paper = unit["to_paper_units"]
+
     masks: list[dict[str, Any]] = []
     views: dict[str, Any] = {}
     for view in sorted(detections):
-        if view not in images:
+        if view not in projected:
             views[view] = {"registered": False}
             continue
-        image = images[view]
+        u, v, z_units, _ = projected[view]
         stack = np.load(out / "masks" / f"{Path(view).stem}.npz")["masks"]
-        u, v, z = project(world, image, cameras[image["camera_id"]])
-        sets, stats = view_sets(u, v, z * scale, stack)
+        sets, stats = view_sets(u, v, z_units * to_paper, stack)
         kept = [d for d in detections[view] if d.get("kept")]
         for det in kept:
             ids = sets[det["mask_index"]]
@@ -423,7 +482,7 @@ def associate(out: Path, data: Path) -> dict[str, Any]:
         stats["kept_per_mask"] = [int(sets[d["mask_index"]].size) for d in kept]
         views[view] = stats
 
-    components, pairs = group_masks(masks, positions)
+    components, pairs = group_masks(masks, positions * to_paper)
     objects = []
     for number, members in enumerate(components):
         union = np.unique(np.concatenate([masks[i]["gaussians"] for i in members]))
@@ -454,7 +513,8 @@ def associate(out: Path, data: Path) -> dict[str, Any]:
         "colmap_model": str(model),
         "dataparser_transforms": str(transforms_path),
         "scale": scale,
-        "metres_per_unit": m_per_unit,
+        "unit": unit,
+        "metres_per_unit_gt_cameras": m_per_unit,
         "views": views,
         "masks": masks,
         "pairs": pairs,
@@ -495,7 +555,7 @@ def pair_outcomes(pairs: list[dict[str, Any]]) -> dict[str, Any]:
 
 def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
     """The JSON-safe summary that the artifact carries (no index arrays)."""
-    m = result["metres_per_unit"]
+    m = result["unit"]["metres_per_unit"]
     objects = [{k: v for k, v in o.items() if k != "ids"} for o in result["objects"]]
     empty = [
         {"view": x["view"], "mask_index": x["mask_index"]}
@@ -519,7 +579,7 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
                 "pairs": "masks of different views only; objects are connected components",
             },
             "kappa": 1,
-            "units": "splat (nerfstudio dataparser) frame",
+            "units": "paper units: splat lengths x unit.to_paper_units",
         },
         "inputs": {
             k: result[k]
@@ -531,9 +591,11 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
                 "scale",
             )
         },
-        "metres_per_unit": m,
-        "eps_a_m": None if m is None else round(EPS_A * m, 4),
-        "centroid_abs_m": None if m is None else round(CENTROID_ABS * m, 4),
+        "unit": result["unit"],
+        "metres_per_unit_gt_cameras": result["metres_per_unit_gt_cameras"],
+        "eps_a_m": round(EPS_A * PAPER_METRES_PER_UNIT, 4),
+        "centroid_abs_m": round(CENTROID_ABS * PAPER_METRES_PER_UNIT, 4),
+        "splat_unit_m": m,
         "views": result["views"],
         "masks": len(result["masks"]),
         "masks_without_gaussians": empty,
@@ -558,8 +620,13 @@ def write_sets(path: Path, result: dict[str, Any]) -> None:
     )
 
 
-def run_bin_association(out: Path | str, data: Path | str = DATA_DIR) -> int:
-    """Associate and group. Return 0 when all 13 views were used and objects exist.
+def run_bin_association(
+    out: Path | str,
+    data: Path | str = DATA_DIR,
+    *,
+    depth: Callable[[Path, Path], dict[str, Any]] = run_depth,
+) -> int:
+    """Measure the unit, associate and group. Return 0 when all 13 views were used and objects exist.
 
     The object count is reported against the 20 GT objects, not gated: the
     paper publishes no count tolerance.
@@ -574,14 +641,15 @@ def run_bin_association(out: Path | str, data: Path | str = DATA_DIR) -> int:
     entry: dict[str, Any] = {"item": ITEM}
     evidence: dict[str, Any] = {"scene": SCENE}
     try:
-        result = associate(out, data)
+        result = associate(out, data, depth=depth)
         evidence = evidence_from(result)
         write_sets(out / "association" / "objects.npz", result)
         used = sum(1 for v in result["views"].values() if v.get("registered"))
         if used == VIEWS and result["objects"]:
             entry.update(
                 decision="accept",
-                use_gpu=False,
+                use_gpu=True,
+                splat_unit_m=round(evidence["splat_unit_m"], 4),
                 objects=evidence["objects"],
                 multi_view_objects=evidence["objects_seen_in_2_or_more_views"],
                 gt_objects=GT_OBJECTS,
@@ -592,7 +660,14 @@ def run_bin_association(out: Path | str, data: Path | str = DATA_DIR) -> int:
                 decision="reject",
                 reason=f"{used} of {VIEWS} views posed; {len(result['objects'])} objects",
             )
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        RuntimeError,
+        subprocess.TimeoutExpired,
+    ) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
     ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
