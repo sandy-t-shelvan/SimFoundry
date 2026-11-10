@@ -1,5 +1,5 @@
 # GPU smoke for SceneAgent on Fruits.mp4.
-# The instance id is the literal 59601312. No input, label, or request file
+# The instance id is the literal 58301075. No input, label, or request file
 # can change it. The job never creates, rents, resizes, destroys, starts,
 # or stops an instance. A stopped instance is refused. Starting or stopping
 # it takes two separate user yeses outside this workflow.
@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, probe]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, probe]
         default: run4
   pull_request_target:
     types: [labeled]
@@ -97,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      group: gpu-smoke-59601312
+      group: gpu-smoke-58301075
       cancel-in-progress: false
     permissions:
       contents: read
@@ -176,7 +176,7 @@ jobs:
             echo "checked-out commit evidence does not match git rev-parse" >&2
             exit 1
           fi
-          python -m sceneagent.vast_smoke --instance-id 59601312 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$CHECKED_OUT_SHA" --pipeline "$SMOKE_PIPELINE"
+          python -m sceneagent.vast_smoke --instance-id 58301075 --checkout "$GITHUB_WORKSPACE/payload" --artifacts "$GITHUB_WORKSPACE/sf4-artifacts" --trigger "$SMOKE_TRIGGER" --actor "$SMOKE_ACTOR" --commit-sha "$CHECKED_OUT_SHA" --pipeline "$SMOKE_PIPELINE"
 
       - name: Upload plan, ledger, and manifest
         if: success()
@@ -197,6 +197,8 @@ jobs:
             sf4-artifacts/association_evidence.json
             sf4-artifacts/sam3d_evidence.json
             sf4-artifacts/bin_score.json
+            sf4-artifacts/bin_review.json
+            sf4-artifacts/review_sheets.zip
             sf4-artifacts/inventory.txt
             sf4-artifacts/checked_out_commit.txt
 

@@ -140,6 +140,8 @@ def test_all_views_with_masks_are_accepted_and_recorded(tmp_path):
     assert worker_argv[0] == bin_masks.MASK_PYTHON
     assert worker_argv[worker_argv.index("--sam-weights") + 1] == bin_masks.SAM_WEIGHTS
     assert worker_kwargs["env"]["PYTHONPATH"].endswith(bin_masks.MASK_PYDEPS)
+    # Grounded-SAM-2 imports its GroundingDINO as grounding_dino.*.
+    assert bin_masks.GSAM_ROOT in worker_kwargs["env"]["PYTHONPATH"].split(":")
 
 
 def test_a_view_without_masks_rejects(tmp_path):
