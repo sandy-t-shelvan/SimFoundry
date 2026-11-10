@@ -147,3 +147,29 @@ def test_bin_manifest_requires_its_own_ledger_items(tmp_path):
     assert passed["video"] == "GraspClutter6D 000091"
     as_video = collect_artifact_manifest(run, command=command, instance_id=59601312)
     assert as_video["passed"] is False
+
+
+def test_bin_manifest_ignores_other_pipelines_entries_in_the_shared_ledger(tmp_path):
+    # Run 42714864867: masks were accepted, yet the run failed on an earlier
+    # splat entry left in the shared ledger.
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "plan.json").write_text("{}\n")
+    entries = [
+        {"item": "benchmark scene", "decision": "accept"},
+        {"item": "COLMAP camera poses", "decision": "accept", "use_gpu": True},
+        {"item": "full-scene splat", "decision": "reject", "reason": "export"},
+    ]
+    (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
+    command = build_remote_command(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
+    manifest = collect_artifact_manifest(
+        run, command=command, instance_id=59601312, pipeline="bin"
+    )
+    assert manifest["passed"] is True
+    assert [s["item"] for s in manifest["stages"]][-1] == "full-scene splat"
+    entries[1]["decision"] = "reject"
+    (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
+    manifest = collect_artifact_manifest(
+        run, command=command, instance_id=59601312, pipeline="bin"
+    )
+    assert manifest["passed"] is False

@@ -72,11 +72,18 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
 
+from sceneagent.simfoundry_python import SIMFOUNDRY_PYTHON
+
 API_ORIGIN = "https://console.vast.ai"
 ALLOWED_INSTANCE_ID = 59601312
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
-REMOTE_PYTHON = "/root/miniforge3/envs/simfoundry/bin/python3"
+REMOTE_PYTHON = SIMFOUNDRY_PYTHON
+# COLMAP 3.11.1 with CUDA on 59601312 (probe run 42713577064). Placed after the
+# interpreter's bin on PATH, before everything else.
+REMOTE_COLMAP_BIN = "/usr/local/bin"
+# py7zr goes here rather than into the shared simfoundry env.
+REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
@@ -99,7 +106,43 @@ PIPELINES = {
     "sceneagent": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
     "run4": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
     "bin": (("benchmark scene", "COLMAP camera poses"), "GraspClutter6D 000091"),
+    "probe": ((), "host inventory"),
 }
+# GraspClutter6D pipelines. They share one ledger in REMOTE_OUT, so each is
+# judged on its own items only (a masks run must not fail on an earlier splat
+# entry), and they are the only ones that may fetch the dataset with py7zr.
+BIN_PIPELINES = frozenset({"bin"})
+# Read-only host inventory for a new or changed box. Plain shell, so it runs
+# before any SceneAgent environment exists. It never prints the environment
+# (no env/printenv), so no secret can land in the report.
+PROBE_SCRIPT = r"""
+section() { printf '\n## %s\n' "$1"; }
+# The inventory is uploaded as an Actions artifact, readable beyond the operator.
+# It lists tools, envs and model files only: no folder trees (one exposed a
+# file named after a local user path), no file contents, and any name that
+# looks like a credential is dropped.
+public() { grep -viE 'key|token|secret|cred|passw|\.pem|netrc|id_rsa|id_ed25519|\.env'; }
+section date; date -u
+section gpu; nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv 2>&1
+section os; head -3 /etc/os-release 2>&1; uname -r
+section cpu_ram; nproc; free -g 2>&1
+section disk; df -h / /workspace /root 2>&1
+section cuda; ls -d /usr/local/cuda* 2>&1; nvcc --version 2>&1 | tail -2
+section python; for t in python python3 conda mamba micromamba; do printf '%s: ' "$t"; command -v "$t" || echo missing; done; python3 --version 2>&1
+section conda_envs; for d in /root/miniforge3 /root/miniconda3 /opt/conda /root/anaconda3; do [ -d "$d/envs" ] && { echo "$d/envs:"; ls "$d/envs"; }; done; [ -x /root/miniforge3/envs/simfoundry/bin/python3 ] && echo "simfoundry env: present" || echo "simfoundry env: missing"
+section tools; for t in colmap colmap4 glomap ffmpeg ffprobe ns-train ns-eval git git-lfs rsync tmux 7z; do printf '%s: ' "$t"; command -v "$t" || echo missing; done
+section colmap; colmap -h 2>&1 | head -3
+section torch; python3 -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())' 2>&1 | tail -1
+# Globs over the usual conda and mamba roots, not find /: a full-disk walk takes
+# minutes on a hosted CI runner, where the probe test also runs.
+section interpreters; for d in /usr /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do [ -x "$d/bin/python3" ] && echo "$d/bin/python3"; done
+section colmap_binaries; for d in /usr /usr/local /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do c="$d/bin/colmap"; [ -x "$c" ] && echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
+section python_imports; for py in /usr/bin/python3 /opt/*/bin/python3 /opt/conda/envs/*/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3 /root/miniconda3/envs/*/bin/python3; do [ -x "$py" ] || continue; echo "$py: $(timeout 60 "$py" -c 'import sys; v=[sys.version.split()[0]]
+for m in ("numpy","scipy","trimesh","PIL","py7zr","torch"):
+    try: v.append(m+"="+__import__(m).__version__)
+    except Exception as e: v.append(m+"=MISSING")
+print(" ".join(v))' 2>&1 | tail -1)"; done
+"""
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
 PY7ZR_PIN = "py7zr==1.1.4"
 FETCH_NAMES = (
@@ -112,6 +155,7 @@ FETCH_NAMES = (
     "host_probe.json",
     "run4_evidence.json",
     "bin_evidence.json",
+    "inventory.txt",
 )
 PUBLIC_FIELDS = (
     "id",
@@ -540,6 +584,8 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
     if pipeline == "bin":
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_run", "--out", out]
+    if pipeline == "probe":
+        return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline != "run4":
         raise InstanceNotApproved("refusing pipeline")
     argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]
@@ -597,8 +643,19 @@ def build_remote_shell(
     """
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
+    if pipeline == "probe":
+        # No pinned interpreter yet on a new box; the probe is plain shell.
+        script = (
+            f"mkdir -p {shlex.quote(out)}\n{{\n{PROBE_SCRIPT}\n}} > "
+            f"{shlex.quote(out + '/inventory.txt')} 2>&1\necho inventory written\n"
+        )
+        _reject_secret_text(script)
+        return script
     argv = build_remote_command(repo, out, pipeline=pipeline, commit_sha=commit_sha)
     quoted = " ".join(shlex.quote(part) for part in argv)
+    # Only dataset pipelines see py7zr's install dir; its dependencies would
+    # otherwise shadow same-named packages in the pinned env.
+    pythonpath = repo + (":" + REMOTE_PYDEPS if pipeline in BIN_PIPELINES else "")
     py = shlex.quote(REMOTE_PYTHON)
     missing = shlex.quote("pinned interpreter missing: " + REMOTE_PYTHON)
     lines = [
@@ -608,13 +665,17 @@ def build_remote_shell(
         "  exit 127",
         "fi",
         f"cd {shlex.quote(repo)}",
-        f"export PYTHONPATH={shlex.quote(repo)}",
+        f"export PYTHONPATH={shlex.quote(pythonpath)}",
+        f'export PATH={shlex.quote(str(Path(REMOTE_PYTHON).parent) + ":" + REMOTE_COLMAP_BIN)}:"$PATH"',
         f"mkdir -p {shlex.quote(out)}",
+        # Only a probe run may publish an inventory; never fetch a stale one.
+        f"rm -f {shlex.quote(out + '/inventory.txt')}",
         host_probe_command(out),
     ]
-    if pipeline == "bin":
+    if pipeline in BIN_PIPELINES:
         lines.append(
-            f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet {PY7ZR_PIN}"
+            f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet "
+            f"--target {shlex.quote(REMOTE_PYDEPS)} {PY7ZR_PIN}"
         )
     lines += [
         quoted,
@@ -746,14 +807,18 @@ def rsync_invocations(
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
     scene = checkout / "sceneagent"
     excludes = _rsync_exclude_args()
-    # --mkpath: a fresh box has no /workspace/sf4-smoke, and rsync otherwise
-    # creates only the last path component (run4, 2026-11-07).
+    # A fresh box has no /workspace/sf4-smoke, and rsync creates only the last
+    # path component (run4, 2026-11-07). --mkpath needs rsync 3.2.3 on both
+    # ends and instance 58301075 had 3.1.3, so the remote side runs mkdir -p
+    # first; every rsync version accepts --rsync-path. ``repo`` is a checked
+    # absolute path with no shell metacharacters (require_remote_dir).
+    make_parent = f"--rsync-path=mkdir -p {repo} && rsync"
     return [
         (
             [
                 "rsync",
                 "-a",
-                "--mkpath",
+                make_parent,
                 *excludes,
                 "-e",
                 ssh_e,
@@ -767,7 +832,7 @@ def rsync_invocations(
                 "rsync",
                 "-a",
                 "-R",
-                "--mkpath",
+                make_parent,
                 *excludes,
                 "-e",
                 ssh_e,
@@ -1656,6 +1721,9 @@ def collect_artifact_manifest(
             for entry in _ledger_entries(ledger)
             if isinstance(entry, dict)
         ]
+    judged = stages
+    if pipeline in BIN_PIPELINES:
+        judged = [s for s in stages if s["item"] in PIPELINES[pipeline][0]]
     present_items = {stage["item"] for stage in stages}
     missing_items = [
         name for name in PIPELINES[pipeline][0] if name not in present_items
@@ -1666,14 +1734,19 @@ def collect_artifact_manifest(
     if not plan_path.is_file():
         missing_files.append("plan")
     reason = _failure_reason(
-        stages, missing_items if ledger is not None else [], missing_files
+        judged, missing_items if ledger is not None else [], missing_files
     )
-    passed = (
+    if pipeline == "probe":
+        # A probe has no plan or ledger; its result is the inventory file.
+        inventory = run_dir / "inventory.txt"
+        missing_files = [] if inventory.is_file() else ["inventory"]
+        reason = None if inventory.is_file() else "inventory.txt was not written"
+    passed = (pipeline == "probe" and reason is None) or (
         ledger_bytes is not None
         and plan_path.is_file()
         and not missing_items
-        and bool(stages)
-        and all(stage["counts_as_pass"] for stage in stages)
+        and bool(judged)
+        and all(stage["counts_as_pass"] for stage in judged)
         and reason is None
     )
     manifest = {
@@ -1707,7 +1780,10 @@ def collect_artifact_manifest(
         manifest["own_key"] = own
     if ssh is not None:
         manifest["ssh"] = _public_ssh_report(ssh)
-    manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
+    if pipeline == "probe":
+        manifest["complete"] = (run_dir / "inventory.txt").is_file()
+    else:
+        manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
     if not manifest["complete"]:
         manifest["passed"] = False
     _apply_run_record(manifest, run_context, secret_forwarding)
@@ -1779,6 +1855,7 @@ def publish_artifacts(
             "manifest.json",
             "run4_evidence.json",
             "bin_evidence.json",
+            "inventory.txt",
         }:
             continue
         target = artifact_dir / rel

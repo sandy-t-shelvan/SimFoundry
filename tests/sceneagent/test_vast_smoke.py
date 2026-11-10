@@ -15,6 +15,7 @@ import pytest
 from sceneagent.gpu_smoke_trigger import DISPATCH_INPUTS, workflow_safety_findings
 from sceneagent.vast_smoke import (
     ALLOWED_INSTANCE_ID,
+    BIN_PIPELINES,
     DETACH_LEFTOVER_KEYS,
     FRUITS_RELATIVE,
     REMOTE_OUT,
@@ -393,7 +394,35 @@ def test_rsync_creates_the_missing_remote_parent(tmp_path):
     assert invocations
     for command, _cwd in invocations:
         assert command[0] == "rsync"
-        assert "--mkpath" in command
+        # --mkpath needs rsync 3.2.3 on both ends; instance 59601312 has
+        # 3.1.3 and refused it (2026-11-08). The remote side makes the
+        # directory itself instead, which every rsync version accepts.
+        assert "--mkpath" not in command
+        assert f"--rsync-path=mkdir -p {REMOTE_REPO} && rsync" in command
+
+
+def test_rsync_path_creates_the_destination_with_a_real_rsync(tmp_path):
+    import shutil
+    import subprocess
+
+    if shutil.which("rsync") is None:
+        pytest.skip("rsync is not installed")
+    checkout = _checkout(tmp_path)
+    fake_ssh = tmp_path / "fake_ssh"
+    # Stands in for ssh: drop the options and host, run the remote command here.
+    fake_ssh.write_text(
+        '#!/bin/sh\nwhile [ "$1" != "host" ]; do shift; done\nshift\nexec sh -c "$*"\n'
+    )
+    fake_ssh.chmod(0o755)
+    dest = tmp_path / "remote" / "sf4-smoke" / "repo"
+    for command, cwd in rsync_invocations(checkout, "host", 22, "/k", "/kh", str(dest)):
+        command = [
+            str(fake_ssh) if part.startswith("ssh ") else part for part in command
+        ]
+        command = [part.replace("root@host:", "host:") for part in command]
+        subprocess.run(command, cwd=cwd, check=True, capture_output=True)
+    assert (dest / "sceneagent").is_dir()
+    assert (dest / FRUITS_RELATIVE).is_file()
 
 
 def test_ssh_key_id_comes_from_the_attach_response_only():
@@ -791,7 +820,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         "        default: run4\n      instance_id:\n        type: string\n",
         1,
     )
-    assert "workflow_dispatch may only take the run4/bin pipeline choice" in (
+    assert "workflow_dispatch may only take the run4/bin/probe pipeline choice" in (
         workflow_safety_findings(extra)
     )
     assert "inputs.instance_id" not in text
@@ -2650,3 +2679,112 @@ def test_sigterm_raises_systemexit_and_finally_closes(monkeypatch, tmp_path):
     assert caught.value.code == 1
     assert remote.closed is True
     assert calls == [("GET", None)]
+
+
+def test_probe_is_plain_shell_and_never_prints_the_environment():
+    script = build_remote_shell(REMOTE_REPO, REMOTE_OUT, pipeline="probe")
+    # It reports whether the pinned env exists; it never requires or runs it.
+    assert "pinned interpreter missing" not in script
+    assert "exit 127" not in script
+    assert f"{REMOTE_PYTHON} -m" not in script
+    assert f"{REMOTE_OUT}/inventory.txt" in script
+    for banned in ("printenv", "\nenv", " env ", "set\n", "export -p"):
+        assert banned not in script
+
+
+def test_probe_runs_here_and_its_manifest_passes_on_the_inventory(tmp_path):
+    import subprocess
+
+    out = tmp_path / "run"
+    script = build_remote_shell(REMOTE_REPO, str(out), pipeline="probe")
+    done = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=120
+    )
+    assert done.returncode == 0, done.stderr
+    text = (out / "inventory.txt").read_text()
+    for section in (
+        "## gpu",
+        "## disk",
+        "## conda_envs",
+        "## tools",
+        "## interpreters",
+    ):
+        assert section in text
+    command = build_remote_command(REMOTE_REPO, str(out), pipeline="probe")
+    ok = collect_artifact_manifest(
+        out, command=command, instance_id=59601312, pipeline="probe"
+    )
+    assert ok["passed"] is True
+    (out / "inventory.txt").unlink()
+    missing = collect_artifact_manifest(
+        out, command=command, instance_id=59601312, pipeline="probe"
+    )
+    assert missing["passed"] is False
+    assert missing["failure_reason"] == "inventory.txt was not written"
+
+
+def test_bin_shell_puts_cuda_colmap_on_path_and_py7zr_outside_the_shared_env():
+    from sceneagent.vast_smoke import PY7ZR_PIN, REMOTE_COLMAP_BIN, REMOTE_PYDEPS
+
+    script = build_remote_shell("/workspace/r", "/workspace/o", pipeline="bin")
+    bindir = REMOTE_PYTHON.rsplit("/", 1)[0]
+    assert f'export PATH={bindir}:{REMOTE_COLMAP_BIN}:"$PATH"' in script
+    assert f"export PYTHONPATH=/workspace/r:{REMOTE_PYDEPS}" in script
+    assert f"pip install --quiet --target {REMOTE_PYDEPS} {PY7ZR_PIN}" in script
+    # The path line comes before anything that resolves colmap.
+    assert script.index("export PATH=") < script.index("sceneagent.bin_run")
+
+
+def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_contents(
+    tmp_path,
+):
+    import subprocess
+
+    from sceneagent.vast_smoke import PROBE_SCRIPT
+
+    # Security review on PR #37: the inventory is a public artifact.
+    assert "ls -la" not in PROBE_SCRIPT
+    assert "cat /root" not in PROBE_SCRIPT and "tail -15 /root" not in PROBE_SCRIPT
+    public = next(
+        line for line in PROBE_SCRIPT.splitlines() if line.startswith("public()")
+    )
+    names = (
+        "gemini.key\nmodels\nauthorized_keys\napi_token.txt\nid_ed25519\nsam\n.env\n"
+    )
+    done = subprocess.run(
+        ["bash", "-c", f"{public}\npublic"],
+        input=names,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.stdout.split() == ["models", "sam"]
+    # No folder trees at all: run 42713577064 listed a file named after a
+    # local user path, which no name filter would catch.
+    for banned in (
+        "section folders",
+        "section tree",
+        "section sizes",
+        "section workspace_tree",
+        "find /root",
+    ):
+        assert banned not in PROBE_SCRIPT, banned
+
+
+def test_only_dataset_pipelines_see_the_py7zr_install_dir():
+    from sceneagent.vast_smoke import REMOTE_PYDEPS
+
+    run4 = build_remote_shell("/workspace/r", "/workspace/o", pipeline="run4")
+    assert "export PYTHONPATH=/workspace/r\n" in run4
+    assert REMOTE_PYDEPS not in run4
+    for pipeline in sorted(BIN_PIPELINES):
+        script = build_remote_shell("/workspace/r", "/workspace/o", pipeline=pipeline)
+        assert f"export PYTHONPATH=/workspace/r:{REMOTE_PYDEPS}" in script
+
+
+def test_non_probe_runs_remove_a_stale_inventory_before_running():
+    for pipeline in ("run4", "bin"):
+        script = build_remote_shell("/workspace/r", "/workspace/o", pipeline=pipeline)
+        assert "rm -f /workspace/o/inventory.txt" in script
+    probe = build_remote_shell("/workspace/r", "/workspace/o", pipeline="probe")
+    assert "rm -f" not in probe
