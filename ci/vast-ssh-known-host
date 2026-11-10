@@ -1,5 +1,7 @@
 # Reviewed public host key for the direct endpoint public_ipaddr plus
-# ports 22/tcp HostPort. Fingerprint
-# SHA256:NDJOu/2d7YbJz6Wj/HgqNSraxzsNkp8Plj/QGtAShO8
+# ports 22/tcp HostPort of instance 58301075. Fingerprint
+# SHA256:SaDE0hIpp4+P7JzCYt1STtqXe8HHxLMEEQgEaxQJvOA
+# Read twice with ssh-keyscan from a GitHub runner on 2026-11-08 and again on
+# 2026-11-10 (run 42907623339); all four reads identical.
 # This is not the proxy ssh_host.
-[47.186.21.5]:51823 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFqxlHMUC7xRRWryJ7y1/3LjWJiHFLhPlb9bH05FR3Nr
+[47.186.21.5]:51808 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH7JFtqbfWEbYZ1gmfTNF5DmcvB1gmiXb0gDFFtCkJYr

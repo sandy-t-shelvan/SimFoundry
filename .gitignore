@@ -39,6 +39,9 @@ input videos/
 *.deb
 *.log
 *core*
+# *core* also matches "score": result files are evidence and are tracked.
+!docs/results/
+!docs/results/**
 
 # auto_bg pipeline: large assets / outputs / logs (not source)
 /simfoundry-assets
