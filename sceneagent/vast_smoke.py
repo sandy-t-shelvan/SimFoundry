@@ -125,12 +125,36 @@ PIPELINES = {
         ),
         "GraspClutter6D 000091",
     ),
+    "sam3d": (
+        (
+            "benchmark scene",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+        ),
+        "GraspClutter6D 000091",
+    ),
+    "place": (
+        (
+            "benchmark scene",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+            "ICP residuals",
+            "bin score",
+        ),
+        "GraspClutter6D 000091",
+    ),
     "probe": ((), "host inventory"),
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
 # entry), and they are the only ones that may fetch the dataset with py7zr.
-BIN_PIPELINES = frozenset({"bin", "splat", "masks", "association"})
+BIN_PIPELINES = frozenset({"bin", "splat", "masks", "association", "sam3d", "place"})
 
 
 def remote_out(pipeline: str) -> str:
@@ -171,6 +195,7 @@ print(" ".join(v))' 2>&1 | tail -1)"; done
 section phase2_packages; for py in /opt/conda/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3; do [ -x "$py" ] || continue; echo "$py:"; timeout 120 "$py" -m pip list 2>/dev/null | grep -iE '^(nerfstudio|gsplat|groundingdino|segment|sam-2|sam2|transformers|supervision|torch |opencv)' ; ls "$(dirname "$py")" 2>/dev/null | grep -E '^ns-(train|eval|export|process-data)$' | tr '\n' ' '; echo; done
 section checkpoints; find -L /root/SceneagentX/third_party /root/.cache/huggingface/hub /root/.cache/torch /workspace/models /root/sam-3d-objects/checkpoints /root/SimFoundry/checkpoints /root/miniforge3/envs/groundingdino -maxdepth 4 \( -name '*.pth' -o -name '*.pt' -o -name '*.safetensors' -o -name '*.ckpt' \) -size +1M 2>/dev/null | public | head -60
 section third_party; ls /root/SceneagentX/third_party /root/.cache/huggingface/hub 2>&1 | public | head -60
+section sam3d; S=/root/software/sam-3d-objects; ls "$S" "$S/notebook" 2>&1 | public | head -60; find -L "$S/checkpoints" /root/.cache/huggingface/hub/models--facebook--sam-3d-objects -maxdepth 6 -type f 2>/dev/null | public | head -40; P=/root/miniforge3/envs/sam3d-objects/bin/python3; timeout 120 "$P" -m pip list 2>/dev/null | grep -iE '^(sam3d|sam-3d|pytorch3d|kaolin|gsplat|utils3d|moge|open3d|trimesh|spconv|xformers|flash)' ; (cd "$S/notebook" 2>/dev/null && timeout 300 "$P" -c 'import inference, inspect; print("inference import ok"); print([n for n in dir(inference) if not n.startswith("_")]); print(inspect.signature(inference.Inference.__init__)); print(inspect.signature(inference.Inference.__call__))' 2>&1 | public | tail -8)
 """
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
 PY7ZR_PIN = "py7zr==1.1.4"
@@ -188,6 +213,8 @@ FETCH_NAMES = (
     "ns_eval.json",
     "masks_evidence.json",
     "association_evidence.json",
+    "sam3d_evidence.json",
+    "bin_score.json",
     "inventory.txt",
 )
 PUBLIC_FIELDS = (
@@ -623,6 +650,10 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_masks", "--out", out]
     if pipeline == "association":
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_association", "--out", out]
+    if pipeline == "sam3d":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_sam3d", "--out", out]
+    if pipeline == "place":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_place", "--out", out]
     if pipeline == "probe":
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline != "run4":
@@ -1898,6 +1929,8 @@ def publish_artifacts(
             "ns_eval.json",
             "masks_evidence.json",
             "association_evidence.json",
+            "sam3d_evidence.json",
+            "bin_score.json",
             "inventory.txt",
         }:
             continue
