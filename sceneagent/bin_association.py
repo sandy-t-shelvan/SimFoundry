@@ -89,6 +89,16 @@ GT_OBJECTS = 20
 # carrying a fan of floaters that one view alone admits, which pulled meshes
 # onto neighbours. Objects seen in one view keep their union.
 KAPPA = 2
+# Ours. Phase 3 grouped the bin itself and its support with the objects (the
+# two largest groups spanned 12-13 views). A graspable object here is under
+# about 0.35 m on its longest side, so a group whose consensus Gaussians span
+# more (5th-95th percentile box, DA3 metres) is set aside as a container or
+# support region and recorded, not meshed.
+MAX_OBJECT_EXTENT_M = 0.35
+CONTAINER_RULE = (
+    "ours: an object whose consensus Gaussians span more than 0.35 m (longest side "
+    "of the 5th-95th percentile box, DA3 metres) is a container or support region"
+)
 KAPPA_RULE = (
     "ours: kappa 2 (the paper's experiments use 1); a Gaussian stays when "
     "at least min(2, views of the object) of the object's views admit it"
@@ -346,6 +356,19 @@ def group_masks(
     return sorted(components.values(), key=lambda c: (-len(c), c)), pairs
 
 
+def split_containers(
+    objects: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Objects too large to be graspable (the bin, the table) set apart from the rest."""
+    kept = [o for o in objects if o["extent_m"] <= MAX_OBJECT_EXTENT_M]
+    dropped = [
+        {**o, "reason": f"extent {o['extent_m']} m > {MAX_OBJECT_EXTENT_M} m"}
+        for o in objects
+        if o["extent_m"] > MAX_OBJECT_EXTENT_M
+    ]
+    return kept, dropped
+
+
 def consensus_gaussians(
     members: list[dict[str, Any]], kappa: int
 ) -> tuple[np.ndarray, int]:
@@ -510,7 +533,7 @@ def associate(
         views[view] = stats
 
     components, pairs = group_masks(masks, positions * to_paper)
-    objects = []
+    objects: list[dict[str, Any]] = []
     for number, members in enumerate(components):
         ids, union_size = consensus_gaussians([masks[i] for i in members], KAPPA)
         objects.append(
@@ -524,9 +547,15 @@ def associate(
                 "gaussians": int(ids.size),
                 "gaussians_union": union_size,
                 "centroid": [round(float(c), 5) for c in positions[ids].mean(axis=0)],
+                "extent_m": round(
+                    set_extent(positions[ids]) * unit["metres_per_unit"], 4
+                ),
                 "ids": ids,
             }
         )
+    # Numbers stay as grouped, so a dropped object leaves a gap rather than
+    # renumbering the rest.
+    objects, dropped = split_containers(objects)
 
     scene_gt_path = data / "scenes" / SCENE / "scene_gt.json"
     try:
@@ -548,6 +577,7 @@ def associate(
         "pairs": pairs,
         "merged_pairs": [p for p in pairs if p["merged"]],
         "objects": objects,
+        "dropped_objects": dropped,
     }
 
 
@@ -634,6 +664,11 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
         "objects_seen_in_2_or_more_views": len(multi),
         "gt_objects": GT_OBJECTS,
         "object_list": objects,
+        "container_rule": CONTAINER_RULE,
+        "dropped_objects": [
+            {k: v for k, v in o.items() if k != "ids"}
+            for o in result["dropped_objects"]
+        ],
     }
 
 

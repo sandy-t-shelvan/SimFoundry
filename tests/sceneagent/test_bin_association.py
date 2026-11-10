@@ -383,3 +383,21 @@ def test_consensus_keeps_gaussians_two_views_agree_on():
     kept, union = ba.consensus_gaussians(masks[:2], 2)
     assert kept.tolist() == [1, 2, 3, 4, 9] and union == 5
     assert ba.consensus_gaussians(masks, 1)[0].size == 5
+
+
+def test_objects_larger_than_a_graspable_object_are_set_apart():
+    objects = [{"object": 0, "extent_m": 0.12}, {"object": 1, "extent_m": 0.6}]
+    kept, dropped = ba.split_containers(objects)
+    assert [o["object"] for o in kept] == [0]
+    assert dropped[0]["object"] == 1 and "0.6 m > 0.35 m" in dropped[0]["reason"]
+
+
+def test_a_scene_at_a_larger_scale_records_its_cubes_as_containers(tmp_path):
+    # At 0.915 m per splat unit the 0.2-unit cubes are 0.18 m and stay; at
+    # 2.4 m per unit they would be 0.48 m, too big to grasp, and are set apart.
+    out, data, _, _ = _run_dir(tmp_path)
+    kept = ba.associate(out, data, depth=_fake_depth())
+    assert len(kept["objects"]) == 2 and kept["dropped_objects"] == []
+    big = ba.associate(out, data, depth=_fake_depth(2.4))
+    assert big["objects"] == [] and len(big["dropped_objects"]) == 2
+    assert all(o["extent_m"] > ba.MAX_OBJECT_EXTENT_M for o in big["dropped_objects"])
