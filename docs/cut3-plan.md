@@ -83,8 +83,7 @@ cutoffs stay), "F1 at 1 cm and Chamfer".
 | SF-19 VLM verdict | The reviewer sends each object's contact sheet to the VLM, which picks keep / icp_flip / sam3d_next_view; the rule-based choice is logged beside it; both scores recorded | yes |
 | SF-24 part 2 (KAN-25): orchestrator plan from a real harness | The plan comes from `harness.request_plan`, not `default_plan()` | no |
 
-The VLM call needs a key. The GPU workflow forwards no secrets by design, so either the VLM runs in the
-cloud session on the published contact sheets (decision 2), or a key is added to the box.
+The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub secret `GEMINI_API_KEY` (decision 2). The GPU workflow forwards no secrets to the box by design, so the calls run on the GitHub runner, on the contact sheets and renders the box publishes.
 
 Canvas rows: "Visual review" (agent lane), "Orchestrator", and the section 3.1 "Agent repair loop".
 
@@ -92,20 +91,47 @@ Canvas rows: "Visual review" (agent lane), "Orchestrator", and the section 3.1 "
 
 The paper's §3.4 in full, on every bin object. Nothing in this phase changes `fitted_splat` or the mlp-physics-prior files.
 
+**The prior is Sandeep's, used as it is.** It lives in [`sandy-t-shelvan/physics-prior-mlp`](https://github.com/sandy-t-shelvan/physics-prior-mlp) and is pinned by commit (`b052009` on 2026-11-10). Its two notes are `paper/physics_prior_mlp.pdf` and `paper/mlp_physx_physgaussian.pdf` ("Using the MLP prior with PhysX and PhysGaussian").
+- **Checkpoint (the model):** [`data/mlp/physics_prior_splat.npz`](https://github.com/sandy-t-shelvan/physics-prior-mlp/blob/b052009284d7794fc38fb8d158d5eb5c9fb1a7cb/data/mlp/physics_prior_splat.npz), epoch 10 of a 14-epoch run.
+  - 260,290 bytes, SHA-256 `7d737d52e82e1363efa7dbdb0dd1986b6f9d5d3461829bac9420802cfc09c125`.
+  - Layers: `w1` 912×32, `w2` 32×32, `w_out` 32×33 (float64), with the 10 material, 6 body and 8 collision names stored inside.
+  - Runs download it from that commit and refuse it if the hash differs, the same check the SAM vit_h weights get. It is not copied into this repo.
+  - `data/mlp/train_report_splat.json` is the run's scores, not the model: `epochs_ran` 14, `checkpoint_epoch` 10, `n_fitted` 3736.
+- **Training data:** 3736 fitted GSO and ABO objects (YCB 0), labelled by `gemini-3.8-flash` as the paper does.
+- **Test scores (n = 323):** material accuracy 0.889, body 0.991, collision 0.768.
+
+So it is not retrained here. Its rules, from the PhysX/PhysGaussian note:
+
+1. **Input.** The input is the object's fitted splat, not the scene splat: the mesh is rendered as 16 orbit views (8 azimuths at 18° and 50°), registered by COLMAP and fitted by splatfacto for 600 steps. Each Gaussian is then packed into one row of 912 columns:
+   - 0–383: DINOv2 ViT-S/14;
+   - 384–895: OpenCLIP ViT-B-16 with the OpenAI weights;
+   - 896–911: 16 geometry values (xyz, 3 exp scales, sigmoid opacity, quaternion, f_dc_0..2, log volume, anisotropy).
+
+   Opacity must vary: its standard deviation must be at least 10⁻³, and it must not be the constant 0.99.
+2. **Inference.** The MLP (32 tanh, 32 tanh, 33) runs on every in-mask Gaussian, and the 33 outputs are averaged. Averaging the inputs first is a different function and is not used. Sigmoid is applied to rigidity and deformability after the mean.
+3. **Outputs.** The prior gives material (10), body (6), collision (8), log mass, log density, rigidity and deformability. Slots 28–32 are masked. **Friction and restitution are null.** Young's modulus, Poisson's ratio and the render material are unpublished, so they are recorded as null, not invented. A class tie returns no class. An unknown class has its weight × 0.4, and the keyword proposal is passed in by the caller.
+4. **Simulators.**
+   - Rigid, static or kinematic bodies become one **PhysX** actor with the collision primitive, mass and density. Friction and restitution are PhysX defaults unless the VLM sets friction.
+   - Soft, cloth or fluid bodies, or any object with deformability ≥ 0.65 (that rule wins), become **PhysGaussian** particles. The particles are the same Gaussians, rigidity sets stiffness, and the MLP mass is the particle mass.
+   - PhysX owns contact.
+   - Each frame steps PhysX, then PhysGaussian under that contact, then renders.
+
 | Item | Done when |
 |---|---|
-| SF-33 (KAN-39): crop features | OpenCLIP ViT-B-16 (512-d) and DINOv2 ViT-S/14 per object from its masks, plus the 16 geometric values: the `(N, 912)` prior input |
-| SF-20 (KAN-21): equation (2) three-source vote | Prior + VLM + keywords per object, with unknown × 0.4; the prior is the existing one, labelled `weights: "ours"` |
+| SF-33 (KAN-39): fitted splat per object | Each SAM 3D mesh goes through the prior repo's own fitted-splat path (orbit, COLMAP, splatfacto 600 steps, pack), called as it is; one `(N, 912)` `prior_input` per object with varying opacity |
+| SF-20 (KAN-21): equation (2) three-source vote | Prior (per-Gaussian mean, `weights: "ours"`) + VLM + keywords per object, unknown × 0.4, tie → no class |
 | SF-21 (KAN-22): VLM material audit | Audit recorded per object; it may replace the class |
-| SF-34 (KAN-40): full property set | 10 materials, 6 body types, 8 colliders; log mass and log density, friction, restitution, rigidity; Young's modulus and Poisson's ratio from the class; soft-body flag at deformability ≥ 0.65; each field's source recorded |
-| SF-35 (KAN-41): USD physics export and settle test | One OpenUSD stage with the PhysX schema. It settles in Isaac Lab (maximum speed below 1 cm/s after 2 s, nothing below the ground) and loads and settles in MuJoCo |
+| SF-34 (KAN-40): full property set | Material, body, collider, log mass, log density, rigidity and deformability from the prior and vote. Friction from the VLM, else the PhysX default (recorded as default). Restitution at the PhysX default. E, ν and the render material null. Body routed to PhysX or PhysGaussian by the rule above. Each field's source recorded |
+| SF-35 (KAN-41): USD physics export and settle test | One OpenUSD stage: PhysX actors with collider, mass and density. It settles in Isaac Lab (maximum speed below 1 cm/s after 2 s, nothing below the ground) and loads and settles in MuJoCo. PhysGaussian objects, if any, are marked for Cut 4 (SF-40) |
 | SF-22 (KAN-23): inspector report written by the model | `fix_report_from_model: true` on the exported bin |
+
+**Watch:** the prior's fitted set has no YCB objects, and the bin is all YCB. Its test scores are on GSO and ABO. The YCB catalogue masses are a check on the bin only, never an input.
 
 ## After Cut 3
 
 | Cut | Jira | Milestones |
 |---|---|---|
-| 4 | KAN-34 | **M4. Full articulation (paper Figure 8).** On Mailbox and a capped marker: PartSAM parts; a VLM missing-geometry check; CubePart completion appended; Articulate Anything joints and ranges from those parts; a joint sweep in Isaac Lab; joints in the USD and the scene state. **M5. Soft bodies and fracture.** A deformable object simulates as a soft body; the Warp thin-sheet tear and the Blast ceramic shatter run as authored scenes. |
+| 4 | KAN-34 | **M4. Full articulation (paper Figure 8).** On Mailbox and a capped marker: PartSAM parts; a VLM missing-geometry check; CubePart completion appended; Articulate Anything joints and ranges from those parts; a joint sweep in Isaac Lab; joints in the USD and the scene state. **M5. Soft bodies and fracture.** A deformable object simulates as PhysGaussian particles under PhysX contact, per the prior's PhysX/PhysGaussian note; the Warp thin-sheet tear and the Blast ceramic shatter run as authored scenes. |
 | 5 | KAN-35 | **M6.** Video to sim on PutCupInBowl, PutMarkerInCup, ThrowAwayTrash and Mailbox, with the background completed and oriented. **M7.** The MessyKitchens score file (all-pairs matching + global mapper; PR #43: same registration, about 4× faster on Fruits). **M8.** MVP acceptance: one command on an unseen video, no hand edits. |
 
 After the MVP: 4D and 4DCodeBench (§3.6), sisters and hybrid scenes (§3.8–3.9), Meshy, Unreal, the LangSplat-style codebook (SF-17), and policy (SF-25, SF-26, pi0.5 LoRA).
@@ -113,8 +139,8 @@ After the MVP: 4D and 4DCodeBench (§3.6), sisters and hybrid scenes (§3.8–3.
 ## Decisions for Sandeep
 
 1. **Order inside Cut 3.** A → B → C as proposed, or physics (C) before the VLM loop (B)?
-2. **VLM key.** Run the VLM in the cloud session on the published contact sheets (no secret on the box), or add a Gemini key to the box's environment?
-3. **MLP prior.** The paper trains its prior on GSO, YCB and ABO with labels written by a VLM. Phase C applies the existing prior as it is. Matching the paper means retraining it, which changes the prior files. Yes or no?
+2. **VLM: settled (2026-11-10).** The Gemini API, `gemini-3.8-flash`, with the key only from the GitHub secret `GEMINI_API_KEY` (KAN-15 approval). The GPU workflow forwards no secrets to the box, so the VLM calls run on the GitHub runner, on the review sheets and renders the box publishes. Every run records `vlm_calls`, and no key string appears in logs or artifacts.
+3. **MLP prior: settled (2026-11-10).** Sandeep's prior is already trained the paper's way (GSO and ABO, `gemini-3.8-flash` labels), so it is used as it is from `physics-prior-mlp` at a pinned commit, with no retraining.
 4. **MessyKitchens data (Cut 5).** Is the shared capture and its GT available to us?
 5. **Box time.** Phase A alone is about six GPU runs of 5–15 minutes each, and 58301075 has to be running.
 

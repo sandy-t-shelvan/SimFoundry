@@ -100,7 +100,7 @@ const BLOCKS: Block[] = [
         sub: "Agent repair loop",
         status: "done",
         addressed: "still open",
-        ticket: "SF-19 / KAN-20 (To Do): per-object reviewer in open PR #44 draws 11 views per object and picks a retry (icp_flip, sam3d_next_view) by rule; bin F1 0.058 to 0.067. The VLM verdict is SF-18 / KAN-19 (To Do), Cut 3 phase B.",
+        ticket: "SF-19 / KAN-20 (To Do): per-object reviewer, PR #44 (merged 6d184cb), draws 11 views per object and picks a retry (icp_flip, sam3d_next_view) by rule; bin F1 0.058 to 0.067. The VLM verdict is SF-18 / KAN-19 (To Do), Cut 3 phase B.",
         ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.1: write a plan, run a tool, write a manifest, append accept or reject, and on rejection repair and rerun. Agents render the scene and correct scale, orientation, and position.",
         plan: "DESIGN phases the inspector into phase 4 and the repair behavior into sceneagent.agent_loop. The opening 'phase 1 does not' list still says no Isaac and no MuJoCo.",
@@ -309,8 +309,8 @@ const BLOCKS: Block[] = [
         sub: "Per-Gaussian MLP",
         status: "missing",
         addressed: "still open",
-        ticket: "out of Cut 1 (Sandeep trains MLP)",
-        ticketStatus: "Not started",
+        ticket: "Sandeep's own prior, github.com/sandy-t-shelvan/physics-prior-mlp (2026-11-10): per-Gaussian MLP 912 -> 32 tanh -> 32 tanh -> 33 on a fitted splat (16 orbit views, COLMAP, splatfacto 600 steps), outputs averaged; physics_prior_splat.npz epoch 10 of 14, trained on 3736 GSO + ABO fits with gemini-3.8-flash labels; test material 0.889, body 0.991, collision 0.768. Used as is in Cut 3 M3 (KAN-39, KAN-40); labelled ours, not Harvard's weights.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.4: an MLP on DINOv2, OpenCLIP, and 16 geometric features, trained on VLM labels from GSO, YCB, and ABO. Nine numerical properties. Weights are not released. Targets are VLM labels, not measurements.",
         plan: "Do not train a stand-in and call it their prior. DESIGN repeats the 16 geometric features and leaves the weights unreleased.",
         changelog: "Listed under 'Not in this tree.'",
@@ -580,7 +580,7 @@ const BLOCKS: Block[] = [
       {
         sub: "F1 at 1 cm and Chamfer",
         status: "partial",
-        ticket: "SF-6 / KAN-6 Accepted (matcher past 8); SF-7 / KAN-7 Accepted (kitchen aggregator). First bin score file on main: F1@1cm 0.058, matched Chamfer 0.130 m (PR #42, docs/results/); 0.067 / 0.125 m after the reviewer (open PR #44). Kitchen file not started.",
+        ticket: "SF-6 / KAN-6 Accepted (matcher past 8); SF-7 / KAN-7 Accepted (kitchen aggregator). First bin score file on main: F1@1cm 0.058, matched Chamfer 0.130 m (PR #42, docs/results/); 0.067 / 0.125 m after the reviewer (PR #44, merged); 0.079 / 0.070 m on 58301075 (PR #50). Kitchen file not started.",
         ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 4.1 equations (4) and (5), tau = 1 cm, Hungarian match, unmatched F1 = 0. The kitchen is MessyKitchens. The bin is GraspClutter6D hard/000091, 13 views, 20 YCB objects.",
         plan: "Functions are tested on synthetic clouds. DESIGN phase 1 says no GraspClutter6D and no MessyKitchens scores.",
@@ -1088,7 +1088,7 @@ export default function SceneAgentPaperGaps() {
       </Grid>
 
       <Callout tone="info" title="Status as of 2026-11-10 (Cut 2 on the bin)">
-        Cut 2 ran the paper's section 3.2–3.3 chain on GraspClutter6D hard/000091 (13 views, 20 YCB objects) and wrote the first bin score. The steps were COLMAP poses (13/13, 0.55 px), a splatfacto splat (PSNR 23.07, SSIM 0.825, LPIPS 0.178), GroundingDINO + SAM vit_h masks (94 on 13 views), equation (1) association and grouping (25 objects against 20), SAM 3D meshes for all 25, and observed-to-mesh ICP. Merged in PRs #33, #36 and #38–#42. Score: F1@1cm 0.058, matched Chamfer 0.130 m; with the per-object reviewer in open PR #44, 0.067 and 0.125 m. The paper reports 6.9% for SimFoundry's original pipeline and 60.75% for SceneAgent on this scene, so Cut 2 matches the original pipeline. The road to the MVP is in the plan of record and in Jira, with full §3.4 physics and articulation required in the MVP. Cut 3 (KAN-33): M1 bin above 6.9% (κ = 2, PR #45; container split, PR #47; SAM 3D pose rescale, PR #48), M2 VLM in the loop, M3 full §3.4 physics with a USD export that settles in Isaac Lab. Cut 4 (KAN-34): M4 full articulation (PartSAM, VLM gap check, CubePart, Articulate Anything, sim review), M5 soft bodies and fracture. Cut 5 (KAN-35): M6 video to sim on the example videos, M7 MessyKitchens, M8 MVP acceptance run. No Cut 2 ticket (KAN-16 to KAN-32) is Accepted, so every catalog dot and status word above is unchanged; the Ticket progress column carries the evidence. GPU box: instance 58301075 again (PR #50).
+        Cut 2 ran the paper's section 3.2–3.3 chain on GraspClutter6D hard/000091 (13 views, 20 YCB objects) and wrote the first bin score. The steps were COLMAP poses (13/13, 0.55 px), a splatfacto splat (PSNR 23.07, SSIM 0.825, LPIPS 0.178), GroundingDINO + SAM vit_h masks (94 on 13 views), equation (1) association and grouping (25 objects against 20), SAM 3D meshes for all 25, and observed-to-mesh ICP. Merged in PRs #33, #36 and #38–#42. Score: F1@1cm 0.058, matched Chamfer 0.130 m; with the per-object reviewer (PR #44, merged), 0.067 and 0.125 m; the same code on 58301075 gives 0.079 and 0.070 m (PR #50). The paper reports 6.9% for SimFoundry's original pipeline and 60.75% for SceneAgent on this scene, so Cut 2 matches the original pipeline. The road to the MVP is in the plan of record and in Jira, with full §3.4 physics and articulation required in the MVP. Cut 3 (KAN-33): M1 bin above 6.9% (κ = 2, PR #45; container split, PR #47; SAM 3D pose rescale, PR #48), M2 VLM in the loop, M3 full §3.4 physics with a USD export that settles in Isaac Lab. Cut 4 (KAN-34): M4 full articulation (PartSAM, VLM gap check, CubePart, Articulate Anything, sim review), M5 soft bodies and fracture. Cut 5 (KAN-35): M6 video to sim on the example videos, M7 MessyKitchens, M8 MVP acceptance run. No Cut 2 ticket (KAN-16 to KAN-32) is Accepted, so every catalog dot and status word above is unchanged; the Ticket progress column carries the evidence. GPU box: instance 58301075 again (PR #50).
       </Callout>
 
       <Callout tone="info" title="Status as of 2026-11-07 (Cut 1 / Jira KAN)">
