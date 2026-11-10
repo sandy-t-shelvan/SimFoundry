@@ -16,7 +16,7 @@ cleanly. ``ns-eval`` is report-only, as in pipeline A. Pipeline A's
 ledger accepts the splat when ``ns-export`` leaves a PLY with at least one
 Gaussian.
 
-    python -m sceneagent.bin_splat --out /workspace/sf4-smoke/run
+    python -m sceneagent.bin_splat --out /workspace/sf4-smoke/bin
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, run_bin_poses
+from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS, run_bin_poses
 
 # nerfstudio 1.1.5 and gsplat 1.5.3 on instance 59601312 (probe run 42714221807):
 # the env pipeline A's 2c_train_bg_splat.py is run from.
@@ -98,6 +98,8 @@ def poses_ready(out: Path) -> Path | None:
         return None
     bar = evidence.get("quality_bar") or {}
     if not bar.get("pass") or bar.get("model") is None:
+        return None
+    if bar.get("inputs") != VIEWS:
         return None
     model = out / "sparse" / str(bar["model"])
     return model if (model / "cameras.bin").is_file() else None
@@ -240,6 +242,9 @@ def train_splat(
 ) -> dict[str, Any]:
     """Run the ns steps in order and stop at the first failure."""
     splat = out / SPLAT_DIRNAME
+    # ns-process-data copies into an existing dir without emptying it, so
+    # frames from an earlier image set would be trained on beside these.
+    shutil.rmtree(splat / "processed", ignore_errors=True)
     splat.mkdir(parents=True, exist_ok=True)
     env = ns_environment()
     evidence: dict[str, Any] = {

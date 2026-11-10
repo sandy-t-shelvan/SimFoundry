@@ -14,7 +14,7 @@ that env runs :mod:`sceneagent.mask_worker`. The vit_h file is checked against
 its published SHA-256 before use. Only when a file is missing does this module
 download it (and install ``segment-anything`` into its own target directory).
 
-    python -m sceneagent.bin_masks --out /workspace/sf4-smoke/run
+    python -m sceneagent.bin_masks --out /workspace/sf4-smoke/bin
 """
 
 from __future__ import annotations
