@@ -820,8 +820,9 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         "        default: run4\n      instance_id:\n        type: string\n",
         1,
     )
-    assert "workflow_dispatch may only take the run4/bin/probe pipeline choice" in (
-        workflow_safety_findings(extra)
+    assert (
+        "workflow_dispatch may only take the run4/bin/splat/probe pipeline choice"
+        in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
     assert "--instance-id 59601312" in text
@@ -2733,6 +2734,22 @@ def test_bin_shell_puts_cuda_colmap_on_path_and_py7zr_outside_the_shared_env():
     assert f"pip install --quiet --target {REMOTE_PYDEPS} {PY7ZR_PIN}" in script
     # The path line comes before anything that resolves colmap.
     assert script.index("export PATH=") < script.index("sceneagent.bin_run")
+
+
+def test_splat_pipeline_runs_bin_splat_and_needs_three_ledger_items():
+    from sceneagent.vast_smoke import PIPELINES, build_remote_command
+
+    argv = build_remote_command("/workspace/r", "/workspace/o", pipeline="splat")
+    assert argv == [
+        REMOTE_PYTHON,
+        "-m",
+        "sceneagent.bin_splat",
+        "--out",
+        "/workspace/o",
+    ]
+    assert PIPELINES["splat"][0][-1] == "full-scene splat"
+    script = build_remote_shell("/workspace/r", "/workspace/o", pipeline="splat")
+    assert "py7zr" in script  # poses may need the dataset fetch
 
 
 def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_contents(
