@@ -31,13 +31,14 @@ What the reviewer's drawn views show is the order of the problems:
 
 ## Goal
 
-**Cut 3 ends with a bin score above the paper's SimFoundry baseline (6.9% F1), produced with a VLM in the
-review loop, plus one more section 4 protocol started.** The number stays ours; the paper's numbers stay
-the paper's. A score file is written whatever the number is.
+**Cut 3 ends with three milestones met:**
+- **M1:** a bin score above the paper's SimFoundry baseline (6.9% F1).
+- **M2:** a VLM in the review loop.
+- **M3:** the paper's full §3.4 physics on every bin object, in a USD scene that settles in Isaac Lab.
 
-Why this goal: the bin is the one protocol we can already score end to end, and the gap to 6.9% and to
-60.75% is now measured problem by problem. The plan of record's §9.5 puts the kitchen next; policy and 4D
-come after an inspector accept, which needs better placed objects first.
+The number stays ours, and the paper's numbers stay the paper's. A score file is written whatever the number is.
+
+Cut 3 is the first of three cuts to the MVP. Cut 4 adds full articulation, soft bodies and fracture; Cut 5 is the MVP itself. Sandeep asked (2026-11-10) that physics and articulation be in the MVP in full. The roadmap and the MVP definition are in [`expansion-and-harvard-results.md`](expansion-and-harvard-results.md) under "Roadmap to the MVP", and in Jira as epics KAN-33 (Cut 3), KAN-34 (Cut 4) and KAN-35 (Cut 5).
 
 ## Rules carried over
 
@@ -46,7 +47,7 @@ come after an inspector accept, which needs better placed objects first.
   association cuts and the trim stay as they are.
 - `fitted_splat` and the MLP physics prior files are not touched.
 - Each GPU-touching PR runs gpu-smoke on its own branch before merge; one PR per feature.
-- The box is 59601312; sessions never start, stop or rent instances.
+- The box is 58301075 (59601312 was deleted on 2026-11-10); sessions never start, stop or rent instances.
 - **New:** dispatch gpu-smoke runs one at a time. A newer pending run cancels an older pending one (that
   is how place run 4 was lost on 2026-11-10).
 
@@ -54,16 +55,13 @@ come after an inspector accept, which needs better placed objects first.
 
 Same unit as Cut 2: one point is roughly one PR with its tests and, where marked, a GPU run.
 
-| Phase | Points | Cumulative | Ends with |
-|---|---|---|---|
-| A. Bin: data quality | 6 | 6 | Floaters filtered, grouping fixed, pose chain fixed; bin rescored |
-| B. VLM in the loop (SF-18, SF-19 VLM verdict) | 6 | 12 | Reviewer decisions made by a VLM from the drawn views; bin rescored |
-| C. Physics on the bin (Cut 2 phase 6) | 5 | 17 | Mass and friction per object; USD export with physics |
-| D. Second protocol: MessyKitchens | 6 | 23 | Kitchen capture through the chain; first kitchen score file |
-| E. Videos to sim (cup, marker, trash) | 5 | 28 | Video path with parallel mapping; placed scene per video |
-| F. Policy (stretch) | 8 | 36 | Sisters, scripted expert, first episodes |
+| Phase | Milestone | Points | Cumulative | Ends with | Jira |
+|---|---|---|---|---|---|
+| A. Bin: data quality | M1 | 6 | 6 | Floaters filtered, grouping fixed, pose chain fixed; bin above 6.9% | KAN-36, KAN-37, KAN-38 |
+| B. VLM in the loop | M2 | 6 | 12 | Reviewer and step-runner verdicts from a VLM; bin rescored | KAN-19, KAN-20, KAN-25 |
+| C. Full §3.4 physics on the bin | M3 | 9 | 21 | Every property the paper lists, per object; USD stage that settles in Isaac Lab and MuJoCo; inspector report by the model | KAN-39, KAN-40, KAN-41, KAN-21, KAN-22, KAN-23 |
 
-**Proposed Cut 3 line: phases A–D (23 points).** E and F are stretch, then Cut 4.
+**Cut 3 line: phases A–C (21 points).** The kitchen and the videos move to Cut 5, and articulation is Cut 4 (see "After Cut 3").
 
 ## Phase A: bin data quality (6 points)
 
@@ -90,45 +88,35 @@ cloud session on the published contact sheets (decision 2), or a key is added to
 
 Canvas rows: "Visual review" (agent lane), "Orchestrator", and the section 3.1 "Agent repair loop".
 
-## Phase C: physics on the bin (5 points)
+## Phase C: full §3.4 physics on the bin (9 points)
+
+The paper's §3.4 in full, on every bin object. Nothing in this phase changes `fitted_splat` or the mlp-physics-prior files.
 
 | Item | Done when |
 |---|---|
-| SF-20 (KAN-21): equation (2) three-source vote | Prior + VLM + keywords on each bin object; prior labelled `weights: "ours"` |
-| SF-21 (KAN-22): VLM material audit | Audit recorded per object |
-| USD export of the placed bin | Meshes, poses, mass and friction in one stage; loads in MuJoCo, objects settle |
-| SF-22 (KAN-23): inspector report written by the model | `fix_report_from_model: true` on a bin object |
+| SF-33 (KAN-39): crop features | OpenCLIP ViT-B-16 (512-d) and DINOv2 ViT-S/14 per object from its masks, plus the 16 geometric values: the `(N, 912)` prior input |
+| SF-20 (KAN-21): equation (2) three-source vote | Prior + VLM + keywords per object, with unknown × 0.4; the prior is the existing one, labelled `weights: "ours"` |
+| SF-21 (KAN-22): VLM material audit | Audit recorded per object; it may replace the class |
+| SF-34 (KAN-40): full property set | 10 materials, 6 body types, 8 colliders; log mass and log density, friction, restitution, rigidity; Young's modulus and Poisson's ratio from the class; soft-body flag at deformability ≥ 0.65; each field's source recorded |
+| SF-35 (KAN-41): USD physics export and settle test | One OpenUSD stage with the PhysX schema. It settles in Isaac Lab (maximum speed below 1 cm/s after 2 s, nothing below the ground) and loads and settles in MuJoCo |
+| SF-22 (KAN-23): inspector report written by the model | `fix_report_from_model: true` on the exported bin |
 
-## Phase D: MessyKitchens (6 points)
+## After Cut 3
 
-| Item | Done when | GPU |
+| Cut | Jira | Milestones |
 |---|---|---|
-| Fetch the shared capture and GT scans | Manifest with SHA-256s and licence; if the data is not public, this phase becomes a decision (decision 3) | no |
-| Run the chain on the capture | Video path: all-pairs matching + global mapper (PR #43: same registration, ~4× faster on Fruits) | yes |
-| Kitchen score file | `metrics.aggregate_messy_kitchens`: one rigid transform, 100,000 points per object, three seeds; any dropped object named | yes |
+| 4 | KAN-34 | **M4. Full articulation (paper Figure 8).** On Mailbox and a capped marker: PartSAM parts; a VLM missing-geometry check; CubePart completion appended; Articulate Anything joints and ranges from those parts; a joint sweep in Isaac Lab; joints in the USD and the scene state. **M5. Soft bodies and fracture.** A deformable object simulates as a soft body; the Warp thin-sheet tear and the Blast ceramic shatter run as authored scenes. |
+| 5 | KAN-35 | **M6.** Video to sim on PutCupInBowl, PutMarkerInCup, ThrowAwayTrash and Mailbox, with the background completed and oriented. **M7.** The MessyKitchens score file (all-pairs matching + global mapper; PR #43: same registration, about 4× faster on Fruits). **M8.** MVP acceptance: one command on an unseen video, no hand edits. |
 
-## Phase E (stretch): videos to sim
-
-PutCupInBowl, PutMarkerInCup and ThrowAwayTrash through the bin chain with the 300-frame rule and the
-global mapper; one placed, physics-ready scene each. Mailbox waits for articulation (SF-10).
-
-## Phase F (stretch): policy
-
-SF-25 sisters, SF-26 scripted expert on the phase E scenes, then the pi0.5 LoRA (rank 16/32 as printed).
-Plan of record §9.5 item 6: only after an inspector line with `fix_report_from_model: true`.
-
-## Not in Cut 3
-
-4D and 4DCodeBench (§3.6), fracture (§3.5), Meshy sisters, Unreal, hybrid scenes, CubePart, the
-LangSplat-style codebook (SF-17), and the official-release row.
+After the MVP: 4D and 4DCodeBench (§3.6), sisters and hybrid scenes (§3.8–3.9), Meshy, Unreal, the LangSplat-style codebook (SF-17), and policy (SF-25, SF-26, pi0.5 LoRA).
 
 ## Decisions for Sandeep
 
-1. **Headline.** Bin quality first (A–C), as proposed, or move the kitchen (D) ahead of physics (C)?
-2. **VLM key.** Run the VLM reviewer in the cloud session on the published contact sheets (no secret on
-   the box), or add a Gemini key to the box's environment?
-3. **MessyKitchens data.** Is the shared capture and its GT available to us? If not, D swaps for E.
-4. **Box time.** Phase A alone is about six GPU runs of 5–15 minutes each; 59601312 has to be running.
+1. **Order inside Cut 3.** A → B → C as proposed, or physics (C) before the VLM loop (B)?
+2. **VLM key.** Run the VLM in the cloud session on the published contact sheets (no secret on the box), or add a Gemini key to the box's environment?
+3. **MLP prior.** The paper trains its prior on GSO, YCB and ABO with labels written by a VLM. Phase C applies the existing prior as it is. Matching the paper means retraining it, which changes the prior files. Yes or no?
+4. **MessyKitchens data (Cut 5).** Is the shared capture and its GT available to us?
+5. **Box time.** Phase A alone is about six GPU runs of 5–15 minutes each, and 58301075 has to be running.
 
 ## Risks
 
