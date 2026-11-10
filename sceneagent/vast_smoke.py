@@ -113,14 +113,19 @@ PIPELINES = {
     "masks": (("benchmark scene", "SAM masks"), "GraspClutter6D 000091"),
     "probe": ((), "host inventory"),
 }
+# GraspClutter6D pipelines. They share one ledger in REMOTE_OUT, so each is
+# judged on its own items only (a masks run must not fail on an earlier splat
+# entry), and they are the only ones that may fetch the dataset with py7zr.
+BIN_PIPELINES = frozenset({"bin", "splat", "masks"})
 # Read-only host inventory for a new or changed box. Plain shell, so it runs
 # before any SceneAgent environment exists. It never prints the environment
 # (no env/printenv), so no secret can land in the report.
 PROBE_SCRIPT = r"""
 section() { printf '\n## %s\n' "$1"; }
 # The inventory is uploaded as an Actions artifact, readable beyond the operator.
-# Listings skip hidden paths and any name that looks like a credential; no file
-# contents are printed.
+# It lists tools, envs and model files only: no folder trees (one exposed a
+# file named after a local user path), no file contents, and any name that
+# looks like a credential is dropped.
 public() { grep -viE 'key|token|secret|cred|passw|\.pem|netrc|id_rsa|id_ed25519|\.env'; }
 section date; date -u
 section gpu; nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv 2>&1
@@ -133,10 +138,6 @@ section conda_envs; for d in /root/miniforge3 /root/miniconda3 /opt/conda /root/
 section tools; for t in colmap colmap4 glomap ffmpeg ffprobe ns-train ns-eval git git-lfs rsync tmux 7z; do printf '%s: ' "$t"; command -v "$t" || echo missing; done
 section colmap; colmap -h 2>&1 | head -3
 section torch; python3 -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())' 2>&1 | tail -1
-section folders; ls / /root /workspace 2>&1 | public
-section tree; find /root /workspace -mindepth 1 -maxdepth 2 -not -path '*/.*' 2>/dev/null | public | sort | head -300
-section sizes; du -sh /root/* /workspace/* 2>/dev/null | public | sort -h | tail -40
-section workspace_tree; find /workspace/sceneagent-simfoundry /workspace/src /workspace/models -mindepth 1 -maxdepth 3 -not -path '*/.*' 2>/dev/null | public | sort | head -300
 # Globs over the usual conda and mamba roots, not find /: a full-disk walk takes
 # minutes on a hosted CI runner, where the probe test also runs.
 section interpreters; for d in /usr /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do [ -x "$d/bin/python3" ] && echo "$d/bin/python3"; done
@@ -667,6 +668,9 @@ def build_remote_shell(
         return script
     argv = build_remote_command(repo, out, pipeline=pipeline, commit_sha=commit_sha)
     quoted = " ".join(shlex.quote(part) for part in argv)
+    # Only dataset pipelines see py7zr's install dir; its dependencies would
+    # otherwise shadow same-named packages in the pinned env.
+    pythonpath = repo + (":" + REMOTE_PYDEPS if pipeline in BIN_PIPELINES else "")
     py = shlex.quote(REMOTE_PYTHON)
     missing = shlex.quote("pinned interpreter missing: " + REMOTE_PYTHON)
     lines = [
@@ -676,14 +680,14 @@ def build_remote_shell(
         "  exit 127",
         "fi",
         f"cd {shlex.quote(repo)}",
-        f"export PYTHONPATH={shlex.quote(repo + ':' + REMOTE_PYDEPS)}",
+        f"export PYTHONPATH={shlex.quote(pythonpath)}",
         f'export PATH={shlex.quote(str(Path(REMOTE_PYTHON).parent) + ":" + REMOTE_COLMAP_BIN)}:"$PATH"',
         f"mkdir -p {shlex.quote(out)}",
         # Only a probe run may publish an inventory; never fetch a stale one.
         f"rm -f {shlex.quote(out + '/inventory.txt')}",
         host_probe_command(out),
     ]
-    if pipeline in ("bin", "splat", "masks"):
+    if pipeline in BIN_PIPELINES:
         lines.append(
             f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet "
             f"--target {shlex.quote(REMOTE_PYDEPS)} {PY7ZR_PIN}"
@@ -1732,6 +1736,9 @@ def collect_artifact_manifest(
             for entry in _ledger_entries(ledger)
             if isinstance(entry, dict)
         ]
+    judged = stages
+    if pipeline in BIN_PIPELINES:
+        judged = [s for s in stages if s["item"] in PIPELINES[pipeline][0]]
     present_items = {stage["item"] for stage in stages}
     missing_items = [
         name for name in PIPELINES[pipeline][0] if name not in present_items
@@ -1742,7 +1749,7 @@ def collect_artifact_manifest(
     if not plan_path.is_file():
         missing_files.append("plan")
     reason = _failure_reason(
-        stages, missing_items if ledger is not None else [], missing_files
+        judged, missing_items if ledger is not None else [], missing_files
     )
     if pipeline == "probe":
         # A probe has no plan or ledger; its result is the inventory file.
@@ -1753,8 +1760,8 @@ def collect_artifact_manifest(
         ledger_bytes is not None
         and plan_path.is_file()
         and not missing_items
-        and bool(stages)
-        and all(stage["counts_as_pass"] for stage in stages)
+        and bool(judged)
+        and all(stage["counts_as_pass"] for stage in judged)
         and reason is None
     )
     manifest = {

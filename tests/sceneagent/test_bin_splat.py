@@ -43,6 +43,9 @@ class FakeNerfstudio:
         self.gaussians = gaussians
 
     def __call__(self, argv, **kwargs):
+        if argv[1:2] == ["-c"]:  # ns-eval / ns-export through SAFE_LOAD
+            assert argv[0] == f"{bin_splat.NS_BIN}/python"
+            argv = argv[3:]
         self.calls.append((argv, kwargs))
         tool = argv[0]
         if tool == self.fail:
@@ -118,6 +121,7 @@ def test_a_failed_train_stops_before_export_and_rejects(tmp_path):
         "method": "splatfacto",
         "decision": "reject",
         "failed_step": "train",
+        "reason": "boom",
     }
 
 
@@ -127,6 +131,8 @@ def test_an_empty_export_is_rejected(tmp_path):
     assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake) == 1
     evidence = json.loads((tmp_path / "splat_evidence.json").read_text())
     assert evidence["failed_step"] == "export"
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["reason"].endswith("no Gaussians in " + evidence["ply"])
 
 
 def test_a_timeout_is_recorded_as_124(tmp_path):
@@ -216,3 +222,44 @@ def test_eval_with_eval_mode_all_is_not_reported_as_held_out(tmp_path):
     assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=AllViews()) == 0
     report = json.loads((tmp_path / "ns_eval.json").read_text())
     assert report["ok"] is False and "eval_mode is all" in report["error"]
+
+
+def test_a_stale_ply_from_an_earlier_run_is_not_counted(tmp_path):
+    _passing_bin(tmp_path)
+    stale = tmp_path / "splat/export"
+    stale.mkdir(parents=True)
+    (stale / "splat.ply").write_bytes(b"ply\nelement vertex 9\nend_header\n")
+
+    class WritesNothing(FakeNerfstudio):
+        def __call__(self, argv, **kwargs):
+            if argv[1:2] == ["-c"] and argv[3] == "ns-export":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return super().__call__(argv, **kwargs)
+
+    fake = WritesNothing()
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake) == 1
+    assert not (stale / "splat.ply").exists()
+
+
+def test_other_pipelines_entries_in_the_shared_ledger_do_not_fail_a_good_splat(
+    tmp_path,
+):
+    _passing_bin(tmp_path)
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    ledger["entries"].append({"item": "SAM masks", "decision": "reject"})
+    (tmp_path / "ledger.json").write_text(json.dumps(ledger))
+    assert (
+        bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=FakeNerfstudio())
+        == 0
+    )
+
+
+def test_checkpoint_tools_allow_only_numpy_types_through_torch_load():
+    argv = bin_splat.checkpoint_tool("ns-export", ["gaussian-splat"])
+    assert argv[:2] == [f"{bin_splat.NS_BIN}/python", "-c"]
+    assert argv[3:] == ["ns-export", "gaussian-splat"]
+    code = bin_splat.SAFE_LOAD
+    compile(code, "<safe_load>", "exec")
+    assert "add_safe_globals" in code
+    assert "weights_only=False" not in code
+    assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" not in code

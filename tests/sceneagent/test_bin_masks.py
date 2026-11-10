@@ -130,6 +130,7 @@ def test_all_views_with_masks_are_accepted_and_recorded(tmp_path):
     assert entry["item"] == "SAM masks" and entry["decision"] == "accept"
     assert entry["sam"] == "vit_h" and entry["prompt"] == mask_filter.PROMPT
     assert entry["masks"] == 1 + 2 * (VIEWS - 1)
+    assert entry["kept_per_view"] == [1, 2] and entry["gt_objects"] == 20
     evidence = json.loads((tmp_path / "masks_evidence.json").read_text())
     assert evidence["summary"]["views_with_masks"] == VIEWS
     assert (

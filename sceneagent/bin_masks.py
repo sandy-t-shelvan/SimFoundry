@@ -56,6 +56,10 @@ MASK_PYDEPS = "/workspace/sf4-smoke/pydeps-masks"
 
 WORKER_TIMEOUT_S = 1800
 ITEM = "SAM masks"
+# Scene 000091 holds 20 YCB objects (paper §4.1). The gate only asks for a mask
+# in every view; the per-view counts beside this number show how far short of
+# one mask per object a view falls.
+GT_OBJECTS = 20
 
 Runner = Callable[..., Any]
 
@@ -168,10 +172,14 @@ def summarize(detections_by_view: dict[str, list[dict[str, Any]]]) -> dict[str, 
         }
         for view, dets in sorted(detections_by_view.items())
     }
+    kept = [v["kept"] for v in per_view.values()] or [0]
     return {
         "views": len(per_view),
         "views_with_masks": sum(1 for v in per_view.values() if v["kept"]),
-        "kept_total": sum(v["kept"] for v in per_view.values()),
+        "kept_total": sum(kept),
+        "kept_per_view_min": min(kept),
+        "kept_per_view_max": max(kept),
+        "gt_objects": GT_OBJECTS,
         "per_view": per_view,
     }
 
@@ -239,7 +247,16 @@ def run_bin_masks(
         summary = summarize(detections)
         evidence["summary"] = summary
         if summary["views"] == VIEWS and summary["views_with_masks"] == VIEWS:
-            entry.update(decision="accept", use_gpu=True, masks=summary["kept_total"])
+            entry.update(
+                decision="accept",
+                use_gpu=True,
+                masks=summary["kept_total"],
+                kept_per_view=[
+                    summary["kept_per_view_min"],
+                    summary["kept_per_view_max"],
+                ],
+                gt_objects=GT_OBJECTS,
+            )
         else:
             entry.update(
                 decision="reject",
