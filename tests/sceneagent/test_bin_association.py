@@ -350,9 +350,10 @@ def test_a_failed_depth_worker_rejects_with_its_last_lines(tmp_path):
     from sceneagent import bin_scale
 
     def runner(argv, **kwargs):
-        assert (
-            argv[0] == bin_scale.DEPTH_PYTHON and kwargs["env"]["HF_HUB_OFFLINE"] == "1"
-        )
+        assert argv[0] == bin_scale.DEPTH_PYTHON
+        # Our own cache: 58301075's root cache holds an incomplete DA3 model.
+        assert kwargs["env"]["HF_HUB_CACHE"] == bin_scale.HF_CACHE
+        assert "HF_HUB_OFFLINE" not in kwargs["env"]
         return SimpleNamespace(
             returncode=1, stdout="", stderr="loading\nNo module named depth_anything_3"
         )

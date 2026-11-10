@@ -412,90 +412,145 @@ def _load(out: Path) -> dict[str, Any]:
     }
 
 
-def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
-    """ICP every meshed object; return placed clouds (splat frame) and per-object records."""
+def measure_fit(
+    out: Path,
+    inputs: dict[str, Any],
+    number: int,
+    glb: Path,
+    target: np.ndarray,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Silhouette, residuals and gate for one placed mesh."""
     images, cameras = inputs["images"], inputs["cameras"]
+    masks = {o["object"]: o["masks"] for o in inputs["association"]["object_list"]}
+    silhouette_cloud = apply_similarity(
+        sample_mesh(glb, SILHOUETTE_POINTS, seed=2),
+        result["scale"],
+        result["rotation"],
+        result["translation"],
+    )
+    world = splat_to_colmap(silhouette_cloud, inputs["transform"], inputs["scale"])
+    rendered, observed = [], []
+    for m in masks.get(number, []):
+        image = images[m["view"]]
+        stack = np.load(out / "masks" / f"{Path(m['view']).stem}.npz")["masks"]
+        rendered.append(
+            render_mask(world, image, cameras[image["camera_id"]], SILHOUETTE_DILATE_PX)
+        )
+        observed.append(stack[m["mask_index"]])
+    silhouette = silhouette_agreement(rendered, observed) if rendered else None
+    residuals = measure_residuals(
+        result, target, None if silhouette is None else silhouette["silhouette"]
+    )
+    gate = accept_alignment(residuals, GATE)
+    return {
+        "residuals": {
+            k: residuals[k]
+            for k in ("normalized_median", "p90", "median", "coverage", "silhouette")
+        },
+        "silhouette_views": None if silhouette is None else silhouette["views"],
+        "gate": gate["decision"],
+        "gate_failed": gate.get("failed"),
+    }
+
+
+def place_one(
+    out: Path,
+    inputs: dict[str, Any],
+    number: int,
+    pose: dict[str, Any],
+    view: str,
+    glb: Path,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """ICP one SAM 3D mesh onto its Gaussians; return its 10,000-point cloud and record."""
     transform, dp_scale = inputs["transform"], inputs["scale"]
     m_per_unit = float(inputs["association"]["unit"]["metres_per_unit"])
-    masks_by_object = {
-        o["object"]: o["masks"] for o in inputs["association"]["object_list"]
+    target = inputs["positions"][inputs["sets"][f"object_{number}"]]
+    source = sample_mesh(glb, ICP_SOURCE_POINTS)
+    starts = {
+        f"sam3d_pose/{camera}/{fix}": pose_to_splat(
+            pose, inputs["images"][view], transform, dp_scale, m_per_unit, matrix, flip
+        )
+        for camera, flip in CAMERA_FLIPS.items()
+        for fix, matrix in FRAME_FIXES.items()
     }
+    starts.update(centred_starts(starts, source, target))
+    prior = next(iter(starts.values()))[0]
+    start_name, result, tried = best_icp(source, target, starts, prior)
+    dense = sample_mesh(glb, POINTS_PER_OBJECT, seed=1)
+    cloud = apply_similarity(
+        dense, result["scale"], result["rotation"], result["translation"]
+    )
+    record: dict[str, Any] = {
+        "object": number,
+        "view": view,
+        "glb": str(glb),
+        "placed": True,
+        "start": start_name,
+        "starts_tried": tried,
+        "pose_scale": round(prior, 5),
+        "scale": result["scale"],
+        "similarity": {
+            "scale": float(result["scale"]),
+            "rotation": np.asarray(result["rotation"]).tolist(),
+            "translation": np.asarray(result["translation"]).tolist(),
+        },
+        "fit_total": tried["best_total"],
+    }
+    record.update(measure_fit(out, inputs, number, glb, target, result))
+    return cloud, record
+
+
+def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
+    """ICP every meshed object; return placed clouds (splat frame) and per-object records."""
     placed: dict[str, np.ndarray] = {}
     records = []
     for obj in inputs["sam3d"].get("objects", []):
         number = obj["object"]
-        record: dict[str, Any] = {"object": number, "view": obj["view"]}
-        records.append(record)
         if not obj.get("ok"):
-            record.update(placed=False, reason="no SAM 3D mesh")
+            records.append(
+                {
+                    "object": number,
+                    "view": obj["view"],
+                    "placed": False,
+                    "reason": "no SAM 3D mesh",
+                }
+            )
             continue
         glb = out / "sam3d" / f"object_{number}.glb"
-        target = inputs["positions"][inputs["sets"][f"object_{number}"]]
-        source = sample_mesh(glb, ICP_SOURCE_POINTS)
-        starts = {
-            f"sam3d_pose/{camera}/{fix}": pose_to_splat(
-                obj["pose"],
-                images[obj["view"]],
-                transform,
-                dp_scale,
-                m_per_unit,
-                matrix,
-                flip,
-            )
-            for camera, flip in CAMERA_FLIPS.items()
-            for fix, matrix in FRAME_FIXES.items()
-        }
-        starts.update(centred_starts(starts, source, target))
-        prior = next(iter(starts.values()))[0]
-        start_name, result, tried = best_icp(source, target, starts, prior)
-        dense = sample_mesh(glb, POINTS_PER_OBJECT, seed=1)
-        cloud = apply_similarity(
-            dense, result["scale"], result["rotation"], result["translation"]
-        )
-        silhouette_cloud = apply_similarity(
-            sample_mesh(glb, SILHOUETTE_POINTS, seed=2),
-            result["scale"],
-            result["rotation"],
-            result["translation"],
-        )
-        world = splat_to_colmap(silhouette_cloud, transform, dp_scale)
-        rendered, observed = [], []
-        for m in masks_by_object.get(number, []):
-            image = images[m["view"]]
-            stack = np.load(out / "masks" / f"{Path(m['view']).stem}.npz")["masks"]
-            rendered.append(
-                render_mask(
-                    world, image, cameras[image["camera_id"]], SILHOUETTE_DILATE_PX
-                )
-            )
-            observed.append(stack[m["mask_index"]])
-        silhouette = silhouette_agreement(rendered, observed) if rendered else None
-        residuals = measure_residuals(
-            result, target, None if silhouette is None else silhouette["silhouette"]
-        )
-        gate = accept_alignment(residuals, GATE)
+        cloud, record = place_one(out, inputs, number, obj["pose"], obj["view"], glb)
         placed[f"object_{number}"] = cloud
-        record.update(
-            placed=True,
-            start=start_name,
-            starts_tried=tried,
-            pose_scale=round(prior, 5),
-            scale=result["scale"],
-            residuals={
-                k: residuals[k]
-                for k in (
-                    "normalized_median",
-                    "p90",
-                    "median",
-                    "coverage",
-                    "silhouette",
-                )
-            },
-            silhouette_views=None if silhouette is None else silhouette["views"],
-            gate=gate["decision"],
-            gate_failed=gate.get("failed"),
-        )
+        records.append(record)
     return {"placed": placed, "objects": records}
+
+
+def score_scene(
+    data: Path, inputs: dict[str, Any], placed: dict[str, np.ndarray], tag: str = ""
+) -> dict[str, Any]:
+    """One camera-based similarity for the scene, then ``score_bin`` against the 20 objects."""
+    scene_dir = data / "scenes" / SCENE
+    scene_gt = json.loads((scene_dir / "scene_gt.json").read_text(encoding="utf-8"))
+    if str(REFERENCE_IMAGE) not in image_keys(scene_gt):
+        raise ValueError(f"image {REFERENCE_IMAGE} is not in scene_gt.json")
+    metric = metric_camera_centers(scene_gt, sorted(inputs["images"]))
+    splat_centers = {
+        name: inputs["scale"]
+        * (inputs["transform"][:, :3] @ c + inputs["transform"][:, 3])
+        for name, c in camera_centers_colmap(inputs["images"]).items()
+    }
+    similarity, alignment = scene_similarity(splat_centers, metric)
+    _, reference = reference_clouds(scene_dir, data / "models_eval", REFERENCE_IMAGE)
+    score = score_bin(placed, reference, similarity)
+    score["alignment"] = alignment
+    score["matcher"] = "Hungarian on symmetric Chamfer"
+    score["delivered_objects"] = len(placed)
+    score["reference_objects"] = len(reference)
+    score["points_per_delivered"] = POINTS_PER_OBJECT
+    score["file_name"] = (
+        f"bin_{SCENE}_score_pts{POINTS_PER_OBJECT}_align-cameras-umeyama"
+        f"_match-hungarian-chamfer{tag}.json"
+    )
+    return score
 
 
 def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
@@ -539,29 +594,7 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
             placed=len(placed),
             gate_accepted=sum(o["gate"] == "accept" for o in placed),
         )
-        scene_dir = data / "scenes" / SCENE
-        scene_gt = json.loads((scene_dir / "scene_gt.json").read_text(encoding="utf-8"))
-        if str(REFERENCE_IMAGE) not in image_keys(scene_gt):
-            raise ValueError(f"image {REFERENCE_IMAGE} is not in scene_gt.json")
-        metric = metric_camera_centers(scene_gt, sorted(inputs["images"]))
-        splat_centers = {
-            name: inputs["scale"]
-            * (inputs["transform"][:, :3] @ c + inputs["transform"][:, 3])
-            for name, c in camera_centers_colmap(inputs["images"]).items()
-        }
-        similarity, alignment = scene_similarity(splat_centers, metric)
-        _, reference = reference_clouds(
-            scene_dir, data / "models_eval", REFERENCE_IMAGE
-        )
-        score = score_bin(placement["placed"], reference, similarity)
-        score["alignment"] = alignment
-        score["matcher"] = "Hungarian on symmetric Chamfer"
-        score["delivered_objects"] = len(placement["placed"])
-        score["points_per_delivered"] = POINTS_PER_OBJECT
-        score["file_name"] = (
-            f"bin_{SCENE}_score_pts{POINTS_PER_OBJECT}_align-cameras-umeyama"
-            "_match-hungarian-chamfer.json"
-        )
+        score = score_scene(data, inputs, placement["placed"])
         evidence["score"] = score
         (out / score["file_name"]).write_text(
             json.dumps(score, indent=2) + "\n", encoding="utf-8"
@@ -572,7 +605,7 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
             f1_mean=round(score["f1_mean"], 4),
             chamfer_mean_matched_m=score["chamfer_mean_matched_m"],
             delivered=len(placement["placed"]),
-            reference=len(reference),
+            reference=score["reference_objects"],
         )
     except (OSError, ValueError, KeyError, RuntimeError, StopIteration) as exc:
         reason = f"{type(exc).__name__}: {exc}"[-800:]
