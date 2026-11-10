@@ -3,17 +3,18 @@
 """Cut 2 phase 4: SF-8 part 2 (per-object ICP) and the first bin score.
 
 ICP. Each SAM 3D mesh (``sam3d/object_<n>.glb``) is aligned to its object's
-Gaussian centers (``association/objects.npz``) with
-:func:`sceneagent.similarity_icp.trimmed_similarity_icp`, starting from the
-SAM 3D pose. That pose maps the mesh into the chosen view's camera in
+Gaussian centers (``association/objects.npz``) by trimmed similarity ICP
+(:func:`observed_icp`: Umeyama on the closest 70% of pairs, each Gaussian
+paired with its nearest mesh point), starting from the SAM 3D pose. That pose maps the mesh into the chosen view's camera in
 PyTorch3D's convention (+x left, +y up) and metres, so it is composed with
 the flip to OpenCV's camera, the DA3 metres per splat unit
 (``association_evidence.json``), the view's COLMAP pose and the nerfstudio
 dataparser transform, giving one similarity from mesh to splat. The GLB's
 axes relative to that pose's local frame are not documented, so three
 frame fixes (none, and a quarter turn about x either way) are tried, plus
-the plain quarter-turn seeds with no pose; the best trimmed median wins and
-is recorded. The silhouette is the mean Jaccard index of each object mask
+the plain quarter-turn seeds with no pose; the lowest two-way distance
+(:func:`fit_score`) wins and is recorded, with each pose start's score
+before and after ICP. The silhouette is the mean Jaccard index of each object mask
 and the placed mesh's samples projected into that view, dilated by
 ``SILHOUETTE_DILATE_PX``; that rendering is ours. Residuals go through the
 unchanged ``ours_iteration_1`` gate, whose decision is recorded and does not
@@ -61,9 +62,10 @@ from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE
 from sceneagent.similarity_icp import (
     TRIM_KEEP,
     apply_similarity,
+    initial_similarity,
     measure_residuals,
+    rotation_seeds,
     silhouette_agreement,
-    trimmed_similarity_icp,
     umeyama,
 )
 
@@ -142,33 +144,126 @@ def sample_mesh(path: Path, n: int, seed: int = 0) -> np.ndarray:
     return np.asarray(points, dtype=float)
 
 
+def _nearest_to(points: np.ndarray, cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    from scipy.spatial import cKDTree
+
+    distance, index = cKDTree(cloud).query(points, k=1)
+    return np.asarray(distance, dtype=float), np.asarray(index, dtype=np.int64)
+
+
+def observed_icp(
+    source: np.ndarray,
+    target: np.ndarray,
+    start: tuple[float, np.ndarray, np.ndarray],
+    iterations: int = 30,
+    keep: float = TRIM_KEEP,
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """Trimmed similarity ICP that pairs each observed point with the mesh.
+
+    The Gaussians cover only the sides of an object the views saw, so every
+    target point should lie on the mesh but most mesh points have no target
+    nearby. Pairing mesh to target (``trimmed_similarity_icp``'s direction)
+    then pulls the whole mesh onto the seen side and rewards shrinking it:
+    the first bin run collapsed two objects to scale 0 and blew others up.
+    Here each target point takes its nearest mesh point, the closest
+    ``keep`` fraction of pairs is kept, and Umeyama refits. That direction
+    is ours; the paper does not state one.
+    """
+    scale, rotation, translation = start
+    count = max(3, round(keep * len(target)))
+    for _ in range(int(iterations)):
+        moved = apply_similarity(source, scale, rotation, translation)
+        distance, index = _nearest_to(target, moved)
+        chosen = np.argsort(distance)[:count]
+        scale, rotation, translation = umeyama(source[index[chosen]], target[chosen])
+    return float(scale), rotation, translation
+
+
+def fit_score(
+    source: np.ndarray,
+    target: np.ndarray,
+    similarity: tuple[float, np.ndarray, np.ndarray],
+) -> dict[str, float]:
+    """Both directions, so neither a shrunken nor a swollen mesh scores well.
+
+    ``observed`` is the median distance from each Gaussian to the mesh;
+    ``visible`` is the median over the mesh points nearest the Gaussians
+    (the closest ``TRIM_KEEP`` fraction, since the far side was never seen).
+    """
+    moved = apply_similarity(source, *similarity)
+    to_mesh, _ = _nearest_to(target, moved)
+    to_target, _ = _nearest_to(moved, target)
+    visible = np.sort(to_target)[: max(3, round(TRIM_KEEP * len(to_target)))]
+    observed = float(np.median(to_mesh))
+    return {
+        "observed": observed,
+        "visible": float(np.median(visible)),
+        "total": observed + float(np.median(visible)),
+    }
+
+
+def residual_input(
+    source: np.ndarray,
+    target: np.ndarray,
+    similarity: tuple[float, np.ndarray, np.ndarray],
+) -> dict[str, Any]:
+    """The fields ``measure_residuals`` reads, as ``trimmed_similarity_icp`` returns them."""
+    scale, rotation, translation = similarity
+    moved = apply_similarity(source, scale, rotation, translation)
+    distance, index = _nearest_to(moved, target)
+    chosen = np.argsort(distance)[: max(3, round(TRIM_KEEP * len(source)))]
+    return {
+        "scale": scale,
+        "rotation": rotation,
+        "translation": translation,
+        "distance": distance,
+        "inlier_index": chosen,
+        "target_index": index,
+        "inlier_distance": distance[chosen],
+    }
+
+
+def seed_starts(
+    source: np.ndarray, target: np.ndarray
+) -> dict[str, tuple[float, np.ndarray, np.ndarray]]:
+    """The pose-free quarter-turn seeds, centred on the target at its RMS size."""
+    scale, _, _ = initial_similarity(source, target)
+    starts = {}
+    for k, rotation in enumerate(rotation_seeds()):
+        translation = target.mean(axis=0) - scale * (rotation @ source.mean(axis=0))
+        starts[f"seed/{k}"] = (scale, rotation, translation)
+    return starts
+
+
 def best_icp(
     source: np.ndarray,
     target: np.ndarray,
     starts: dict[str, tuple[float, np.ndarray, np.ndarray]],
-) -> tuple[str, dict[str, Any], dict[str, float]]:
-    """Run ICP from each start and from the pose-free seeds; keep the lowest trimmed median."""
-    tried: dict[str, float] = {}
-    best: tuple[str, dict[str, Any]] | None = None
-    runs = [(name, start) for name, start in starts.items()] + [("seeds", None)]
-    for name, start in runs:
-        if start is None:
-            result = trimmed_similarity_icp(source, target)
-        else:
-            scale, rotation, translation = start
-            result = trimmed_similarity_icp(
-                source,
-                target,
-                initial_rotation=rotation,
-                initial_scale=scale,
-                initial_translation=translation,
-            )
-        score = float(np.median(result["inlier_distance"]))
-        tried[name] = score
-        if best is None or score < float(np.median(best[1]["inlier_distance"])):
-            best = (name, result)
-    assert best is not None
-    return best[0], best[1], tried
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """ICP from each pose start and each seed; keep the lowest two-way score.
+
+    Returns the winning start's name, the residual input for
+    ``measure_residuals`` and, per pose start, its score before and after ICP.
+    """
+    tried: dict[str, Any] = {}
+    best: tuple[str, tuple[float, np.ndarray, np.ndarray], float] | None = None
+    for name, start in {**starts, **seed_starts(source, target)}.items():
+        try:
+            fitted = observed_icp(source, target, start)
+        except ValueError:  # every pair on one mesh point: Umeyama has no spread
+            continue
+        score = fit_score(source, target, fitted)
+        if not name.startswith("seed/"):
+            tried[name] = {
+                "before": round(fit_score(source, target, start)["total"], 5),
+                "after": round(score["total"], 5),
+            }
+        if best is None or score["total"] < best[2]:
+            best = (name, fitted, score["total"])
+    if best is None:
+        raise RuntimeError("ICP found no fit from any start")
+    tried["best_total"] = round(best[2], 5)
+    return best[0], residual_input(source, target, best[1]), tried
 
 
 def render_mask(
@@ -330,7 +425,8 @@ def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
         record.update(
             placed=True,
             start=start_name,
-            starts_tried={k: round(v, 5) for k, v in tried.items()},
+            starts_tried=tried,
+            pose_scale=round(starts["sam3d_pose/none"][0], 5),
             scale=result["scale"],
             residuals={
                 k: residuals[k]

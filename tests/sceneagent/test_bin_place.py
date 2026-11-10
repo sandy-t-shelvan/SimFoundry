@@ -92,16 +92,41 @@ def test_scene_similarity_recovers_a_known_similarity():
     assert info["cameras"] == 13 and info["camera_rms_m"] < 1e-9
 
 
-def test_icp_from_a_near_start_beats_the_seeds_and_says_so():
+def test_icp_from_a_near_start_recovers_the_similarity_and_records_it():
     rng = np.random.default_rng(11)
     source = rng.uniform(-0.5, 0.5, size=(800, 3)) * np.array([1.0, 0.4, 0.2])
     rotation = _random_rotation(rng)
     target = apply_similarity(source, 2.0, rotation, np.array([1.0, 2.0, 3.0]))
     start = (1.9, rotation, np.array([1.02, 2.0, 3.0]))
     name, result, tried = bin_place.best_icp(source, target, {"sam3d_pose/none": start})
-    assert name == "sam3d_pose/none"
     assert result["scale"] == pytest.approx(2.0, rel=1e-3)
-    assert set(tried) == {"sam3d_pose/none", "seeds"}
+    assert tried["sam3d_pose/none"]["after"] < tried["sam3d_pose/none"]["before"]
+    assert tried["best_total"] < 1e-6
+    assert name in ("sam3d_pose/none",) or name.startswith("seed/")
+
+
+def test_a_partly_seen_object_keeps_its_size():
+    # Only the +x half of a sphere is observed, as a front shell would be.
+    # Pairing mesh to observation shrank such meshes in the first bin run;
+    # pairing observation to mesh keeps the scale.
+    rng = np.random.default_rng(13)
+    sphere = rng.normal(size=(3000, 3))
+    sphere /= np.linalg.norm(sphere, axis=1, keepdims=True)
+    target = 0.5 * sphere[sphere[:, 0] > 0.2] + np.array([0.0, 0.0, 2.0])
+    start = (0.4, np.eye(3), np.array([0.02, 0.0, 2.0]))
+    fitted = bin_place.observed_icp(sphere, target, start)
+    assert fitted[0] == pytest.approx(0.5, rel=0.05)
+
+
+def test_fit_score_penalises_a_shrunken_mesh():
+    rng = np.random.default_rng(17)
+    mesh = rng.uniform(-0.5, 0.5, size=(2000, 3))
+    target = mesh[mesh[:, 0] > 0]
+    right = bin_place.fit_score(mesh, target, (1.0, np.eye(3), np.zeros(3)))
+    shrunk = bin_place.fit_score(
+        mesh, target, (0.01, np.eye(3), np.array([0.25, 0, 0]))
+    )
+    assert right["total"] < shrunk["total"]
 
 
 def test_render_mask_projects_and_dilates():
