@@ -27,11 +27,11 @@ from typing import Any
 
 import numpy as np
 
-# The da3 env on 59601312 (probe run 42714221807): torch 2.7.0+cu128, with
-# DA3METRIC-LARGE in the root Hugging Face cache and the Depth-Anything-3
-# checkout in /root/stack2, which is read, never written.
-DEPTH_PYTHON = "/root/miniforge3/envs/da3/bin/python3"
-DA3_SRC = "/root/stack2/Depth-Anything-3/src"
+# The sa env on 58301075 (probe run 42908974589) imports depth_anything_3 from
+# the checkout in /workspace/src, which is read, never written. DA3METRIC-LARGE
+# is in the root Hugging Face cache.
+DEPTH_PYTHON = "/root/.local/share/mamba/envs/sa/bin/python3"
+DA3_SRC = "/workspace/src/depth-anything-3/src"
 DA3_MODEL = "depth-anything/DA3METRIC-LARGE"
 DA3_FOCAL_DIVISOR = 300.0
 # Midpoint of the paper's 0.90-0.93 m per reconstruction unit (kitchen).

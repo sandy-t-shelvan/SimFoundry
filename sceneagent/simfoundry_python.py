@@ -15,7 +15,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-SIMFOUNDRY_PYTHON = "/root/miniforge3/envs/simfoundry/bin/python3"
+# Instance 58301075 has no simfoundry env. Its mamba env ``sa`` imports numpy,
+# scipy, trimesh and pillow (probe runs 42690238597 and 42908214934).
+SIMFOUNDRY_PYTHON = "/root/.local/share/mamba/envs/sa/bin/python3"
 
 
 class PinnedInterpreterMissing(RuntimeError):

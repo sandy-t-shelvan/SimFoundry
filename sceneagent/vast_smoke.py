@@ -79,10 +79,11 @@ ALLOWED_INSTANCE_ID = 58301075
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
 REMOTE_PYTHON = SIMFOUNDRY_PYTHON
-# COLMAP 3.11.1 with CUDA on 59601312 (probe run 42713577064). Placed after the
-# interpreter's bin on PATH, before everything else.
-REMOTE_COLMAP_BIN = "/usr/local/bin"
-# py7zr goes here rather than into the shared simfoundry env.
+# COLMAP 3.11.1 with CUDA on 58301075 (probe run 42908214934); /usr/bin/colmap
+# there is 3.6 without CUDA. Placed after the interpreter's bin on PATH, before
+# everything else.
+REMOTE_COLMAP_BIN = "/opt/colmap-cuda/bin"
+# py7zr goes here rather than into the shared ``sa`` env.
 REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"

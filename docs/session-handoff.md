@@ -13,25 +13,25 @@ box. The plan is [`cut2-plan.md`](cut2-plan.md). Updated 2026-11-10 (after PRs #
 | 3. Association and grouping | **Done** (PR #41, [run 42759126731](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42759126731)). 94 masks → 25 objects (GT 20), 15 seen in ≥ 2 views. Lengths are in the paper's 0.915 m unit via a Depth Anything 3 scale (0.201 m per splat unit; GT cameras say 0.206, check only). Per-object Gaussian indices: `/workspace/sf4-smoke/bin/association/objects.npz`. |
 | 4. Meshes and first score | **First score written** (PR #42). SAM 3D meshed all 25 objects ([run 42760087159](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42760087159)). ICP plus one camera-based scene similarity: **F1@1cm 0.058, matched Chamfer 0.13 m** ([run 42762718646](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42762718646), `docs/results/`). Open: the SAM 3D pose starts ~3.7 splat units off, so seeds win 20 of 25 fits. |
 
-## The GPU box: 59601312
+## The GPU box: 58301075
 
-RTX 4090 24 GB, 128 cores, 503 GB RAM, 600 GB disk (about 314 GB free), Ubuntu 24.04, image
-`nvidia/cuda:13.2.0-devel-ubuntu24.04`. 58301075 is stopped, its disk kept, and not used.
+RTX 4090 24 GB, 128 cores, 503 GB RAM, Ubuntu 20.04, driver 595.99, about 170 GB free.
+59601312 was deleted on 2026-11-10; 58301075 is the box again, with the layout it had on 2026-11-08.
 
-| Need | Where on 59601312 (probe 42713577064, 42714221807) |
+| Need | Where on 58301075 (probes 42908214934, 42908974589) |
 |---|---|
-| Pinned interpreter | `/root/miniforge3/envs/simfoundry/bin/python3` (Python 3.11, numpy, scipy, trimesh, pillow) |
-| COLMAP 3.11.1 with CUDA | `/usr/local/bin/colmap` (`REMOTE_COLMAP_BIN`) |
-| nerfstudio 1.1.5, gsplat 1.5.3 | `/root/miniforge3/envs/nerfstudio_simfoundry/bin`, torch 2.7.1+cu128, `CUDA_HOME=/usr/local/cuda-12.8` |
-| GroundingDINO, segment_anything | `/root/miniforge3/envs/groundingdino` (torch 2.5.1+cu124), code in `/root/SimFoundry/deps/GroundingDINO` |
-| SAM vit_h, GroundingDINO weights | `/root/SimFoundry/checkpoints/` (vit_h SHA-256 checked, never deleted) |
+| Pinned interpreter | mamba env `sa`: `/root/.local/share/mamba/envs/sa/bin/python3` (numpy, scipy, trimesh, pillow; torch 2.14.1+cu130) |
+| COLMAP 3.11.1 with CUDA | `/opt/colmap-cuda/bin/colmap` (`REMOTE_COLMAP_BIN`); `/usr/bin/colmap` is 3.6 without CUDA |
+| nerfstudio 1.1.4, gsplat 1.0.0 | `/root/.local/share/mamba/envs/nerf/bin`, torch 2.1.2+cu121, `CUDA_HOME=/usr/local/cuda-12.1` |
+| GroundingDINO | mamba env `gsam2` (torch 2.14.1+cu130), code and weights in `/root/SceneagentX/third_party/Grounded-SAM-2`, whose root must be on `PYTHONPATH` |
+| SAM vit_h | `/workspace/models/sam/sam_vit_h_4b8939.pth` (SHA-256 checked); `segment-anything` installed into `/workspace/sf4-smoke/pydeps-masks` when missing |
 | py7zr | `/workspace/sf4-smoke/pydeps` (`--target`; on `PYTHONPATH` only for `BIN_PIPELINES`) |
-| Depth Anything 3 (metric) | `/root/miniforge3/envs/da3` (torch 2.7.0+cu128), `DA3METRIC-LARGE` in the root HF cache, code from `/root/stack2/Depth-Anything-3/src` (read only); run offline by `bin_scale` |
-| SAM 3D Objects | `/root/miniforge3/envs/sam3d-objects` (torch 2.5.1+cu121), code and `checkpoints/hf/pipeline.yaml` in `/root/software/sam-3d-objects` (read only); needs `CONDA_PREFIX` set; MoGe cached in `/workspace/sf4-smoke/hf-cache` |
-| Also present | COLMAP 4.1.1 with CUDA at `/opt/colmap-4.1.1/bin/colmap` (has `global_mapper`) |
+| Depth Anything 3 (metric) | the `sa` env, code from `/workspace/src/depth-anything-3/src` (read only), `DA3METRIC-LARGE` in the root HF cache; run offline by `bin_scale` |
+| SAM 3D Objects | `/opt/conda/envs/sam3d10` (pytorch3d 0.7.8, torch 2.5.1+cu121), code and `checkpoints/hf/pipeline.yaml` in `/root/sam-3d-objects` (read only); needs `CONDA_PREFIX` set. The `sam3d` env lacks pytorch3d |
+| Also present | COLMAP 4.1.1 with CUDA at `/root/.local/share/mamba/envs/nerf/bin/colmap` (has `global_mapper`) |
 
-`/root/SimFoundry` is someone else's checkout on the box: read from it, never write. Our runs write only
-under `/workspace/sf4-smoke` and `/workspace/data/gc6d`.
+`/root/SceneagentX` and `/root/sam-3d-objects` belong to someone else's setup on the box: read from them,
+never write. Our runs write only under `/workspace/sf4-smoke` and `/workspace/data/gc6d`.
 
 ## How GPU and SSH work (PR #37, merged 2026-11-10)
 
