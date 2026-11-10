@@ -92,7 +92,11 @@ Canvas rows: "Visual review" (agent lane), "Orchestrator", and the section 3.1 "
 The paper's §3.4 in full, on every bin object. Nothing in this phase changes `fitted_splat` or the mlp-physics-prior files.
 
 **The prior is Sandeep's, used as it is.** It lives in [`sandy-t-shelvan/physics-prior-mlp`](https://github.com/sandy-t-shelvan/physics-prior-mlp) and is pinned by commit (`b052009` on 2026-11-10). Its two notes are `paper/physics_prior_mlp.pdf` and `paper/mlp_physx_physgaussian.pdf` ("Using the MLP prior with PhysX and PhysGaussian").
-- **Checkpoint:** `data/mlp/physics_prior_splat.npz`, epoch 10 of a 14-epoch run.
+- **Checkpoint (the model):** [`data/mlp/physics_prior_splat.npz`](https://github.com/sandy-t-shelvan/physics-prior-mlp/blob/b052009284d7794fc38fb8d158d5eb5c9fb1a7cb/data/mlp/physics_prior_splat.npz), epoch 10 of a 14-epoch run.
+  - 260,290 bytes, SHA-256 `7d737d52e82e1363efa7dbdb0dd1986b6f9d5d3461829bac9420802cfc09c125`.
+  - Layers: `w1` 912×32, `w2` 32×32, `w_out` 32×33 (float64), with the 10 material, 6 body and 8 collision names stored inside.
+  - Runs download it from that commit and refuse it if the hash differs, the same check the SAM vit_h weights get. It is not copied into this repo.
+  - `data/mlp/train_report_splat.json` is the run's scores, not the model: `epochs_ran` 14, `checkpoint_epoch` 10, `n_fitted` 3736.
 - **Training data:** 3736 fitted GSO and ABO objects (YCB 0), labelled by `gemini-3.8-flash` as the paper does.
 - **Test scores (n = 323):** material accuracy 0.889, body 0.991, collision 0.768.
 
