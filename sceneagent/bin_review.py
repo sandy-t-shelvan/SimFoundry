@@ -426,6 +426,12 @@ def run_bin_review(
         inputs = bin_place._load(out)
         placement = bin_place.place_objects(out, inputs)
         clouds: dict[str, np.ndarray] = dict(placement["placed"])
+        # The same placement scored before any retry, so the retries' own
+        # effect is the difference between the two files.
+        before = bin_place.score_scene(data, inputs, clouds)
+        evidence["score_before_review"] = {
+            k: before[k] for k in ("f1_mean", "chamfer_mean_matched_m", "matches")
+        }
         records = {r["object"]: r for r in placement["objects"] if r.get("placed")}
         detections = inputs["detections"]
         area = {
@@ -550,6 +556,8 @@ def run_bin_review(
             use_gpu=False,
             f1_mean=round(score["f1_mean"], 4),
             chamfer_mean_matched_m=score["chamfer_mean_matched_m"],
+            f1_before_review=round(before["f1_mean"], 4),
+            chamfer_before_review_m=before["chamfer_mean_matched_m"],
             delivered=len(clouds),
         )
         with zipfile.ZipFile(
