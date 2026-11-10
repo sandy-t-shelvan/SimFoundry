@@ -3,7 +3,7 @@
 
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
-The only instance this module will touch is ``59601312``. It may show that
+The only instance this module will touch is ``58301075``. It may show that
 instance when it is already running. It does not start or stop an instance.
 ``workflow_dispatch``, a label, and a request-file trigger all refuse a
 stopped, starting, or unknown instance, and they send no state PUT. Starting
@@ -75,14 +75,15 @@ from typing import Any, TypedDict
 from sceneagent.simfoundry_python import SIMFOUNDRY_PYTHON
 
 API_ORIGIN = "https://console.vast.ai"
-ALLOWED_INSTANCE_ID = 59601312
+ALLOWED_INSTANCE_ID = 58301075
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
 REMOTE_PYTHON = SIMFOUNDRY_PYTHON
-# COLMAP 3.11.1 with CUDA on 59601312 (probe run 42713577064). Placed after the
-# interpreter's bin on PATH, before everything else.
-REMOTE_COLMAP_BIN = "/usr/local/bin"
-# py7zr goes here rather than into the shared simfoundry env.
+# COLMAP 3.11.1 with CUDA on 58301075 (probe run 42908214934); /usr/bin/colmap
+# there is 3.6 without CUDA. Placed after the interpreter's bin on PATH, before
+# everything else.
+REMOTE_COLMAP_BIN = "/opt/colmap-cuda/bin"
+# py7zr goes here rather than into the shared ``sa`` env.
 REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
@@ -207,7 +208,13 @@ print(" ".join(v))' 2>&1 | tail -1)"; done
 section phase2_packages; for py in /opt/conda/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3; do [ -x "$py" ] || continue; echo "$py:"; timeout 120 "$py" -m pip list 2>/dev/null | grep -iE '^(nerfstudio|gsplat|groundingdino|segment|sam-2|sam2|transformers|supervision|torch |opencv)' ; ls "$(dirname "$py")" 2>/dev/null | grep -E '^ns-(train|eval|export|process-data)$' | tr '\n' ' '; echo; done
 section checkpoints; find -L /root/SceneagentX/third_party /root/.cache/huggingface/hub /root/.cache/torch /workspace/models /root/sam-3d-objects/checkpoints /root/SimFoundry/checkpoints /root/miniforge3/envs/groundingdino -maxdepth 4 \( -name '*.pth' -o -name '*.pt' -o -name '*.safetensors' -o -name '*.ckpt' \) -size +1M 2>/dev/null | public | head -60
 section third_party; ls /root/SceneagentX/third_party /root/.cache/huggingface/hub 2>&1 | public | head -60
-section sam3d; S=/root/software/sam-3d-objects; ls "$S" "$S/notebook" 2>&1 | public | head -60; find -L "$S/checkpoints" /root/.cache/huggingface/hub/models--facebook--sam-3d-objects -maxdepth 6 -type f 2>/dev/null | public | head -40; P=/root/miniforge3/envs/sam3d-objects/bin/python3; timeout 120 "$P" -m pip list 2>/dev/null | grep -iE '^(sam3d|sam-3d|pytorch3d|kaolin|gsplat|utils3d|moge|open3d|trimesh|spconv|xformers|flash)' ; (cd "$S/notebook" 2>/dev/null && timeout 300 "$P" -c 'import inference, inspect; print("inference import ok"); print([n for n in dir(inference) if not n.startswith("_")]); print(inspect.signature(inference.Inference.__init__)); print(inspect.signature(inference.Inference.__call__))' 2>&1 | public | tail -8)
+section sam3d; for S in /root/software/sam-3d-objects /root/sam-3d-objects /root/SceneagentX/third_party/sam-3d-objects; do [ -d "$S" ] || continue; echo "root $S:"; ls "$S" "$S/notebook" 2>&1 | public | head -40; done; find -L /root/.cache/huggingface/hub/models--facebook--sam-3d-objects -maxdepth 6 -type f 2>/dev/null | public | head -40
+# Every SAM 3D interpreter against every checkout's notebook: which pair imports.
+section sam3d_import; for P in /root/miniforge3/envs/sam3d-objects/bin/python3 /opt/conda/envs/sam3d/bin/python3 /opt/conda/envs/sam3d10/bin/python3; do [ -x "$P" ] || continue; echo "interpreter $P:"; timeout 120 "$P" -m pip list 2>/dev/null | grep -iE '^(sam3d|sam-3d|pytorch3d|kaolin|gsplat|utils3d|moge|open3d|spconv|xformers|flash)'; for S in /root/software/sam-3d-objects /root/sam-3d-objects /root/SceneagentX/third_party/sam-3d-objects; do [ -d "$S/notebook" ] || continue; echo "notebook $S:"; (cd "$S/notebook" && timeout 300 "$P" -c 'import inference, inspect; print("inference import ok"); print(inspect.signature(inference.Inference.__init__))' 2>&1 | public | tail -3); done; done; for S in /root/software/sam-3d-objects /root/sam-3d-objects /root/SceneagentX/third_party/sam-3d-objects; do ls "$S"/checkpoints/*/pipeline.yaml 2>/dev/null; done
+# Depth Anything 3: which interpreter imports it, and any source checkout.
+section da3; for py in /opt/conda/bin/python3 /opt/conda/envs/*/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3; do [ -x "$py" ] || continue; r=$(timeout 120 "$py" -c 'import depth_anything_3 as d; print(list(d.__path__))' 2>/dev/null | tail -1); [ -n "$r" ] && echo "$py: $r"; done; ls -d /root/Depth-Anything-3/src /root/*/Depth-Anything-3/src /root/SceneagentX/third_party/Depth-Anything-3/src /workspace/Depth-Anything-3/src /workspace/*/Depth-Anything-3/src 2>/dev/null | public
+# Grounded-SAM-2's GroundingDINO imports itself as grounding_dino.*, so it needs its checkout root on the path.
+section gdino; G=/root/SceneagentX/third_party/Grounded-SAM-2; P=/root/.local/share/mamba/envs/gsam2/bin/python3; [ -x "$P" ] && (cd /tmp && PYTHONPATH="$G:/workspace/sf4-smoke/pydeps-gsam2" timeout 300 "$P" -c 'from groundingdino.util.inference import load_model; print("gdino import ok"); import segment_anything; print("segment_anything ok")' 2>&1 | public | tail -2)
 """
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
 PY7ZR_PIN = "py7zr==1.1.4"
@@ -255,7 +262,7 @@ RequestFn = Callable[..., tuple[int, dict[str, Any]]]
 
 
 class InstanceNotApproved(ValueError):
-    """The call is outside the SF-4 allowlist for instance 59601312."""
+    """The call is outside the SF-4 allowlist for instance 58301075."""
 
 
 class SmokeError(RuntimeError):
@@ -263,7 +270,7 @@ class SmokeError(RuntimeError):
 
 
 def parse_instance_id(value: object) -> int:
-    """Return 59601312. Any other id, including 58301075, is refused."""
+    """Return 58301075. Any other id, including 59601312, is refused."""
     parsed: int | None
     if isinstance(value, bool):
         parsed = None
@@ -405,7 +412,7 @@ def unwrap_instance(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the instance when it is 59601312 in Texas."""
+    """Return the instance when it is 58301075 in Texas."""
     row = unwrap_instance(payload)
     if row is None:
         raise InstanceNotApproved(
@@ -518,7 +525,7 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
     method = method.upper()
     if method == "GET" and not is_ssh and query == [("owner", "me")] and body is None:
         return
-    # One added read: GET /api/v0/instances/59601312/ssh/ and nothing else.
+    # One added read: GET /api/v0/instances/58301075/ssh/ and nothing else.
     # The id is the constant, not a caller-supplied template. No query, no
     # body, no sub-path, and no other method on this path. No state PUT.
     if (
@@ -2352,7 +2359,7 @@ def load_ssh_key_fingerprints(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    """GET ``/api/v0/instances/59601312/ssh/``. Return count and local fingerprints.
+    """GET ``/api/v0/instances/58301075/ssh/``. Return count and local fingerprints.
 
     This does not detach, and it does not return key material.
     """
@@ -2452,7 +2459,7 @@ def run_smoke(
     commit_sha: str = "",
     pipeline: str = "sceneagent",
 ) -> int:
-    """Run the Fruits smoke on 59601312 when that instance is already running.
+    """Run the Fruits smoke on 58301075 when that instance is already running.
 
     Exit 0 is a GPU accept. Exit 2 is a refusal before the instance is changed.
     Exit 1 is a smoke that ran and did not pass, including a ledger
@@ -2665,7 +2672,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="SceneAgent Fruits GPU smoke on Vast instance 59601312"
+        description="SceneAgent Fruits GPU smoke on Vast instance 58301075"
     )
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--checkout", type=Path, required=True)
