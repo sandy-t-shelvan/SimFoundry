@@ -266,7 +266,7 @@ def test_checkpoint_tools_allow_only_numpy_types_through_torch_load():
 
 
 def test_poses_from_other_images_are_not_reused(tmp_path):
-    # The 59601312 bin evidence of run 42741443604: 313 inputs, 300 registered.
+    # The 58301075 bin evidence of run 42741443604: 313 inputs, 300 registered.
     _passing_bin(tmp_path)
     evidence = json.loads((tmp_path / "bin_evidence.json").read_text())
     evidence["quality_bar"]["inputs"] = 313
@@ -281,3 +281,31 @@ def test_an_old_processed_dir_is_emptied_before_process_data(tmp_path):
     stale.write_bytes(b"fruits")
     bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=FakeNerfstudio())
     assert not stale.exists()
+
+
+def test_the_launcher_runs_on_a_torch_without_a_safe_list(tmp_path):
+    # 58301075's nerf env has torch 2.1.2, which has no add_safe_globals
+    # (run 42909583876 failed its export on that AttributeError).
+    import sys
+
+    (tmp_path / "torch").mkdir()
+    (tmp_path / "torch" / "__init__.py").write_text(
+        "import types\nserialization = types.SimpleNamespace()\n"
+    )
+    scripts = tmp_path / "nerfstudio" / "scripts"
+    scripts.mkdir(parents=True)
+    (tmp_path / "nerfstudio" / "__init__.py").write_text("")
+    (scripts / "__init__.py").write_text("")
+    (scripts / "exporter.py").write_text(
+        "import sys\ndef entrypoint():\n    print('started', sys.argv)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", bin_splat.SAFE_LOAD, "ns-export", "gaussian-splat"],
+        cwd=tmp_path,
+        env={"PYTHONPATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "started ['ns-export', 'gaussian-splat']" in done.stdout
