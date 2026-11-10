@@ -51,6 +51,7 @@ from sceneagent.association import (
     EPS_A,
     EPS_R,
     JACCARD_MIN,
+    centroid_threshold,
     mask_cell_side_px,
     masks_same_object,
 )
@@ -268,7 +269,8 @@ def group_masks(
     """Connected components of ``masks_same_object`` over masks of different views.
 
     Each mask is ``{"view": str, "gaussians": int array}``; empty ones never join.
-    Returns the components (mask positions in ``masks``) and every merged pair.
+    Returns the components (mask positions in ``masks``) and every pair that
+    shares a Gaussian, with whether it passed each cut and merged.
     """
     centroid, extent = {}, {}
     for i, mask in enumerate(masks):
@@ -284,7 +286,7 @@ def group_masks(
             i = parent[i]
         return i
 
-    merged = []
+    pairs = []
     for a, b in combinations(sorted(centroid), 2):
         if masks[a]["view"] == masks[b]["view"]:
             continue
@@ -296,21 +298,25 @@ def group_masks(
         jaccard = common / (set_a.size + set_b.size - common)
         distance = float(np.linalg.norm(centroid[a] - centroid[b]))
         e = min(extent[a], extent[b])
-        if masks_same_object(distance, e, containment, jaccard):
+        same = masks_same_object(distance, e, containment, jaccard)
+        if same:
             parent[root(a)] = root(b)
-            merged.append(
-                {
-                    "masks": [a, b],
-                    "centroid_distance": round(distance, 5),
-                    "e": round(e, 5),
-                    "containment": round(float(containment), 4),
-                    "jaccard": round(float(jaccard), 4),
-                }
-            )
+        pairs.append(
+            {
+                "masks": [a, b],
+                "centroid_distance": round(distance, 5),
+                "centroid_limit": round(centroid_threshold(e), 5),
+                "containment": round(float(containment), 4),
+                "jaccard": round(float(jaccard), 4),
+                "close": distance <= centroid_threshold(e),
+                "overlap": containment >= CONTAINMENT_MIN or jaccard >= JACCARD_MIN,
+                "merged": same,
+            }
+        )
     components: dict[int, list[int]] = {}
     for i in centroid:
         components.setdefault(root(i), []).append(i)
-    return sorted(components.values(), key=lambda c: (-len(c), c)), merged
+    return sorted(components.values(), key=lambda c: (-len(c), c)), pairs
 
 
 def camera_centers_colmap(images: dict[str, dict[str, Any]]) -> dict[str, np.ndarray]:
@@ -417,7 +423,7 @@ def associate(out: Path, data: Path) -> dict[str, Any]:
         stats["kept_per_mask"] = [int(sets[d["mask_index"]].size) for d in kept]
         views[view] = stats
 
-    components, merged = group_masks(masks, positions)
+    components, pairs = group_masks(masks, positions)
     objects = []
     for number, members in enumerate(components):
         union = np.unique(np.concatenate([masks[i]["gaussians"] for i in members]))
@@ -451,8 +457,39 @@ def associate(out: Path, data: Path) -> dict[str, Any]:
         "metres_per_unit": m_per_unit,
         "views": views,
         "masks": masks,
-        "merged_pairs": merged,
+        "pairs": pairs,
+        "merged_pairs": [p for p in pairs if p["merged"]],
         "objects": objects,
+    }
+
+
+def pair_outcomes(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Why overlapping pairs of masks did or did not merge.
+
+    ``too_far`` pairs pass the overlap cut and fail only the centroid one;
+    their distances, against their limits, show whether the absolute
+    0.10-unit gate is what keeps views of one object apart.
+    """
+    too_far = [p for p in pairs if p["overlap"] and not p["close"]]
+    distances = sorted(p["centroid_distance"] for p in too_far)
+    return {
+        "total": len(pairs),
+        "merged": sum(p["merged"] for p in pairs),
+        "too_far": len(too_far),
+        "too_little_overlap": sum(p["close"] and not p["overlap"] for p in pairs),
+        "neither": sum(not p["close"] and not p["overlap"] for p in pairs),
+        "too_far_distance_units": (
+            {
+                "min": distances[0],
+                "median": distances[len(distances) // 2],
+                "max": distances[-1],
+            }
+            if distances
+            else None
+        ),
+        "too_far_limit_units_max": max(
+            (p["centroid_limit"] for p in too_far), default=None
+        ),
     }
 
 
@@ -501,6 +538,7 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
         "masks": len(result["masks"]),
         "masks_without_gaussians": empty,
         "merged_pairs": result["merged_pairs"],
+        "overlapping_pairs": pair_outcomes(result["pairs"]),
         "objects": len(objects),
         "objects_seen_in_2_or_more_views": len(multi),
         "gt_objects": GT_OBJECTS,

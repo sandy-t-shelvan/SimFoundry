@@ -179,8 +179,8 @@ def test_masks_in_one_view_never_merge_directly():
     positions = np.zeros((4, 3))
     shared = np.array([0, 1, 2, 3])
     masks = [{"view": "a", "gaussians": shared}, {"view": "a", "gaussians": shared}]
-    components, merged = ba.group_masks(masks, positions)
-    assert components == [[0], [1]] and merged == []
+    components, pairs = ba.group_masks(masks, positions)
+    assert components == [[0], [1]] and pairs == []
 
 
 def test_metres_per_unit_from_metric_camera_centers():
@@ -228,3 +228,17 @@ def test_missing_splat_is_a_reject_not_a_crash(tmp_path):
     assert ba.run_bin_association(out, data) == 1
     entry = json.loads((out / "ledger.json").read_text())["entries"][-1]
     assert entry["decision"] == "reject" and "splat.ply" in entry["reason"]
+
+
+def test_pair_outcomes_say_which_cut_kept_views_apart():
+    pairs = [
+        {"merged": True, "close": True, "overlap": True, "centroid_distance": 0.01, "centroid_limit": 0.1},
+        {"merged": False, "close": False, "overlap": True, "centroid_distance": 0.3, "centroid_limit": 0.1},
+        {"merged": False, "close": False, "overlap": True, "centroid_distance": 0.2, "centroid_limit": 0.05},
+        {"merged": False, "close": True, "overlap": False, "centroid_distance": 0.02, "centroid_limit": 0.1},
+    ]
+    outcome = ba.pair_outcomes(pairs)
+    assert outcome["merged"] == 1 and outcome["too_far"] == 2
+    assert outcome["too_little_overlap"] == 1 and outcome["neither"] == 0
+    assert outcome["too_far_distance_units"] == {"min": 0.2, "median": 0.3, "max": 0.3}
+    assert outcome["too_far_limit_units_max"] == 0.1
