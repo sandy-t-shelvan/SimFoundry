@@ -125,12 +125,23 @@ PIPELINES = {
         ),
         "GraspClutter6D 000091",
     ),
+    "sam3d": (
+        (
+            "benchmark scene",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+        ),
+        "GraspClutter6D 000091",
+    ),
     "probe": ((), "host inventory"),
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
 # entry), and they are the only ones that may fetch the dataset with py7zr.
-BIN_PIPELINES = frozenset({"bin", "splat", "masks", "association"})
+BIN_PIPELINES = frozenset({"bin", "splat", "masks", "association", "sam3d"})
 
 
 def remote_out(pipeline: str) -> str:
@@ -189,6 +200,7 @@ FETCH_NAMES = (
     "ns_eval.json",
     "masks_evidence.json",
     "association_evidence.json",
+    "sam3d_evidence.json",
     "inventory.txt",
 )
 PUBLIC_FIELDS = (
@@ -624,6 +636,8 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_masks", "--out", out]
     if pipeline == "association":
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_association", "--out", out]
+    if pipeline == "sam3d":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_sam3d", "--out", out]
     if pipeline == "probe":
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline != "run4":
@@ -1899,6 +1913,7 @@ def publish_artifacts(
             "ns_eval.json",
             "masks_evidence.json",
             "association_evidence.json",
+            "sam3d_evidence.json",
             "inventory.txt",
         }:
             continue

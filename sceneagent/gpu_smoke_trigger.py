@@ -30,7 +30,7 @@ DISPATCH_INPUTS = """    inputs:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, probe]
+        options: [run4, bin, splat, masks, association, sam3d, probe]
         default: run4
 """
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -601,7 +601,7 @@ def workflow_safety_findings(text: str) -> list[str]:
     rest = text.replace(DISPATCH_INPUTS, "", 1).replace("inputs.pipeline", "")
     if dispatch != DISPATCH_INPUTS or "inputs:" in rest or "inputs." in rest:
         findings.append(
-            "workflow_dispatch may only take the run4/bin/splat/masks/association/probe pipeline choice"
+            "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/probe pipeline choice"
         )
     if "- Main_duplicate" not in on_block:
         findings.append("request-file push must be limited to Main_duplicate")
