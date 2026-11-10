@@ -110,12 +110,13 @@ PIPELINES = {
         ("benchmark scene", "COLMAP camera poses", "full-scene splat"),
         "GraspClutter6D 000091",
     ),
+    "masks": (("benchmark scene", "SAM masks"), "GraspClutter6D 000091"),
     "probe": ((), "host inventory"),
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
 # entry), and they are the only ones that may fetch the dataset with py7zr.
-BIN_PIPELINES = frozenset({"bin", "splat"})
+BIN_PIPELINES = frozenset({"bin", "splat", "masks"})
 # Read-only host inventory for a new or changed box. Plain shell, so it runs
 # before any SceneAgent environment exists. It never prints the environment
 # (no env/printenv), so no secret can land in the report.
@@ -164,6 +165,7 @@ FETCH_NAMES = (
     "bin_evidence.json",
     "splat_evidence.json",
     "ns_eval.json",
+    "masks_evidence.json",
     "inventory.txt",
 )
 PUBLIC_FIELDS = (
@@ -595,6 +597,8 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_run", "--out", out]
     if pipeline == "splat":
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_splat", "--out", out]
+    if pipeline == "masks":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_masks", "--out", out]
     if pipeline == "probe":
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline != "run4":
@@ -1868,6 +1872,7 @@ def publish_artifacts(
             "bin_evidence.json",
             "splat_evidence.json",
             "ns_eval.json",
+            "masks_evidence.json",
             "inventory.txt",
         }:
             continue

@@ -50,6 +50,8 @@ module = [
     "mujoco.*",
     "sam2",
     "sam2.*",
+    "segment_anything",
+    "segment_anything.*",
     "simple_lama_inpainting",
     "simple_lama_inpainting.*",
     "open_clip",
