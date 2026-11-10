@@ -35,20 +35,37 @@ Not yet separated: how much of the 0.058 → 0.067 gain comes from centred ICP s
 
 **GPU box.** Instance 58301075 again from 2026-11-10 (59601312 was deleted). PR #50 repins the workflow and sets the tool paths from two read-only probes.
 
-### Next cuts
+### Roadmap to the MVP (2026-11-10)
 
-[`docs/cut3-plan.md`](cut3-plan.md) (PR #46) is the plan. In order:
+**MVP definition.** One command takes a captured video to an Isaac Lab scene in which:
+1. every object is segmented, meshed (SAM 3D), placed (ICP) and reviewed by a VLM;
+2. every object carries the paper's full §3.4 physics;
+3. articulated objects have parts, completed hidden geometry and working joints;
+4. deformable objects are soft bodies, and the §3.5 fracture examples run;
+5. the background is completed and oriented;
+6. the scene opens in the light editor with its physics and joints editable;
+7. the bin and the kitchen are scored with the paper's protocols.
 
-| Phase | Points | Done when |
-|---|---|---|
-| A. Bin data quality | 6 | Floaters filtered, grouping fixed, pose chain fixed; bin rescored (PRs #45, #47, #48 carry the code) |
-| B. VLM in the loop (SF-18, SF-19 verdict) | 6 | Reviewer decisions made by a VLM from the drawn views; bin rescored |
-| C. Physics on the bin | 5 | Mass and friction per object; USD export with physics |
-| D. MessyKitchens | 6 | Kitchen capture through the chain; first kitchen score file |
-| E. Videos to sim (stretch) | 5 | Video path with parallel mapping; placed scene per video |
-| F. Policy (stretch) | 8 | Sisters, scripted expert, first episodes |
+Physics and articulation are in the MVP in full, at Sandeep's direction. Jira holds one epic per cut and one ticket per milestone item.
 
-The cut 3 plan's "Decisions for Sandeep" (phase order, the VLM key, MessyKitchens data access, box time) are open on PR #46.
+| Cut | Jira epic | Milestone | Done when | Tickets |
+|---|---|---|---|---|
+| 3 | KAN-33 | **M1** Bin above the paper's baseline | Bin F1@1cm > 6.9%, with a score file per change | SF-30 κ=2 (KAN-36, PR #45), SF-31 container split (KAN-37, PR #47), SF-32 SAM 3D pose rescale (KAN-38, PR #48) |
+| 3 | KAN-33 | **M2** VLM in the loop | Step-runner and reviewer verdicts from `gemini-3.8-flash`; rule choice logged beside each; `vlm_calls` counted; no key in logs | SF-18 (KAN-19), SF-19 VLM verdict (KAN-20), SF-24 part 2 (KAN-25) |
+| 3 | KAN-33 | **M3** Full §3.4 physics | Every bin object has: OpenCLIP + DINOv2 crop features; the MLP prior applied (the existing prior, labelled ours); the equation (2) vote; the VLM audit; 10 materials, 6 bodies, 8 colliders; log mass and density, friction, restitution, rigidity, E and ν from the class; a soft-body flag at deformability ≥ 0.65. The USD stage with the PhysX schema settles in Isaac Lab and MuJoCo, and the inspector report is written by the model. | SF-33 features (KAN-39), SF-34 property set (KAN-40), SF-35 USD export and settle (KAN-41), SF-20 (KAN-21), SF-21 (KAN-22), SF-22 (KAN-23) |
+| 4 | KAN-34 | **M4** Full articulation (Figure 8) | On Mailbox and a capped marker: PartSAM parts; VLM missing-geometry check; CubePart completion appended; Articulate Anything joints and ranges (URDF) from those parts; a joint sweep in Isaac Lab with a VLM verdict; joints in the USD; `joint_pos` and `joint_limits` in the scene state | SF-36 (KAN-42), SF-37 (KAN-43), SF-38 (KAN-44), SF-39 (KAN-45) |
+| 4 | KAN-34 | **M5** Soft bodies and fracture | A deformable object simulates as a soft body. The Warp thin-sheet tear and the Blast ceramic shatter run as authored scenes, with the paper's values labelled as its assumptions. | SF-40 (KAN-46), SF-41 (KAN-47) |
+| 5 | KAN-35 | **M6** Video to sim | PutCupInBowl, PutMarkerInCup, ThrowAwayTrash and Mailbox each yield a settled USD scene, with the background completed and oriented | SF-42 (KAN-48), SF-43 (KAN-49) |
+| 5 | KAN-35 | **M7** Second protocol | MessyKitchens score file (or a decision, if the data is not public) | SF-44 (KAN-50) |
+| 5 | KAN-35 | **M8** MVP acceptance | One command on an unseen video, no hand edits, covering every item of the definition above; a recorded Isaac Lab rollout picks an object and moves a joint; then a tagged release | SF-45 editor panels (KAN-51), SF-46 acceptance run (KAN-52) |
+
+**After the MVP:** 4D (§3.6), sisters and hybrid scenes (§3.8–3.9), Meshy, Unreal, and policy fine-tuning (§3.10).
+
+**Decisions open (PR #46, KAN-33):**
+1. Phase order.
+2. The VLM key: run in the cloud session, or a key on the box.
+3. Whether to retrain the MLP prior on GSO, YCB and ABO as the paper does. That changes the prior files, which stay untouched without Sandeep's yes.
+4. MessyKitchens data access.
 
 ### Cut 1 ticket board
 
@@ -762,7 +779,7 @@ The "Now" cells below are the Fruits-era record. As of 2026-11-10, Cut 2 has bin
 
 Only rows the canvas still marks partial or missing are in this sequence. Done artifacts in section 9.4 stay on disk.
 
-Progress as of 2026-11-10: steps 1–3 are done for the bin. The MessyKitchens half of step 1 is Cut 3 phase D. Step 2 ran on GraspClutter6D `hard/000091` in Cut 2, and step 3 wrote the first bin score file (F1@1cm 0.058, 0.067 after the reviewer in PR #44). Step 4 stands as written. The Cut 2 board under Status has the runs.
+Progress as of 2026-11-10: steps 1–3 are done for the bin. The MessyKitchens half of step 1 is Cut 5 milestone M7 (SF-44, KAN-50). Step 2 ran on GraspClutter6D `hard/000091` in Cut 2, and step 3 wrote the first bin score file (F1@1cm 0.058, 0.067 after the reviewer in PR #44). Step 4 stands as written. The Cut 2 board under Status has the runs.
 
 1. Obtain GraspClutter6D `hard/000091` and the MessyKitchens shared capture. They are not in the repo. Fruits stays the example, off to the side of the score file.
 2. Run the sceneagent capture path on those inputs. Use a full-rate COLMAP invocation. `run_poses` will otherwise stop at 16 frames. SF-5 dc3, when it is run, uses every decoded frame at the native rate on a fresh COLMAP 3.11.1 model ([KAN-5 comment 10314](https://sandeeptssworkspace-35047491.atlassian.net/browse/KAN-5?focusedCommentId=10314)). The stored COLMAP 4.2.1 model stays a prior host artifact. Train splatfacto-big. Mask with SAM on the paper stride. Apply `association.gaussian_belongs`. Build the mesh with SAM 3D. Write ICP residuals. Leave `accept_alignment` undecided unless the caller passes `ours_iteration_1`, and do not edit those four constants to obtain an accept.
