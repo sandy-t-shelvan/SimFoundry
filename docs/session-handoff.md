@@ -13,6 +13,14 @@ box. The plan is [`cut2-plan.md`](cut2-plan.md). Updated 2026-11-10 (after PRs #
 | 3. Association and grouping | **Done** (PR #41, [run 42759126731](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42759126731)). 94 masks → 25 objects (GT 20), 15 seen in ≥ 2 views. Lengths are in the paper's 0.915 m unit via a Depth Anything 3 scale (0.201 m per splat unit; GT cameras say 0.206, check only). Per-object Gaussian indices: `/workspace/sf4-smoke/bin/association/objects.npz`. |
 | 4. Meshes and first score | **First score written** (PR #42). SAM 3D meshed all 25 objects ([run 42760087159](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42760087159)). ICP plus one camera-based scene similarity: **F1@1cm 0.058, matched Chamfer 0.13 m** ([run 42762718646](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42762718646), `docs/results/`). Open: the SAM 3D pose starts ~3.7 splat units off, so seeds win 20 of 25 fits. |
 
+## Living docs: update these as the work goes
+
+Sandeep asked (2026-11-10) that three documents follow every result, not only the cut plans:
+
+1. [`docs/expansion-and-harvard-results.md`](expansion-and-harvard-results.md), the plan of record: the "Cut 2 board" and "Next cuts" under Status.
+2. [`docs/canvases/sceneagent-paper-gaps.canvas.tsx`](canvases/sceneagent-paper-gaps.canvas.tsx): the dated callout and each row's `ticket` field. A status word moves only when its Jira ticket is Accepted (comment 10222).
+3. The paper-map artifact, [SceneAgent Paper Map](https://claude.ai/artifact/4mKRLY3RvCZ2LYuntQfiBx): the "Our code" and "To build" lines per block and the status line under the title.
+
 ## The GPU box: 59601312
 
 RTX 4090 24 GB, 128 cores, 503 GB RAM, 600 GB disk (about 314 GB free), Ubuntu 24.04, image
