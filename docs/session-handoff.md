@@ -97,6 +97,7 @@ Python 3.11 with `requirements-cpu-ci.txt` and `requirements-sceneagent-ci.txt`:
 
 ## Cut 2: what is left
 
-Phases 3 and 4 and SF-19 (phase 5) are the rest of Cut 2's 25 points: the association runner and SF-16
-grouping, the SAM 3D wrapper (SF-29), per-object ICP (SF-8 part 2), the first bin score file, then the
-reviewer that draws views and retries. Cut 3 starts after that score file exists.
+SF-19 is built (PR #44): every object's eleven reviewer views are drawn, a retry is chosen from them and logged, and
+the bin is scored again (F1@1cm 0.067, Chamfer 0.125 m). Open: separate the centred-start and retry gains (the
+reviewer now scores both), and test camera consensus at kappa 2 (PR #45) against the floaters the views show. Both
+need 59601312 running. Cut 3 planning can start from here.
