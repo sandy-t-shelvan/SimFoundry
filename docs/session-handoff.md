@@ -1,7 +1,7 @@
 # Session handoff (Cut 2)
 
 Living status for whoever picks up Cut 2 next, whether a cloud session or a local one with SSH to the GPU
-box. The plan is [`cut2-plan.md`](cut2-plan.md). Updated 2026-11-10.
+box. The plan is [`cut2-plan.md`](cut2-plan.md). Updated 2026-11-10 (after PRs #37, #38 and #39 merged).
 
 ## Where Cut 2 stands
 
@@ -9,7 +9,7 @@ box. The plan is [`cut2-plan.md`](cut2-plan.md). Updated 2026-11-10.
 |---|---|
 | 0. Finish Cut 1 | Done. Cut 1 is in `main` (PR #28). Run4 passed on 59601312: 300/300 registered, 1.10 px. |
 | 1. Benchmark and scorer | Done (PR #33, KAN-31): `bin_benchmark.py`, `gc6d_fetch.py`, `metrics.py`. Scene 000091 is on the box at `/workspace/data/gc6d`. |
-| 2. Poses, splat, masks | **Poses** pass (PR #36 merged): 13/13 views, 0.55 px. **Splat** passes on 59601312 (PR #38): 943,199 Gaussians, held-out PSNR 30.04, SSIM 0.900, LPIPS 0.257. **SF-15 masks** pass 13/13 views (PR #39, draft) but keep only 2–3 masks per view out of 20 objects; coverage fix is the open decision. |
+| 2. Poses, splat, masks | **Done.** Poses (PR #36): 13/13 views, 0.55 px. Splat (PR #38): 943,199 Gaussians, held-out PSNR 30.04, SSIM 0.900, LPIPS 0.257. SF-15 masks (PR #39): 13/13 views, 94 masks (5–11 per view) with a YCB category prompt. |
 | 3. Association and grouping | Not started. `association.py` has every constant from §3.3; the runner over a whole splat is next. |
 | 4. Meshes and first score | Not started. The `sam3d-objects` env is on 59601312. |
 
@@ -64,18 +64,17 @@ A cloud session has no SSH and no GPU. Every GPU step goes through GitHub Action
 The probe's inventory is a public artifact: it lists tools, envs and model files only, never folder
 trees, file contents or the environment. Earlier probe artifacts are kept (Sandeep, 2026-11-10).
 
-## Open PRs
+## PRs
 
-- #31: this plan and handoff (docs).
-- #38: bin splat, base `main`, Cursor approved, CI and GPU run green. Ready to merge.
-- #39 (on #38): SF-15 masks, draft. Needs a choice for coverage: YCB object-name prompts (recommended),
-  lower thresholds, or SAM automatic masks.
+All merged: #37 (GPU route), #38 (splat), #39 (masks), #31 (this plan and handoff). Next work starts
+from `main`.
 
 ## Decisions already made
 
 Bin score is the Cut 2 target. Masks use SAM vit_h. Physics comes from the VLM. `fitted_splat` and the
 `mlp-physics-prior` branch are not touched. The splat export uses a numpy-only safe-globals launcher for
-torch ≥ 2.6 (option B), not a global weights_only switch. One PR per cohesive change; drafts until ready;
+torch ≥ 2.6 (option B), not a global weights_only switch. Masks are prompted with a YCB category
+vocabulary (ours), because GraspClutter6D publishes object ids only. One PR per cohesive change; drafts until ready;
 GPU-touching PRs get a gpu-smoke run on their own branch before merge.
 
 ## How to check locally (same as CI)
@@ -88,5 +87,11 @@ Python 3.11 with `requirements-cpu-ci.txt` and `requirements-sceneagent-ci.txt`:
 
 ## For Sandeep
 
-- Merge #38 when ready; pick the #39 coverage option.
-- Delete merged branches (the session can't), including `claude/instance-58301075` and `claude/hostkey-scan`.
+- Delete merged branches (the session can't): `claude/instance-58301075`, `claude/cut2-bin-splat`,
+  `claude/cut2-bin-masks`, `claude/hostkey-scan`.
+
+## Cut 2: what is left
+
+Phases 3 and 4 and SF-19 (phase 5) are the rest of Cut 2's 25 points: the association runner and SF-16
+grouping, the SAM 3D wrapper (SF-29), per-object ICP (SF-8 part 2), the first bin score file, then the
+reviewer that draws views and retries. Cut 3 starts after that score file exists.
