@@ -12,7 +12,7 @@ exhaustive matcher (13 unordered stills, KAN-4 comment 10311 allows it). The
 reconstruction gate is the repository's: at least ``max(10, ceil(0.8 * 13))``
 = 11 of 13 views registered in one model.
 
-    python -m sceneagent.bin_run --out /workspace/sf4-smoke/run
+    python -m sceneagent.bin_run --out /workspace/sf4-smoke/bin
 """
 
 from __future__ import annotations
@@ -59,6 +59,13 @@ def stage_views(scene_dir: Path, image_dir: Path, ids: list[int]) -> list[str]:
     return names
 
 
+def clear_pose_state(out: Path) -> None:
+    """Remove the staged images, COLMAP database and models from ``out``."""
+    shutil.rmtree(out / "images", ignore_errors=True)
+    shutil.rmtree(out / "sparse", ignore_errors=True)
+    (out / "database.db").unlink(missing_ok=True)
+
+
 def _default_colmap(image_dir: Path, work_dir: Path) -> dict[str, Any]:
     from sceneagent.gpu_headroom import require_gpu_headroom
     from sceneagent.run4 import run_colmap_on_images, run_colmap_step
@@ -101,6 +108,9 @@ def run_bin_poses(
         manifest = fetch(SCENE, data)
         scene_dir = data / "scenes" / SCENE
         ids = view_ids()
+        # A dir another pipeline wrote can hold foreign frames and a COLMAP
+        # database that already has their features; both are inputs here.
+        clear_pose_state(out)
         names = stage_views(scene_dir, out / "images", ids)
         entries.append(
             {
@@ -117,7 +127,13 @@ def run_bin_poses(
         }
         evidence["quality_bar"] = (result.get("gate_document") or {}).get("quality_bar")
         pose: dict[str, Any] = {"item": "COLMAP camera poses", "matcher": MATCHER}
-        if result.get("ok"):
+        inputs = (evidence["quality_bar"] or {}).get("inputs")
+        if result.get("ok") and inputs != len(names):
+            pose.update(
+                decision="reject",
+                reason=f"COLMAP saw {inputs} images, not the {len(names)} bin views",
+            )
+        elif result.get("ok"):
             pose.update(decision="accept", use_gpu=result.get("use_gpu"), frames=names)
         else:
             pose.update(

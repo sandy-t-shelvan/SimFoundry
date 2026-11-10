@@ -11,11 +11,13 @@ from PIL import Image
 from sceneagent.bin_run import MATCHER, run_bin_poses, view_ids
 from sceneagent.colmap_stage import pose_commands
 from sceneagent.vast_smoke import (
+    REMOTE_BIN_OUT,
     REMOTE_OUT,
     REMOTE_REPO,
     build_remote_command,
     build_remote_shell,
     collect_artifact_manifest,
+    remote_out,
 )
 
 SIZES = {1: (1920, 1080), 2: (1920, 1080), 3: (3840, 2160), 0: (1920, 1200)}
@@ -41,6 +43,11 @@ def _fetch(data, wrong_id=None):
     return fetch
 
 
+def _posed(inputs):
+    gate = {"quality_bar": {"inputs": inputs, "pass": True}}
+    return {"ok": True, "use_gpu": True, "reason": None, "gate_document": gate}
+
+
 def test_views_are_one_camera_of_thirteen():
     assert view_ids() == [1, 5, 9, 13, 17, 21, 25, 29, 33, 37, 41, 45, 49]
 
@@ -64,7 +71,7 @@ def test_poses_pass_and_write_plan_ledger_and_evidence(tmp_path):
 
     def colmap(image_dir, work_dir):
         seen["images"] = sorted(p.name for p in image_dir.iterdir())
-        return {"ok": True, "use_gpu": True, "reason": None, "failed_step": None}
+        return _posed(len(seen["images"]))
 
     code = run_bin_poses(
         tmp_path / "run",
@@ -122,10 +129,53 @@ def test_a_view_of_the_wrong_size_is_refused_before_colmap(tmp_path):
     assert "000009.png" in entry["reason"]
 
 
+def test_stray_frames_and_old_colmap_state_never_reach_colmap(tmp_path):
+    # Splat run 42741443604 on 59601312 posed 313 images: run4's 300 Fruits
+    # frames were still in the shared images dir beside the 13 bin views.
+    run = tmp_path / "run"
+    (run / "images").mkdir(parents=True)
+    (run / "images" / "frame_00001.jpg").write_bytes(b"fruits")
+    (run / "sparse" / "0").mkdir(parents=True)
+    (run / "database.db").write_bytes(b"old features")
+    seen = {}
+
+    def colmap(image_dir, work_dir):
+        seen["images"] = sorted(p.name for p in image_dir.iterdir())
+        seen["state"] = (work_dir / "database.db").exists() or (
+            work_dir / "sparse"
+        ).exists()
+        return _posed(13)
+
+    code = run_bin_poses(run, tmp_path / "data", fetch=_fetch(tmp_path / "data"), colmap=colmap)
+    assert code == 0
+    assert seen == {"images": [f"{i:06d}.png" for i in view_ids()], "state": False}
+
+
+def test_a_model_posed_from_other_images_is_rejected(tmp_path):
+    code = run_bin_poses(
+        tmp_path / "run",
+        tmp_path / "data",
+        fetch=_fetch(tmp_path / "data"),
+        colmap=lambda image_dir, work_dir: _posed(313),
+    )
+    assert code == 1
+    pose = json.loads((tmp_path / "run/ledger.json").read_text())["entries"][1]
+    assert pose["decision"] == "reject"
+    assert pose["reason"] == "COLMAP saw 313 images, not the 13 bin views"
+
+
+def test_bin_pipelines_run_in_their_own_dir():
+    assert REMOTE_BIN_OUT != REMOTE_OUT
+    for pipeline in ("bin", "splat", "masks"):
+        assert remote_out(pipeline) == REMOTE_BIN_OUT
+    for pipeline in ("run4", "sceneagent", "probe"):
+        assert remote_out(pipeline) == REMOTE_OUT
+
+
 def test_bin_pipeline_command_and_shell():
-    argv = build_remote_command(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
-    assert argv[1:] == ["-m", "sceneagent.bin_run", "--out", REMOTE_OUT]
-    shell = build_remote_shell(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
+    argv = build_remote_command(REMOTE_REPO, REMOTE_BIN_OUT, pipeline="bin")
+    assert argv[1:] == ["-m", "sceneagent.bin_run", "--out", REMOTE_BIN_OUT]
+    shell = build_remote_shell(REMOTE_REPO, REMOTE_BIN_OUT, pipeline="bin")
     assert "import py7zr" in shell and "py7zr==1.1.4" in shell
     assert "py7zr" not in build_remote_shell(REMOTE_REPO, REMOTE_OUT, pipeline="run4")
 
@@ -173,3 +223,18 @@ def test_bin_manifest_ignores_other_pipelines_entries_in_the_shared_ledger(tmp_p
         run, command=command, instance_id=59601312, pipeline="bin"
     )
     assert manifest["passed"] is False
+
+
+def test_ssh_remote_runs_and_fetches_a_bin_pipeline_in_the_bin_dir(tmp_path):
+    from sceneagent.vast_smoke import SshRemote
+
+    remote = object.__new__(SshRemote)
+    remote.pipeline, remote.commit_sha = "splat", ""
+    seen = {}
+    remote._sync = lambda checkout: None
+    remote._bash = lambda script, timeout_s: seen.setdefault("script", script) and 0
+    remote._fetch = lambda local, pipeline: seen.setdefault("fetch", pipeline)
+    remote.run(tmp_path, tmp_path)
+    assert f"--out {REMOTE_BIN_OUT}" in seen["script"]
+    assert f"{REMOTE_OUT} " not in seen["script"]
+    assert seen["fetch"] == "splat"

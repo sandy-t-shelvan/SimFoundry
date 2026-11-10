@@ -18,7 +18,7 @@ def _passing_bin(out: Path) -> None:
     (out / "sparse" / "0" / "cameras.bin").write_bytes(b"x")
     (out / "images").mkdir()
     (out / "bin_evidence.json").write_text(
-        json.dumps({"quality_bar": {"model": "0", "pass": True}})
+        json.dumps({"quality_bar": {"model": "0", "inputs": 13, "pass": True}})
     )
     (out / "ledger.json").write_text(
         json.dumps(
@@ -263,3 +263,21 @@ def test_checkpoint_tools_allow_only_numpy_types_through_torch_load():
     assert "add_safe_globals" in code
     assert "weights_only=False" not in code
     assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" not in code
+
+
+def test_poses_from_other_images_are_not_reused(tmp_path):
+    # The 59601312 bin evidence of run 42741443604: 313 inputs, 300 registered.
+    _passing_bin(tmp_path)
+    evidence = json.loads((tmp_path / "bin_evidence.json").read_text())
+    evidence["quality_bar"]["inputs"] = 313
+    (tmp_path / "bin_evidence.json").write_text(json.dumps(evidence))
+    assert bin_splat.poses_ready(tmp_path) is None
+
+
+def test_an_old_processed_dir_is_emptied_before_process_data(tmp_path):
+    _passing_bin(tmp_path)
+    stale = tmp_path / "splat" / "processed" / "images" / "frame_00300.jpg"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"fruits")
+    bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=FakeNerfstudio())
+    assert not stale.exists()

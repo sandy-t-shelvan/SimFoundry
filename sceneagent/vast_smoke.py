@@ -87,6 +87,10 @@ REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
+# The GraspClutter6D pipelines' own run dir. Sharing REMOTE_OUT with run4 let
+# the bin's COLMAP pose run4's 300 Fruits frames beside its 13 views (bin
+# evidence of the 59601312 splat run 42741443604: 313 inputs, 300 registered).
+REMOTE_BIN_OUT = "/workspace/sf4-smoke/bin"
 BOOT_TIMEOUT_S = 600.0
 # Room for run4.STEP_TIMEOUT_S["mapper"] (5400 s) inside the 120 min job.
 REMOTE_TIMEOUT_S = 6600.0
@@ -113,10 +117,15 @@ PIPELINES = {
     "masks": (("benchmark scene", "SAM masks"), "GraspClutter6D 000091"),
     "probe": ((), "host inventory"),
 }
-# GraspClutter6D pipelines. They share one ledger in REMOTE_OUT, so each is
+# GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
 # entry), and they are the only ones that may fetch the dataset with py7zr.
 BIN_PIPELINES = frozenset({"bin", "splat", "masks"})
+
+
+def remote_out(pipeline: str) -> str:
+    """The run dir on the box: the bin pipelines' own, else run4's."""
+    return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
 # Read-only host inventory for a new or changed box. Plain shell, so it runs
 # before any SceneAgent environment exists. It never prints the environment
 # (no env/printenv), so no secret can land in the report.
@@ -2095,13 +2104,13 @@ class SshRemote:
         code = self._bash(
             build_remote_shell(
                 REMOTE_REPO,
-                REMOTE_OUT,
+                remote_out(pipeline),
                 pipeline=pipeline,
                 commit_sha=commit_sha,
             ),
             timeout_s=REMOTE_TIMEOUT_S,
         )
-        self._fetch(local_run)
+        self._fetch(local_run, pipeline)
         return code
 
     def _probe_ssh(self) -> tuple[int, str]:
@@ -2195,7 +2204,7 @@ class SshRemote:
             return last_code
         return last_code
 
-    def _fetch(self, local_run: Path) -> None:
+    def _fetch(self, local_run: Path, pipeline: str = "sceneagent") -> None:
         argv = [
             *ssh_base_argv(str(self.private), self.known_hosts, self.port),
             f"root@{self.host}",
@@ -2206,7 +2215,7 @@ class SshRemote:
             completed = subprocess.run(
                 argv,
                 check=False,
-                input=build_fetch_script(REMOTE_OUT).encode("utf-8"),
+                input=build_fetch_script(remote_out(pipeline)).encode("utf-8"),
                 capture_output=True,
                 env=child_env(),
                 timeout=180,
@@ -2500,7 +2509,7 @@ def run_smoke(
                 local_run,
                 command=build_remote_command(
                     REMOTE_REPO,
-                    REMOTE_OUT,
+                    remote_out(pipeline),
                     pipeline=pipeline,
                     commit_sha=commit_sha,
                 ),
