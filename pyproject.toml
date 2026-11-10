@@ -52,6 +52,8 @@ module = [
     "sam2.*",
     "segment_anything",
     "segment_anything.*",
+    "depth_anything_3",
+    "depth_anything_3.*",
     "simple_lama_inpainting",
     "simple_lama_inpainting.*",
     "open_clip",
