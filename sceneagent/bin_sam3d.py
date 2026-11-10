@@ -41,6 +41,7 @@ CONFIG_CANDIDATES = (
     f"{SAM3D_ROOT}/checkpoints/hf-download/checkpoints/pipeline.yaml",
 )
 HF_SNAPSHOTS = "/root/.cache/huggingface/hub/models--facebook--sam-3d-objects/snapshots"
+HF_CACHE = "/workspace/sf4-smoke/hf-cache"
 SEED = 42
 ITEM = "SAM 3D meshes"
 REQUIRED = (
@@ -125,7 +126,10 @@ def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
     env["CONDA_PREFIX"] = SAM3D_ENV
     env["PATH"] = f"{SAM3D_ENV}/bin" + os.pathsep + env.get("PATH", "")
-    env["HF_HUB_OFFLINE"] = "1"
+    # SAM 3D's pipeline loads MoGe from the Hub; the box's cache lacks it
+    # (run 42759919334). Downloads land in our own dir, never in /root's cache.
+    env.pop("HF_HUB_OFFLINE", None)
+    env["HF_HUB_CACHE"] = HF_CACHE
     return env
 
 

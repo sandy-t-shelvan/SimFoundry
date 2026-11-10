@@ -121,6 +121,8 @@ def test_all_objects_meshed_is_an_accept(tmp_path):
     assert argv[0] == bin_sam3d.SAM3D_PYTHON and argv[2] == "sceneagent.sam3d_worker"
     assert kwargs["cwd"] == bin_sam3d.SAM3D_ROOT
     assert kwargs["env"]["CONDA_PREFIX"] == bin_sam3d.SAM3D_ENV
+    assert kwargs["env"]["HF_HUB_CACHE"].startswith("/workspace/sf4-smoke/")
+    assert "HF_HUB_OFFLINE" not in kwargs["env"]
     jobs = json.loads((out / "sam3d" / "jobs.json").read_text())
     assert jobs[0]["image"].endswith("images/000005.png")
     assert jobs[0]["masks"].endswith("masks/000005.npz") and jobs[0]["mask_index"] == 1
