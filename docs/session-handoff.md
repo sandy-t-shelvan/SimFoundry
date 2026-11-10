@@ -11,7 +11,7 @@ box. The plan is [`cut2-plan.md`](cut2-plan.md). Updated 2026-11-10 (after PRs #
 | 1. Benchmark and scorer | Done (PR #33, KAN-31): `bin_benchmark.py`, `gc6d_fetch.py`, `metrics.py`. Scene 000091 is on the box at `/workspace/data/gc6d`. |
 | 2. Poses, splat, masks | **Done** (rerun in the bin's own dir, PR #40). Poses: 13/13 views, 0.55 px ([run 42751476849](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42751476849)). Splat: 214,976 Gaussians, held-out PSNR 23.07, SSIM 0.825, LPIPS 0.178 (same run). SF-15 masks: 13/13 views, 94 masks (5–11 per view) with a YCB category prompt ([run 42753282904](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42753282904)). The splat merged with #38 (943,199 Gaussians, PSNR 30.04) was trained on 313 images, 300 of them run4's Fruits frames, and is void. |
 | 3. Association and grouping | **Done** (PR #41, [run 42759126731](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42759126731)). 94 masks → 25 objects (GT 20), 15 seen in ≥ 2 views. Lengths are in the paper's 0.915 m unit via a Depth Anything 3 scale (0.201 m per splat unit; GT cameras say 0.206, check only). Per-object Gaussian indices: `/workspace/sf4-smoke/bin/association/objects.npz`. |
-| 4. Meshes and first score | Not started. The `sam3d-objects` env is on 59601312. |
+| 4. Meshes and first score | **First score written** (PR #42). SAM 3D meshed all 25 objects ([run 42760087159](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42760087159)). ICP plus one camera-based scene similarity: **F1@1cm 0.058, matched Chamfer 0.13 m** ([run 42762718646](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42762718646), `docs/results/`). Open: the SAM 3D pose starts ~3.7 splat units off, so seeds win 20 of 25 fits. |
 
 ## The GPU box: 59601312
 
@@ -27,7 +27,8 @@ RTX 4090 24 GB, 128 cores, 503 GB RAM, 600 GB disk (about 314 GB free), Ubuntu 2
 | SAM vit_h, GroundingDINO weights | `/root/SimFoundry/checkpoints/` (vit_h SHA-256 checked, never deleted) |
 | py7zr | `/workspace/sf4-smoke/pydeps` (`--target`; on `PYTHONPATH` only for `BIN_PIPELINES`) |
 | Depth Anything 3 (metric) | `/root/miniforge3/envs/da3` (torch 2.7.0+cu128), `DA3METRIC-LARGE` in the root HF cache, code from `/root/stack2/Depth-Anything-3/src` (read only); run offline by `bin_scale` |
-| Also present | env `sam3d-objects` (code `/root/software/sam-3d-objects`); COLMAP 4.1.1 at `/opt/colmap-4.1.1` |
+| SAM 3D Objects | `/root/miniforge3/envs/sam3d-objects` (torch 2.5.1+cu121), code and `checkpoints/hf/pipeline.yaml` in `/root/software/sam-3d-objects` (read only); needs `CONDA_PREFIX` set; MoGe cached in `/workspace/sf4-smoke/hf-cache` |
+| Also present | COLMAP 4.1.1 with CUDA at `/opt/colmap-4.1.1/bin/colmap` (has `global_mapper`) |
 
 `/root/SimFoundry` is someone else's checkout on the box: read from it, never write. Our runs write only
 under `/workspace/sf4-smoke` and `/workspace/data/gc6d`.
@@ -47,7 +48,7 @@ A cloud session has no SSH and no GPU. Every GPU step goes through GitHub Action
    `--rsync-path="mkdir -p <repo> && rsync"` because older rsync lacks `--mkpath`.
 5. The remote shell puts the pinned interpreter's bin and `REMOTE_COLMAP_BIN` first on `PATH`, deletes a
    stale `inventory.txt`, runs the pipeline, and the runner fetches the JSON evidence as an artifact.
-6. `bin`, `splat`, `masks` and `association` share `/workspace/sf4-smoke/bin` and its ledger
+6. `bin`, `splat`, `masks`, `association`, `sam3d` and `place` share `/workspace/sf4-smoke/bin` and its ledger
    (`vast_smoke.remote_out`); run4 keeps `/workspace/sf4-smoke/run`. Each bin pipeline is judged only on
    its own items (`BIN_PIPELINES`). Sharing run4's dir once let COLMAP pose run4's 300 Fruits frames
    beside the 13 bin views, so a bin poses run now clears its images, database and models and rejects a
