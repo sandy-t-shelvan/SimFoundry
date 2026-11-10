@@ -27,13 +27,16 @@ from typing import Any
 
 import numpy as np
 
-# The da3 env on 59601312 (probe run 42714221807): torch 2.7.0+cu128, with
-# DA3METRIC-LARGE in the root Hugging Face cache and the Depth-Anything-3
-# checkout in /root/stack2, which is read, never written.
-DEPTH_PYTHON = "/root/miniforge3/envs/da3/bin/python3"
-DA3_SRC = "/root/stack2/Depth-Anything-3/src"
+# The sa env on 58301075 (probe run 42908974589) imports depth_anything_3 from
+# the checkout in /workspace/src, which is read, never written. The root Hugging
+# Face cache there holds an incomplete DA3METRIC-LARGE (run 42914501132:
+# LocalEntryNotFoundError offline), so the weights come into our own cache,
+# downloaded once and reused, as bin_sam3d does for MoGe.
+DEPTH_PYTHON = "/root/.local/share/mamba/envs/sa/bin/python3"
+DA3_SRC = "/workspace/src/depth-anything-3/src"
 DA3_MODEL = "depth-anything/DA3METRIC-LARGE"
 DA3_FOCAL_DIVISOR = 300.0
+HF_CACHE = "/workspace/sf4-smoke/hf-cache"
 # Midpoint of the paper's 0.90-0.93 m per reconstruction unit (kitchen).
 PAPER_METRES_PER_UNIT = 0.915
 SCALE_CELL_PX = 4
@@ -63,11 +66,12 @@ def worker_command(images: Path, depth_dir: Path) -> list[str]:
 
 
 def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
-    """This repo first, then the DA3 source tree; weights from the local cache only."""
+    """This repo first, then the DA3 source tree; weights in our own HF cache."""
     env = dict(os.environ if base is None else base)
     repo = str(Path(__file__).resolve().parent.parent)
     env["PYTHONPATH"] = os.pathsep.join([repo, DA3_SRC])
-    env["HF_HUB_OFFLINE"] = "1"
+    env.pop("HF_HUB_OFFLINE", None)
+    env["HF_HUB_CACHE"] = HF_CACHE
     return env
 
 
