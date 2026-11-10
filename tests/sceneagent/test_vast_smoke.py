@@ -15,6 +15,7 @@ import pytest
 from sceneagent.gpu_smoke_trigger import DISPATCH_INPUTS, workflow_safety_findings
 from sceneagent.vast_smoke import (
     ALLOWED_INSTANCE_ID,
+    BIN_PIPELINES,
     DETACH_LEFTOVER_KEYS,
     FRUITS_RELATIVE,
     REMOTE_OUT,
@@ -2701,7 +2702,13 @@ def test_probe_runs_here_and_its_manifest_passes_on_the_inventory(tmp_path):
     )
     assert done.returncode == 0, done.stderr
     text = (out / "inventory.txt").read_text()
-    for section in ("## gpu", "## disk", "## conda_envs", "## tools", "## tree"):
+    for section in (
+        "## gpu",
+        "## disk",
+        "## conda_envs",
+        "## tools",
+        "## interpreters",
+    ):
         assert section in text
     command = build_remote_command(REMOTE_REPO, str(out), pipeline="probe")
     ok = collect_artifact_manifest(
@@ -2752,18 +2759,27 @@ def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_con
         check=False,
     )
     assert done.stdout.split() == ["models", "sam"]
-    for line in PROBE_SCRIPT.splitlines():
-        if line.startswith(
-            (
-                "section folders",
-                "section tree",
-                "section sizes",
-                "section workspace_tree",
-            )
-        ):
-            assert "| public" in line, line
-        if "find " in line and "-not" in line:
-            assert "-not -path '*/.*'" in line, line
+    # No folder trees at all: run 42713577064 listed a file named after a
+    # local user path, which no name filter would catch.
+    for banned in (
+        "section folders",
+        "section tree",
+        "section sizes",
+        "section workspace_tree",
+        "find /root",
+    ):
+        assert banned not in PROBE_SCRIPT, banned
+
+
+def test_only_dataset_pipelines_see_the_py7zr_install_dir():
+    from sceneagent.vast_smoke import REMOTE_PYDEPS
+
+    run4 = build_remote_shell("/workspace/r", "/workspace/o", pipeline="run4")
+    assert "export PYTHONPATH=/workspace/r\n" in run4
+    assert REMOTE_PYDEPS not in run4
+    for pipeline in sorted(BIN_PIPELINES):
+        script = build_remote_shell("/workspace/r", "/workspace/o", pipeline=pipeline)
+        assert f"export PYTHONPATH=/workspace/r:{REMOTE_PYDEPS}" in script
 
 
 def test_non_probe_runs_remove_a_stale_inventory_before_running():
