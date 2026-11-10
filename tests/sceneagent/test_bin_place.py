@@ -183,3 +183,16 @@ def test_the_opencv_convention_skips_the_flip():
     _, _, t_p3d = bin_place.pose_to_splat(*args, bin_place.CAMERA_FLIPS["p3d"])
     _, _, t_cv = bin_place.pose_to_splat(*args, bin_place.CAMERA_FLIPS["opencv"])
     assert np.allclose(t_p3d, [-0.2, -0.1, 1.0]) and np.allclose(t_cv, [0.2, 0.1, 1.0])
+
+
+def test_centred_starts_keep_rotation_and_scale_and_move_onto_the_target():
+    rng = np.random.default_rng(23)
+    source = rng.normal(size=(300, 3))
+    target = rng.normal(size=(200, 3)) + np.array([5.0, -2.0, 1.0])
+    rotation = _random_rotation(rng)
+    starts = {"sam3d_pose/p3d/none": (0.7, rotation, np.array([100.0, 0, 0]))}
+    centred = bin_place.centred_starts(starts, source, target)
+    scale, r, t = centred["sam3d_centred/p3d/none"]
+    assert scale == 0.7 and np.allclose(r, rotation)
+    moved = apply_similarity(source, scale, r, t)
+    assert np.allclose(moved.mean(axis=0), target.mean(axis=0))
