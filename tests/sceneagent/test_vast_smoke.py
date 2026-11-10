@@ -821,7 +821,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         1,
     )
     assert (
-        "workflow_dispatch may only take the run4/bin/splat/masks/probe pipeline choice"
+        "workflow_dispatch may only take the run4/bin/splat/masks/association/probe pipeline choice"
         in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
@@ -2765,6 +2765,30 @@ def test_masks_pipeline_runs_bin_masks():
     ]
     assert PIPELINES["masks"][0] == ("benchmark scene", "SAM masks")
     assert "masks_evidence.json" in FETCH_NAMES
+
+
+def test_association_pipeline_runs_bin_association_on_the_bin_dir():
+    from sceneagent.vast_smoke import (
+        BIN_PIPELINES,
+        FETCH_NAMES,
+        PIPELINES,
+        REMOTE_BIN_OUT,
+        build_remote_command,
+        remote_out,
+    )
+
+    argv = build_remote_command("/workspace/r", "/workspace/o", pipeline="association")
+    assert argv == [
+        REMOTE_PYTHON,
+        "-m",
+        "sceneagent.bin_association",
+        "--out",
+        "/workspace/o",
+    ]
+    assert "association" in BIN_PIPELINES
+    assert remote_out("association") == REMOTE_BIN_OUT
+    assert PIPELINES["association"][0][-1] == "Gaussian association"
+    assert "association_evidence.json" in FETCH_NAMES
 
 
 def test_probe_listings_hide_dotfiles_and_credential_names_and_print_no_file_contents(
