@@ -85,7 +85,8 @@ def run_depth(
         timeout=WORKER_TIMEOUT_S,
     )
     if done.returncode != 0:
-        tail = ((done.stderr or "") or (done.stdout or "")).strip().splitlines()[-3:]
+        # Eight lines: enough to name the frame a traceback ends in.
+        tail = ((done.stderr or "") or (done.stdout or "")).strip().splitlines()[-8:]
         raise RuntimeError(
             f"depth worker exited {done.returncode}: " + " | ".join(tail)
         )

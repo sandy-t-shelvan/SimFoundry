@@ -33,7 +33,9 @@ def main(argv: list[str] | None = None) -> int:
 
     model = DepthAnything3.from_pretrained(args.model).to(torch.device("cuda"))
     args.out.mkdir(parents=True, exist_ok=True)
-    meta = {"model": args.model, "package": str(Path(depth_anything_3.__file__).parent)}
+    # A source checkout on PYTHONPATH can be a namespace package, whose
+    # __file__ is None; __path__ names where it was found either way.
+    meta = {"model": args.model, "package": list(depth_anything_3.__path__)}
     views = {}
     for image_path in sorted(args.images.glob("*.png")):
         with Image.open(image_path) as image:
