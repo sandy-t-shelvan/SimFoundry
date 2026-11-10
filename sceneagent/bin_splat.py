@@ -35,11 +35,11 @@ from typing import Any
 
 from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS, run_bin_poses
 
-# nerfstudio 1.1.5 and gsplat 1.5.3 on instance 59601312 (probe run 42714221807):
-# the env pipeline A's 2c_train_bg_splat.py is run from.
-NS_BIN = "/root/miniforge3/envs/nerfstudio_simfoundry/bin"
-# That env's torch is 2.7.1+cu128; gsplat builds against the matching toolkit.
-CUDA_HOME = "/usr/local/cuda-12.8"
+# nerfstudio 1.1.4 and gsplat 1.0.0 on instance 58301075 (probe run 42908214934);
+# its run dir already holds a splatfacto run from this env (PSNR 23.56).
+NS_BIN = "/root/.local/share/mamba/envs/nerf/bin"
+# That env's torch is cu121; gsplat compiles its kernels against this toolkit.
+CUDA_HOME = "/usr/local/cuda-12.1"
 METHOD = "splatfacto"
 MAX_NUM_ITERATIONS = 30000
 STEP_TIMEOUT_S = {"process-data": 900, "train": 3600, "eval": 900, "export": 900}
@@ -50,7 +50,9 @@ REQUIRED = ("benchmark scene", "COLMAP camera poses", ITEM)
 # scalars nerfstudio 1.1.5 stores in its own checkpoint (run 42719027002).
 # ns-eval and ns-export therefore start through this launcher, which adds
 # exactly those numpy types to torch's safe list, as torch's error advises.
-# Every other global stays refused.
+# Every other global stays refused. Torch before 2.4 has no safe list and
+# loads full pickles by default (58301075's nerf env is 2.1.2, run 42909583876),
+# so there the launcher only starts the script.
 SAFE_LOAD = """\
 import sys
 from importlib import import_module
@@ -58,10 +60,11 @@ from importlib import import_module
 import numpy
 import torch
 
-torch.serialization.add_safe_globals(
-    [numpy.core.multiarray.scalar, numpy.dtype]
-    + [type(numpy.dtype(code)) for code in "?bBhHiIlLqQefdg"]
-)
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals(
+        [numpy.core.multiarray.scalar, numpy.dtype]
+        + [type(numpy.dtype(code)) for code in "?bBhHiIlLqQefdg"]
+    )
 module = {"ns-eval": "nerfstudio.scripts.eval", "ns-export": "nerfstudio.scripts.exporter"}
 sys.argv = sys.argv[1:]
 import_module(module[sys.argv[0]]).entrypoint()
