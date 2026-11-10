@@ -1,0 +1,204 @@
+{
+  "f1_mean": 0.05769878049958375,
+  "chamfer_mean_matched_m": 0.12987471996279598,
+  "matches": [
+    {
+      "reference": "obj_000001",
+      "delivered": "object_13",
+      "chamfer_m": 0.35388564693413294,
+      "f1": 0.002567962085308057
+    },
+    {
+      "reference": "obj_000003",
+      "delivered": "object_21",
+      "chamfer_m": 0.15995455364959282,
+      "f1": 0.0021043478260869566
+    },
+    {
+      "reference": "obj_000006",
+      "delivered": "object_9",
+      "chamfer_m": 0.10278904054670514,
+      "f1": 0.01833372031662269
+    },
+    {
+      "reference": "obj_000007",
+      "delivered": "object_16",
+      "chamfer_m": 0.038348285405785845,
+      "f1": 0.1038357591257847
+    },
+    {
+      "reference": "obj_000008",
+      "delivered": "object_24",
+      "chamfer_m": 0.1238588468418749,
+      "f1": 0.013514910179640717
+    },
+    {
+      "reference": "obj_000009",
+      "delivered": "object_1",
+      "chamfer_m": 0.07168987684386244,
+      "f1": 0.10088150759219087
+    },
+    {
+      "reference": "obj_000010",
+      "delivered": "object_0",
+      "chamfer_m": 0.06777584021973496,
+      "f1": 0.11356061870856862
+    },
+    {
+      "reference": "obj_000013",
+      "delivered": "object_7",
+      "chamfer_m": 0.05548516496209994,
+      "f1": 0.12836578603191212
+    },
+    {
+      "reference": "obj_000017",
+      "delivered": "object_3",
+      "chamfer_m": 0.03679666453277681,
+      "f1": 0.25375876103929346
+    },
+    {
+      "reference": "obj_000019",
+      "delivered": "object_18",
+      "chamfer_m": 0.15937256401397465,
+      "f1": 0.01683304390969983
+    },
+    {
+      "reference": "obj_000029",
+      "delivered": "object_20",
+      "chamfer_m": 0.2287249230450564,
+      "f1": 0.04316125570163671
+    },
+    {
+      "reference": "obj_000030",
+      "delivered": "object_8",
+      "chamfer_m": 0.14645702827194107,
+      "f1": 0.01376932934643315
+    },
+    {
+      "reference": "obj_000018",
+      "delivered": "object_6",
+      "chamfer_m": 0.04206559006567961,
+      "f1": 0.09508411647915287
+    },
+    {
+      "reference": "obj_000024",
+      "delivered": "object_15",
+      "chamfer_m": 0.10048346108560383,
+      "f1": 0.004487943262411347
+    },
+    {
+      "reference": "obj_000026",
+      "delivered": "object_2",
+      "chamfer_m": 0.20787769115466945,
+      "f1": 0.01638427167113494
+    },
+    {
+      "reference": "obj_000037",
+      "delivered": "object_10",
+      "chamfer_m": 0.1608984943502745,
+      "f1": 0.03726364335126826
+    },
+    {
+      "reference": "obj_000028",
+      "delivered": "object_12",
+      "chamfer_m": 0.11494325980328221,
+      "f1": 0.0436024531024531
+    },
+    {
+      "reference": "obj_000038",
+      "delivered": "object_5",
+      "chamfer_m": 0.06193932921236135,
+      "f1": 0.12129911600707194
+    },
+    {
+      "reference": "obj_000039",
+      "delivered": "object_4",
+      "chamfer_m": 0.23371995369290072,
+      "f1": 0.01206036709721278
+    },
+    {
+      "reference": "obj_000040",
+      "delivered": "object_17",
+      "chamfer_m": 0.13042818462360936,
+      "f1": 0.013106697157791572
+    }
+  ],
+  "f1_by_reference": {
+    "obj_000001": 0.002567962085308057,
+    "obj_000003": 0.0021043478260869566,
+    "obj_000006": 0.01833372031662269,
+    "obj_000007": 0.1038357591257847,
+    "obj_000008": 0.013514910179640717,
+    "obj_000009": 0.10088150759219087,
+    "obj_000010": 0.11356061870856862,
+    "obj_000013": 0.12836578603191212,
+    "obj_000017": 0.25375876103929346,
+    "obj_000019": 0.01683304390969983,
+    "obj_000029": 0.04316125570163671,
+    "obj_000030": 0.01376932934643315,
+    "obj_000018": 0.09508411647915287,
+    "obj_000024": 0.004487943262411347,
+    "obj_000026": 0.01638427167113494,
+    "obj_000037": 0.03726364335126826,
+    "obj_000028": 0.0436024531024531,
+    "obj_000038": 0.12129911600707194,
+    "obj_000039": 0.01206036709721278,
+    "obj_000040": 0.013106697157791572
+  },
+  "tau_m": 0.01,
+  "protocol": {
+    "benchmark": "GraspClutter6D",
+    "similarity": {
+      "scale": 0.20685226949308022,
+      "rotation": [
+        [
+          0.9851205526115312,
+          0.17159543152014883,
+          0.009617936564888517
+        ],
+        [
+          0.010021355705584671,
+          -0.0014848907830347633,
+          -0.9999486824478471
+        ],
+        [
+          -0.17157234407728544,
+          0.9851663833996651,
+          -0.003182415285467668
+        ]
+      ],
+      "translation": [
+        0.0025316353323225414,
+        0.0012500350528481734,
+        0.18200234726776257
+      ]
+    },
+    "per_object_refit": false,
+    "reference_objects": 20,
+    "points_per_reference": [
+      10000
+    ]
+  },
+  "alignment": {
+    "rule": "one similarity for the scene: Umeyama from the 13 COLMAP camera centers (splat frame) to the same cameras' metric centers in image 1's camera frame",
+    "cameras": 13,
+    "camera_rms_m": 0.0035346928426680624,
+    "camera_max_m": 0.010419676196492094,
+    "scale": 0.20685226949308022
+  },
+  "matcher": "Hungarian on symmetric Chamfer",
+  "delivered_objects": 25,
+  "points_per_delivered": 10000,
+  "file_name": "bin_000091_score_pts10000_align-cameras-umeyama_match-hungarian-chamfer.json",
+  "run": {
+    "gpu_smoke_run": 42762718646,
+    "commit": "5840e8b",
+    "instance": 59601312,
+    "inputs": {
+      "splat_run": 42751476849,
+      "masks_run": 42753282904,
+      "association_run": 42759126731,
+      "sam3d_run": 42760087159
+    }
+  }
+}
