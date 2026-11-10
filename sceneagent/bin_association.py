@@ -83,6 +83,16 @@ REQUIRED = (
     ITEM,
 )
 GT_OBJECTS = 20
+# Section 3.3 keeps an object's Gaussians seen by >= min(kappa, C_k) cameras
+# and runs its experiments at kappa 1 (the plain union). Ours is 2: the SF-19
+# reviewer's isolated views (run 42765601450) showed every object's union
+# carrying a fan of floaters that one view alone admits, which pulled meshes
+# onto neighbours. Objects seen in one view keep their union.
+KAPPA = 2
+KAPPA_RULE = (
+    "ours: kappa 2 (the paper's experiments use 1); a Gaussian stays when "
+    "at least min(2, views of the object) of the object's views admit it"
+)
 EXTENT_PERCENTILES = (5.0, 95.0)
 EXTENT_RULE = (
     "ours: the paper does not define e; longest side of the 5th-95th percentile "
@@ -336,6 +346,23 @@ def group_masks(
     return sorted(components.values(), key=lambda c: (-len(c), c)), pairs
 
 
+def consensus_gaussians(
+    members: list[dict[str, Any]], kappa: int
+) -> tuple[np.ndarray, int]:
+    """Section 3.3's camera consensus: Gaussians seen by >= min(kappa, C_k) of the views.
+
+    ``C_k`` is the number of views the object's masks come from. Returns the
+    kept indices and the size of the plain union (kappa 1).
+    """
+    per_view: dict[str, list[np.ndarray]] = {}
+    for mask in members:
+        per_view.setdefault(mask["view"], []).append(mask["gaussians"])
+    seen = [np.unique(np.concatenate(sets)) for sets in per_view.values()]
+    ids, counts = np.unique(np.concatenate(seen), return_counts=True)
+    need = min(int(kappa), len(per_view))
+    return ids[counts >= need], int(ids.size)
+
+
 def camera_centers_colmap(images: dict[str, dict[str, Any]]) -> dict[str, np.ndarray]:
     return {
         name: -qvec_to_rotation(img["qvec"]).T @ np.asarray(img["tvec"])
@@ -485,7 +512,7 @@ def associate(
     components, pairs = group_masks(masks, positions * to_paper)
     objects = []
     for number, members in enumerate(components):
-        union = np.unique(np.concatenate([masks[i]["gaussians"] for i in members]))
+        ids, union_size = consensus_gaussians([masks[i] for i in members], KAPPA)
         objects.append(
             {
                 "object": number,
@@ -494,9 +521,10 @@ def associate(
                     for i in members
                 ],
                 "views": len({masks[i]["view"] for i in members}),
-                "gaussians": int(union.size),
-                "centroid": [round(float(c), 5) for c in positions[union].mean(axis=0)],
-                "ids": union,
+                "gaussians": int(ids.size),
+                "gaussians_union": union_size,
+                "centroid": [round(float(c), 5) for c in positions[ids].mean(axis=0)],
+                "ids": ids,
             }
         )
 
@@ -578,7 +606,8 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
                 "e": EXTENT_RULE,
                 "pairs": "masks of different views only; objects are connected components",
             },
-            "kappa": 1,
+            "kappa": KAPPA,
+            "kappa_rule": KAPPA_RULE,
             "units": "paper units: splat lengths x unit.to_paper_units",
         },
         "inputs": {
