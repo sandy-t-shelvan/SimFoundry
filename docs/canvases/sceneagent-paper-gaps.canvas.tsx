@@ -52,7 +52,8 @@ type GapRow = {
     | "On hold (Cut 2)"
     | "as of 2026-11-07: Part 1 merged (PR #14 @ d60c746); live dc1-dc3 deferred to Cut 2 SF-15 and SAM 3D (10318)"
     | "as of 2026-11-07: Part 1 (PR #10), gate (PR #21) and run package (PR #23) merged; live dc3/dc4 pending"
-    | "as of 2026-11-07: Cut 1 merged; Cut 2 planned in docs/cut2-plan.md, not started";
+    | "as of 2026-11-07: Cut 1 merged; Cut 2 planned in docs/cut2-plan.md, not started"
+    | "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged";
 };
 
 type Block = {
@@ -99,6 +100,8 @@ const BLOCKS: Block[] = [
         sub: "Agent repair loop",
         status: "done",
         addressed: "still open",
+        ticket: "SF-19 / KAN-20 (To Do): per-object reviewer in open PR #44 draws 11 views per object and picks a retry (icp_flip, sam3d_next_view) by rule; bin F1 0.058 to 0.067. The VLM verdict is SF-18 / KAN-19 (To Do), Cut 3 phase B.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.1: write a plan, run a tool, write a manifest, append accept or reject, and on rejection repair and rerun. Agents render the scene and correct scale, orientation, and position.",
         plan: "DESIGN phases the inspector into phase 4 and the repair behavior into sceneagent.agent_loop. The opening 'phase 1 does not' list still says no Isaac and no MuJoCo.",
         changelog: "Latest entries: USDA rejected, MJCF accepted after MjModel loaded; SAM 3D attempt 2, PartSAM attempt 2, inspector attempt 2, ICP attempt 1, isaac_mesh attempt 1, and mujoco_mesh attempt 1 accepted. cubepart and articulate attempt 1 rejected.",
@@ -140,6 +143,8 @@ const BLOCKS: Block[] = [
         sub: "splatfacto big",
         status: "done",
         addressed: "still open",
+        ticket: "Cut 2 (SF-28 / KAN-31, In Progress): bin splat, 214,976 Gaussians, held-out PSNR 23.07, SSIM 0.825, LPIPS 0.178 (PR #40, run 42751476849). splatfacto, not splatfacto-big.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.2: Nerfstudio splatfacto big trains the 3DGS. Scene S = (G_bg, {o_k}) with o_k = (P_k, M_k, T_k, theta_k, J_k).",
         plan: "Done when a checkpoint and one rendered view exist and the ledger accepts them. The plan's COLMAP rule still requires those cameras to feed this train.",
         changelog: "ns-train splatfacto-big, 2000 iterations, exit 0. Checkpoint step-000001999.ckpt. The iteration cap is this run's, not nerfstudio's default 30000. A later full-rate train used max-num-iterations 30000 and exited 0. Checkpoint step-000029999.ckpt, internal step 29999, 199655698 bytes.",
@@ -182,6 +187,8 @@ const BLOCKS: Block[] = [
         sub: "SAM masks",
         status: "done",
         addressed: "still open",
+        ticket: "SF-15 / KAN-16 (To Do): GroundingDINO + SAM vit_h on all 13 bin views, 94 masks, 5 to 11 per view (PR #39, run 42753282904).",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.3: SAM masks every tenth view by default. Across their scenes the stride ranges from 1 to 10.",
         plan: "The section 3.3 evaluation table records the SAM vit_h masks. Catalog row is done.",
         changelog: "SAM vit_h on every 10th frame of the 15-frame sample. Exit 0.",
@@ -192,8 +199,8 @@ const BLOCKS: Block[] = [
         sub: "GroundingDINO",
         status: "missing",
         addressed: "still open",
-        ticket: "KAN-15 (Cut 2): every Cut 1 PR is merged into Main_duplicate as of 2026-11-07; plan in docs/cut2-plan.md",
-        ticketStatus: "as of 2026-11-07: Cut 1 merged; Cut 2 planned in docs/cut2-plan.md, not started",
+        ticket: "SF-15 / KAN-16 (To Do): GroundingDINO SwinT-OGC boxes from a YCB category prompt feed SAM vit_h on all 13 bin views (PR #39, run 42753282904).",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Not in section 3.3. The website step 02 says GroundingDINO + SAM assign semantic features to each Gaussian.",
         plan: "Named beside SAM. Masks and the two feature vectors exist. GroundingDINO did not run, and the feature-on-Gaussian file is still missing.",
         changelog: "Not shipped.",
@@ -236,6 +243,8 @@ const BLOCKS: Block[] = [
         sub: "Gaussian association cuts",
         status: "done",
         addressed: "still open",
+        ticket: "SF-16 / KAN-17 (To Do): equation (1) over the whole bin splat, then grouping: 94 masks to 25 objects (GT 20), 15 seen in 2+ views; DA3 scale 0.201 m per unit (PR #41, run 42759126731). Kappa 2 consensus is open PR #45; container split is open PR #47.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.3 equation (1): project inside the mask and within max(0.08, 0.03 z-hat) of the front of a cell of side min(16, round(s/192)). Grouping uses min(0.10, 0.6 e), containment 0.18, or Jaccard 0.08. Experiments use kappa = 1.",
         plan: "sceneagent.association implements the published cuts. Done when gaussians.json lists centers that passed equation (1).",
         changelog: "An early bullet moved this row to partial. It was not rewritten. Later text records the cut. Catalog status, which the matrix copies, is done.",
@@ -246,6 +255,8 @@ const BLOCKS: Block[] = [
         sub: "SAM 3D meshes",
         status: "done",
         addressed: "still open",
+        ticket: "SF-29 / KAN-32 (To Do): SAM 3D meshed all 25 bin objects (PR #42, run 42760087159). Pose starts about 0.75 m off; mask-depth rescale is open PR #48.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.3: SAM3D generates object geometry. Trimmed similarity ICP starts from the SAM3D pose.",
         plan: "Hunyuan, TRELLIS.2, and Pixal3D are not SAM 3D. The evaluation table records 0001.glb. Catalog row is done.",
         changelog: "An early bullet says the token was rejected and the row stays missing. The later bullet records the mesh. Catalog is done.",
@@ -256,8 +267,8 @@ const BLOCKS: Block[] = [
         sub: "Trimmed similarity ICP",
         status: "partial",
         addressed: "still open",
-        ticket: "SF-8 / KAN-8",
-        ticketStatus: "as of 2026-11-07: Part 1 merged (PR #14 @ d60c746); live dc1-dc3 deferred to Cut 2 SF-15 and SAM 3D (10318)",
+        ticket: "SF-8 / KAN-8 (In Review): observed-to-mesh trimmed similarity ICP with a two-way fit score and a 2x scale bound ran on all 25 bin objects (PR #42); silhouette IoU median 0.16.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 3.3: trimmed similarity ICP, one uniform scale, initialized from the SAM3D pose, aligns the mesh to P_k.",
         plan: "A mesh file and an ICP residual file are the done condition, shared with LaMa. DESIGN says the pose stays undecided without the paper's thresholds.",
         changelog: "Residual file 2,197 bytes. Ledger icp attempt 1 accepted the file. The section 3.1 gate stays undecided.",
@@ -569,7 +580,8 @@ const BLOCKS: Block[] = [
       {
         sub: "F1 at 1 cm and Chamfer",
         status: "partial",
-        ticket: "SF-6 / KAN-6 Accepted (matcher past 8); SF-7 / KAN-7 Accepted (kitchen aggregator); Sec 4 score file still open",
+        ticket: "SF-6 / KAN-6 Accepted (matcher past 8); SF-7 / KAN-7 Accepted (kitchen aggregator). First bin score file on main: F1@1cm 0.058, matched Chamfer 0.130 m (PR #42, docs/results/); 0.067 / 0.125 m after the reviewer (open PR #44). Kitchen file not started.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 4.1 equations (4) and (5), tau = 1 cm, Hungarian match, unmatched F1 = 0. The kitchen is MessyKitchens. The bin is GraspClutter6D hard/000091, 13 views, 20 YCB objects.",
         plan: "Functions are tested on synthetic clouds. DESIGN phase 1 says no GraspClutter6D and no MessyKitchens scores.",
         changelog: "An early bullet groups this with association as partial. The functions stay partial. No score file.",
@@ -579,8 +591,8 @@ const BLOCKS: Block[] = [
       {
         sub: "GraspClutter6D hard/000091",
         status: "missing",
-        ticket: "none in Cut 1",
-        ticketStatus: "Not started",
+        ticket: "SF-28 / KAN-31 (In Progress): scene fetched (PR #33), full chain run in Cut 2 (PRs #36 to #42); bin F1 0.058, paper SimFoundry 6.9%, SceneAgent 60.75%.",
+        ticketStatus: "as of 2026-11-10: Cut 2 bin evidence on main or in an open PR; ticket not Accepted, status word unchanged",
         paper: "Section 4.1 compares harnesses and SimFoundry on that bin. Their best F1 is 60.75%. SimFoundry in the paper is 6.9% F1 and 4.29 cm Chamfer. Figure 6 token stages are S0–S7.",
         plan: "Score only after meshes exist. Their 60.75% and 6.9% stay theirs. Figure 6's S0–S7 list is not a plan.",
         changelog: "Not scored.",
@@ -1074,6 +1086,10 @@ export default function SceneAgentPaperGaps() {
         <Stat value={String(catalogMissing)} label="Catalog rows missing" tone="danger" />
         <Stat value="42" label="Catalog rows total" />
       </Grid>
+
+      <Callout tone="info" title="Status as of 2026-11-10 (Cut 2 on the bin)">
+        Cut 2 ran the paper's section 3.2–3.3 chain on GraspClutter6D hard/000091 (13 views, 20 YCB objects) and wrote the first bin score. The steps were COLMAP poses (13/13, 0.55 px), a splatfacto splat (PSNR 23.07, SSIM 0.825, LPIPS 0.178), GroundingDINO + SAM vit_h masks (94 on 13 views), equation (1) association and grouping (25 objects against 20), SAM 3D meshes for all 25, and observed-to-mesh ICP. Merged in PRs #33, #36 and #38–#42. Score: F1@1cm 0.058, matched Chamfer 0.130 m; with the per-object reviewer in open PR #44, 0.067 and 0.125 m. The paper reports 6.9% for SimFoundry's original pipeline and 60.75% for SceneAgent on this scene, so Cut 2 matches the original pipeline. The road to the MVP is in the plan of record and in Jira, with full §3.4 physics and articulation required in the MVP. Cut 3 (KAN-33): M1 bin above 6.9% (κ = 2, PR #45; container split, PR #47; SAM 3D pose rescale, PR #48), M2 VLM in the loop, M3 full §3.4 physics with a USD export that settles in Isaac Lab. Cut 4 (KAN-34): M4 full articulation (PartSAM, VLM gap check, CubePart, Articulate Anything, sim review), M5 soft bodies and fracture. Cut 5 (KAN-35): M6 video to sim on the example videos, M7 MessyKitchens, M8 MVP acceptance run. No Cut 2 ticket (KAN-16 to KAN-32) is Accepted, so every catalog dot and status word above is unchanged; the Ticket progress column carries the evidence. GPU box: instance 58301075 again (PR #50).
+      </Callout>
 
       <Callout tone="info" title="Status as of 2026-11-07 (Cut 1 / Jira KAN)">
         Catalog dots above are 17 done / 12 partial / 13 missing after the LaMa row moved to partial. Ticket progress is separate: Accepted only when Jira status is Done. Every ticket status here is as of 2026-11-07, checked against Main_duplicate tip 376e726. SF-1, SF-2, SF-3, SF-6, SF-7, SF-11, SF-12 are Accepted. SF-4: part 1 (PR #13), the fixed-key direct-SSH smoke pinned to instance 59601312 (PR #26) and the run4 300-frame sample with GPU gates (PR #27) are merged. The run4 dispatch reached COLMAP's mapper and stopped at the 900 s step limit (Actions run 42420122702); PR #32 raises that limit. Not Accepted. SF-5: part 1 (PR #10), the reconstruction gate (PR #21) and the run package (PR #23) are merged; live dc3 and dc4 pending. Not Accepted. SF-8 part 1 is merged (PR #14 @ d60c746); live dc1-dc3 are deferred until Cut 2 SF-15 and the SAM 3D ticket (10318). Not Accepted. SF-9 part 1 is merged (PR #16 @ aec2c9f); the GPU package is deferred (10318). Not Accepted. SF-10 part 1 is merged (d99c3b6, QA 10208, PM 10210); dc1-dc3 GPU evidence pending. Not Accepted. SF-14 code is merged (PR #17 @ f6e1df5); live checks pending. Not Accepted. Every Cut 1 PR is merged into Main_duplicate, which meets Sandeep's 2:00 AM ET rule for starting Cut 2. The Cut 2 plan is docs/cut2-plan.md; KAN-15 is not started. Per-gap ticket / ticketStatus fields below record that mapping; they do not flip a catalog row to done.

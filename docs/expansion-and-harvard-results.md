@@ -9,6 +9,79 @@ The tables under "Cut 1 ticket board" record the check at 2026-11-06 2:20 AM ET 
 
 At the 2026-11-06 2:20 AM ET check, `main` was `da997fcee6f860f33abd5fbaf1344d85d13f6e51` and `Main_duplicate` was `d99c3b64e961154ae411765cd58bc584608f516f`. Both `docs/expansion-and-harvard-results.md` and `docs/canvases/sceneagent-paper-gaps.canvas.tsx` differ between those two commits: `git diff --shortstat` reports 28 insertions and 29 deletions across the two files. Cut 2 epic KAN-15 is on hold. Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into `Main_duplicate`. [KAN-13 comment 10318](https://sandeeptssworkspace-35047491.atlassian.net/browse/KAN-13?focusedCommentId=10318) still holds the SF-8 part 2, SF-9, and SF-10 GPU packages until Cut 2 has SF-15 masks and the SAM 3D ticket that follows them.
 
+### Cut 2 board (2026-11-10)
+
+This subsection is the newest status and supersedes the Cut 1 tables below where they disagree. Cut 2 ran the paper's §3.2–3.3 chain on GraspClutter6D `hard/000091` (13 views, 20 YCB objects) and wrote the first bin score. The plan is [`docs/cut2-plan.md`](cut2-plan.md). The living run status is [`docs/session-handoff.md`](session-handoff.md). Every Cut 2 Jira ticket (KAN-16 to KAN-32) is still To Do or In Progress, and none is Accepted. Per comment 10222, no catalog or canvas status word moves. The progress is recorded here and in the canvas `ticket` fields.
+
+| Phase | Ticket | Merged | Evidence |
+|---|---|---|---|
+| 1. Benchmark and scorer | SF-28 / KAN-31 (In Progress) | PR #33 | `bin_benchmark.py`, `gc6d_fetch.py`, `metrics.py`. Scene 000091 fetched with SHA-256s. |
+| 2. Poses | SF-28 | PR #36, #40 | 13/13 views registered, 0.55 px ([run 42751476849](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42751476849)). |
+| 2. Full-scene splat | (SF-4 follow-on) | PR #38, #40 | splatfacto, 214,976 Gaussians; held-out PSNR 23.07, SSIM 0.825, LPIPS 0.178 (same run). The splat first merged with #38 was trained on 313 images, 300 of them Fruits frames, and is void. |
+| 2. Masks | SF-15 / KAN-16 (To Do) | PR #39 | GroundingDINO + SAM vit_h on all 13 views: 94 masks, 5–11 per view ([run 42753282904](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42753282904)). |
+| 3. Association and grouping | SF-16 / KAN-17 (To Do) | PR #41 | Equation (1) over the whole splat, then grouping: 94 masks → 25 objects (GT 20), 15 seen in ≥ 2 views. Lengths are in the paper's 0.915 m unit through a Depth Anything 3 scale of 0.201 m per splat unit. GT cameras give 0.206, used as a check only ([run 42759126731](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42759126731)). |
+| 4. Meshes | SF-29 / KAN-32 (To Do) | PR #42 | SAM 3D meshed all 25 objects ([run 42760087159](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42760087159)). |
+| 4. ICP and first score | SF-8 / KAN-8 (In Review), SF-28 | PR #42 | Observed-to-mesh trimmed similarity ICP, with one camera-based scene similarity. **F1@1cm 0.058, matched Chamfer 0.130 m** (`docs/results/bin_000091_score_…chamfer.json`, [run 42762718646](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42762718646)). Silhouette IoU median 0.16. |
+| 5. Per-object reviewer | SF-19 / KAN-20 (To Do) | open: PR #44 | 11 drawn views per object; retries are `icp_flip` and `sam3d_next_view`, chosen by rule (the VLM verdict is SF-18). **F1 0.067, Chamfer 0.125 m** after review (`…_reviewed.json`). |
+| Parallel mapper check | (none) | open: PR #43 | COLMAP 4.1.1 `global_mapper` against incremental on the bin and Fruits (`docs/results/mapper_compare_bin_fruits.json`). |
+
+**Against the paper.** On this scene the paper reports SimFoundry's original pipeline at 6.9% F1 and SceneAgent at 60.75%. Cut 2's 5.8% → 6.7% is at the original pipeline's level, not SceneAgent's. The three causes found are the work of Cut 3 phase A:
+
+1. Floater Gaussians in object sets. Camera consensus κ = 2 is in PR #45 (the paper uses κ = 1).
+2. Container-sized groups that swallow their neighbours. A 0.35 m extent split is in PR #47.
+3. SAM 3D pose starts about 0.75 m off. A mask-depth rescale of the pose is in PR #48.
+
+Not yet separated: how much of the 0.058 → 0.067 gain comes from centred ICP starts and how much from the reviewer's retries.
+
+**GPU box.** Instance 58301075 again from 2026-11-10 (59601312 was deleted). PR #50 repins the workflow and sets the tool paths from two read-only probes.
+
+**Rerun on 58301075 (2026-11-10, PR #50, same code as main).**
+
+| Step | Result |
+|---|---|
+| Poses | 13/13 |
+| Splat | 134,219 Gaussians, PSNR 23.84 |
+| Masks | 94, identical to the old box |
+| Grouping | 14 objects (12 in 2+ views) |
+| SAM 3D | 14 of 14 meshed |
+| Score | **F1@1cm 0.079, matched Chamfer 0.070 m** ([run 42916527232](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42916527232)) |
+
+That is above the paper's 6.9% for original SimFoundry, but it comes from the box's older nerfstudio, not a method change: fewer Gaussians, then 14 groups instead of 25. M1 counts a score file per *change*, so this run is the new baseline that Cut 3's SF-30 to SF-32 are measured against.
+
+The score files were never committed before PR #50: `.gitignore`'s `*core*` matched "score". PR #50 and PR #44 add them, with `docs/results/` excepted.
+
+### Roadmap to the MVP (2026-11-10)
+
+**MVP definition.** One command takes a captured video to an Isaac Lab scene in which:
+1. every object is segmented, meshed (SAM 3D), placed (ICP) and reviewed by a VLM;
+2. every object carries the paper's full §3.4 physics;
+3. articulated objects have parts, completed hidden geometry and working joints;
+4. deformable objects are soft bodies, and the §3.5 fracture examples run;
+5. the background is completed and oriented;
+6. the scene opens in the light editor with its physics and joints editable;
+7. the bin and the kitchen are scored with the paper's protocols.
+
+Physics and articulation are in the MVP in full, at Sandeep's direction. Jira holds one epic per cut and one ticket per milestone item.
+
+| Cut | Jira epic | Milestone | Done when | Tickets |
+|---|---|---|---|---|
+| 3 | KAN-33 | **M1** Bin above the paper's baseline | Bin F1@1cm > 6.9%, with a score file per change | SF-30 κ=2 (KAN-36, PR #45), SF-31 container split (KAN-37, PR #47), SF-32 SAM 3D pose rescale (KAN-38, PR #48) |
+| 3 | KAN-33 | **M2** VLM in the loop | Step-runner and reviewer verdicts from `gemini-3.8-flash`; rule choice logged beside each; `vlm_calls` counted; no key in logs | SF-18 (KAN-19), SF-19 VLM verdict (KAN-20), SF-24 part 2 (KAN-25) |
+| 3 | KAN-33 | **M3** Full §3.4 physics | Every bin object has: OpenCLIP + DINOv2 crop features; the MLP prior applied (the existing prior, labelled ours); the equation (2) vote; the VLM audit; 10 materials, 6 bodies, 8 colliders; log mass and density, friction, restitution, rigidity, E and ν from the class; a soft-body flag at deformability ≥ 0.65. The USD stage with the PhysX schema settles in Isaac Lab and MuJoCo, and the inspector report is written by the model. | SF-33 features (KAN-39), SF-34 property set (KAN-40), SF-35 USD export and settle (KAN-41), SF-20 (KAN-21), SF-21 (KAN-22), SF-22 (KAN-23) |
+| 4 | KAN-34 | **M4** Full articulation (Figure 8) | On Mailbox and a capped marker: PartSAM parts; VLM missing-geometry check; CubePart completion appended; Articulate Anything joints and ranges (URDF) from those parts; a joint sweep in Isaac Lab with a VLM verdict; joints in the USD; `joint_pos` and `joint_limits` in the scene state | SF-36 (KAN-42), SF-37 (KAN-43), SF-38 (KAN-44), SF-39 (KAN-45) |
+| 4 | KAN-34 | **M5** Soft bodies and fracture | A deformable object simulates as a soft body. The Warp thin-sheet tear and the Blast ceramic shatter run as authored scenes, with the paper's values labelled as its assumptions. | SF-40 (KAN-46), SF-41 (KAN-47) |
+| 5 | KAN-35 | **M6** Video to sim | PutCupInBowl, PutMarkerInCup, ThrowAwayTrash and Mailbox each yield a settled USD scene, with the background completed and oriented | SF-42 (KAN-48), SF-43 (KAN-49) |
+| 5 | KAN-35 | **M7** Second protocol | MessyKitchens score file (or a decision, if the data is not public) | SF-44 (KAN-50) |
+| 5 | KAN-35 | **M8** MVP acceptance | One command on an unseen video, no hand edits, covering every item of the definition above; a recorded Isaac Lab rollout picks an object and moves a joint; then a tagged release | SF-45 editor panels (KAN-51), SF-46 acceptance run (KAN-52) |
+
+**After the MVP:** 4D (§3.6), sisters and hybrid scenes (§3.8–3.9), Meshy, Unreal, and policy fine-tuning (§3.10).
+
+**Decisions open (PR #46, KAN-33):**
+1. Phase order.
+2. The VLM key: run in the cloud session, or a key on the box.
+3. Whether to retrain the MLP prior on GSO, YCB and ABO as the paper does. That changes the prior files, which stay untouched without Sandeep's yes.
+4. MessyKitchens data access.
+
 ### Cut 1 ticket board
 
 | Ticket | Jira | True status | Evidence |
@@ -618,6 +691,8 @@ The full-rate MuJoCo drop ended at z 0.18175340000000004 m with `inside_bowl` fa
 
 Done rows stay as the artifact named here. Partial and missing rows name the code that exists, the file that would count as done, and the false done to avoid. Host paths are the ones the canvas and the matrix already record. They are not in this git tree.
 
+The "Now" cells below are the Fruits-era record. As of 2026-11-10, Cut 2 has bin evidence for these rows: COLMAP camera poses, splatfacto big, SAM masks, GroundingDINO, Gaussian association cuts, SAM 3D meshes, Trimmed similarity ICP, F1 at 1 cm and Chamfer, and GraspClutter6D hard/000091. The "Cut 2 board" under Status carries that evidence. Each row's status word stays until its ticket is Accepted.
+
 #### 3.1 Agent loop
 
 | Row | Status | Now | Counts as done | Do not |
@@ -718,6 +793,8 @@ Done rows stay as the artifact named here. Partial and missing rows name the cod
 ### 9.5 Order that unblocks a comparable number
 
 Only rows the canvas still marks partial or missing are in this sequence. Done artifacts in section 9.4 stay on disk.
+
+Progress as of 2026-11-10: steps 1–3 are done for the bin. The MessyKitchens half of step 1 is Cut 5 milestone M7 (SF-44, KAN-50). Step 2 ran on GraspClutter6D `hard/000091` in Cut 2, and step 3 wrote the first bin score file (F1@1cm 0.058, 0.067 after the reviewer in PR #44). Step 4 stands as written. The Cut 2 board under Status has the runs.
 
 1. Obtain GraspClutter6D `hard/000091` and the MessyKitchens shared capture. They are not in the repo. Fruits stays the example, off to the side of the score file.
 2. Run the sceneagent capture path on those inputs. Use a full-rate COLMAP invocation. `run_poses` will otherwise stop at 16 frames. SF-5 dc3, when it is run, uses every decoded frame at the native rate on a fresh COLMAP 3.11.1 model ([KAN-5 comment 10314](https://sandeeptssworkspace-35047491.atlassian.net/browse/KAN-5?focusedCommentId=10314)). The stored COLMAP 4.2.1 model stays a prior host artifact. Train splatfacto-big. Mask with SAM on the paper stride. Apply `association.gaussian_belongs`. Build the mesh with SAM 3D. Write ICP residuals. Leave `accept_alignment` undecided unless the caller passes `ours_iteration_1`, and do not edit those four constants to obtain an accept.
