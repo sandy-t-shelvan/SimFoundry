@@ -11,7 +11,33 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-PROMPT = "object ."
+# Object-category prompt for the GraspClutter6D bin (20 YCB objects, paper
+# §4.1). GraspClutter6D ships object ids only, with no id-to-name table in its
+# data or toolkit, so these are YCB categories (ours), not the dataset's names.
+# "object ." alone found 2-3 boxes per view (run 42742657778).
+PROMPT_TERMS = (
+    "box",
+    "can",
+    "bottle",
+    "jar",
+    "cup",
+    "mug",
+    "bowl",
+    "plate",
+    "fruit",
+    "toy",
+    "block",
+    "ball",
+    "tool",
+    "marker",
+    "sponge",
+    "clamp",
+    "object",
+)
+PROMPT = " . ".join(PROMPT_TERMS) + " ."
+PROMPT_SOURCE = (
+    "YCB category vocabulary (ours); GraspClutter6D publishes no id-to-name table"
+)
 BOX_THRESHOLD = 0.35
 TEXT_THRESHOLD = 0.25
 # A box over half the view is the bin or the table, not an object in it.

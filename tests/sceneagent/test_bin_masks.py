@@ -236,3 +236,15 @@ def test_mask_worker_imports_without_torch_or_numpy():
     root = Path(bin_masks.__file__).resolve().parent.parent
     done = subprocess.run([sys.executable, "-c", code], cwd=root, check=False)
     assert done.returncode == 0
+
+
+def test_the_bin_prompt_names_object_categories_and_says_where_they_come_from():
+    terms = mask_filter.prompt_terms(mask_filter.PROMPT)
+    assert len(terms) >= 10 and "can" in terms and "bottle" in terms
+    assert "ours" in mask_filter.PROMPT_SOURCE
+    dets = [
+        _det("bottle", 0.6, [10, 10, 60, 200]),
+        _det("wall", 0.9, [300, 300, 400, 400]),
+    ]
+    out = mask_filter.filter_detections(dets, W, H)
+    assert [d["kept"] for d in out] == [True, False]

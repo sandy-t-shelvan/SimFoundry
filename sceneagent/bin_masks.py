@@ -36,6 +36,7 @@ from sceneagent.mask_filter import (
     DUPLICATE_IOU,
     MAX_BOX_AREA_FRACTION,
     PROMPT,
+    PROMPT_SOURCE,
     TEXT_THRESHOLD,
 )
 
@@ -208,6 +209,7 @@ def run_bin_masks(
     evidence: dict[str, Any] = {
         "scene": SCENE,
         "prompt": PROMPT,
+        "prompt_source": PROMPT_SOURCE,
         "box_threshold": BOX_THRESHOLD,
         "text_threshold": TEXT_THRESHOLD,
         "filter": {
