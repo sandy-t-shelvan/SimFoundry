@@ -127,13 +127,14 @@ def test_main_writes_verdicts_with_no_key(tmp_path, monkeypatch, capsys):
     sheets = _zip(tmp_path, {"object_0.png": b"\x89PNG0", "object_1.png": b"\x89PNG1"})
     out = tmp_path / "vlm-out" / "vlm_verdicts.json"
     code = vr.main(
-        ["--sheets", str(sheets), "--out", str(out)],
+        ["--sheets", str(sheets), "--out", str(out), "--source-run", "42934419274"],
         harness=GeminiHarness(transport=transport),
     )
     assert code == 0
     text = out.read_text(encoding="utf-8")
     assert key not in text and key not in capsys.readouterr().out
     verdicts = json.loads(text)
+    assert verdicts["source_run"] == "42934419274"
     assert verdicts["vlm_calls"] == 2
     assert [o["decision"] for o in verdicts["objects"]] == ["icp_flip", "icp_flip"]
     assert "[redacted]" in verdicts["objects"][0]["reason"]
@@ -164,6 +165,7 @@ def test_harness_text_calls_are_unchanged():
 def test_the_box_checks_every_verdict_field(tmp_path):
     path = tmp_path / "v.json"
     good = {
+        "source_run": "42934419274",
         "model": "gemini-3.8-flash",
         "prompt_sha256": "abc",
         "vlm_calls": 2,
@@ -176,6 +178,7 @@ def test_the_box_checks_every_verdict_field(tmp_path):
     path.write_text(json.dumps(good), encoding="utf-8")
     meta, verdicts = br.load_verdicts(path)
     assert meta["vlm_calls"] == 2 and meta["failed_objects"] == [7]
+    assert meta["source_run"] == "42934419274"
     assert verdicts[4]["decision"] == "sam3d_next_view"
     for bad_item in (
         {"object": "0", "decision": "keep"},
@@ -238,3 +241,19 @@ def test_the_verdict_workflow_holds_only_the_gemini_key_and_never_reaches_the_bo
     steps = code.split("      - ")
     holders = [s for s in steps if "GEMINI_API_KEY" in s]
     assert len(holders) == 1 and "sceneagent.vlm_review" in holders[0]
+
+
+def test_the_source_run_must_be_a_run_id(tmp_path):
+    sheets = _zip(tmp_path, {"object_0.png": b"x"})
+    with pytest.raises(SystemExit):
+        vr.main(
+            [
+                "--sheets",
+                str(sheets),
+                "--out",
+                str(tmp_path / "v.json"),
+                "--source-run",
+                "1; rm -rf /",
+            ],
+            harness=FakeHarness([]),
+        )

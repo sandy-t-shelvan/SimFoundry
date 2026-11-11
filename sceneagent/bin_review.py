@@ -138,26 +138,46 @@ def render_isolated(
         row = np.clip((y * (size - 1)).astype(int), 0, size - 1)
         return row, col
 
-    image = np.full((size, size, 3), 255, dtype=np.uint8)
     row, col = pixels(points)
-    depth = (points - centre) @ d
-    shade = (60 + 180 * np.abs(normals @ d)).astype(np.uint8)
-    order = np.argsort(-depth)  # far first, so the nearest point is written last
-    image[row[order], col[order]] = shade[order, None]
     g_row, g_col = pixels(gaussians)
-    g_mask = np.zeros((size, size), dtype=bool)
-    g_mask[g_row, g_col] = True
-    image[g_mask] = (0.5 * image[g_mask] + 0.5 * np.array([30, 90, 255])).astype(
-        np.uint8
-    )
     # Footprints on a coarser grid, so gaps between samples do not count as
-    # disagreement.
+    # disagreement. Measured in the frame that holds every Gaussian.
     coarse = -(-size // FOOTPRINT_DIVISOR)
     mesh_mask = np.zeros((coarse, coarse), dtype=bool)
     mesh_mask[row // FOOTPRINT_DIVISOR, col // FOOTPRINT_DIVISOR] = True
     g_coarse = np.zeros((coarse, coarse), dtype=bool)
     g_coarse[g_row // FOOTPRINT_DIVISOR, g_col // FOOTPRINT_DIVISOR] = True
     iou = silhouette_iou(_dilate(mesh_mask, 1), _dilate(g_coarse, 1))
+    # The picture is framed on the mesh instead: a few floaters far out would
+    # otherwise shrink the object to a dot (run 42934419274, object 7). A
+    # Gaussian outside that frame is not drawn. The IoU above is unchanged.
+    view = (
+        1.3
+        * 2
+        * max(
+            np.abs((points - centre) @ right).max(),
+            np.abs((points - centre) @ up).max(),
+            1e-9,
+        )
+    )
+    image = np.full((size, size, 3), 255, dtype=np.uint8)
+    x, y = (points - centre) @ right / view + 0.5, 0.5 - (points - centre) @ up / view
+    row = np.clip((y * (size - 1)).astype(int), 0, size - 1)
+    col = np.clip((x * (size - 1)).astype(int), 0, size - 1)
+    depth = (points - centre) @ d
+    shade = (60 + 180 * np.abs(normals @ d)).astype(np.uint8)
+    order = np.argsort(-depth)  # far first, so the nearest point is written last
+    image[row[order], col[order]] = shade[order, None]
+    gx = (gaussians - centre) @ right / view + 0.5
+    gy = 0.5 - (gaussians - centre) @ up / view
+    inside = (gx >= 0) & (gx <= 1) & (gy >= 0) & (gy <= 1)
+    g_mask = np.zeros((size, size), dtype=bool)
+    g_mask[
+        (gy[inside] * (size - 1)).astype(int), (gx[inside] * (size - 1)).astype(int)
+    ] = True
+    image[g_mask] = (0.5 * image[g_mask] + 0.5 * np.array([30, 90, 255])).astype(
+        np.uint8
+    )
     return image, iou
 
 
@@ -172,6 +192,35 @@ def draw_overlay(
     outline = mask & ~_erode(mask)
     out[_dilate(outline, 2)] = np.array([40, 255, 40], dtype=np.uint8)
     return out
+
+
+def crop_to_object(
+    image: np.ndarray, region: np.ndarray, margin: float = 0.5, min_px: int = 96
+) -> np.ndarray:
+    """``image`` cut to ``region``'s box plus a margin, enlarged to at least 512 px.
+
+    The whole photo shrunk into one tile leaves a small object a few pixels
+    wide (run 42934419274, object 7), too small to judge red against green.
+    Display only: nothing is measured on the crop.
+    """
+    from PIL import Image
+
+    rows, cols = np.nonzero(region)
+    if rows.size == 0:
+        return image
+    height, width = region.shape
+    half = max(int(np.ptp(rows)) + 1, int(np.ptp(cols)) + 1, min_px) * (0.5 + margin)
+    cy, cx = (rows.min() + rows.max()) / 2, (cols.min() + cols.max()) / 2
+    top, bottom = int(max(cy - half, 0)), int(min(cy + half, height))
+    left, right = int(max(cx - half, 0)), int(min(cx + half, width))
+    crop = Image.fromarray(image[top:bottom, left:right])
+    scale = max(1.0, 512 / max(crop.size))
+    if scale > 1.0:
+        crop = crop.resize(
+            (round(crop.width * scale), round(crop.height * scale)),
+            Image.Resampling.LANCZOS,
+        )
+    return np.array(crop)
 
 
 def _erode(mask: np.ndarray) -> np.ndarray:
@@ -276,7 +325,13 @@ def load_verdicts(path: Path) -> tuple[dict[str, Any], dict[int, dict[str, str]]
         }
     meta = {
         key: payload.get(key)
-        for key in ("model", "prompt_sha256", "prompt_source", "vlm_calls")
+        for key in (
+            "source_run",
+            "model",
+            "prompt_sha256",
+            "prompt_source",
+            "vlm_calls",
+        )
     }
     meta["failed_objects"] = [
         f.get("object") for f in payload.get("failed") or [] if isinstance(f, dict)
@@ -418,7 +473,9 @@ def review_object(
     mask = stack[mask_ref["mask_index"]]
     with Image.open(out / "images" / view) as handle:
         photo = np.array(handle.convert("RGB"))
-    views["registration_overlay"] = draw_overlay(photo, mask, rendered)
+    views["registration_overlay"] = crop_to_object(
+        draw_overlay(photo, mask, rendered), mask | rendered
+    )
     overlay_iou = silhouette_iou(rendered, mask)
     for k, assembled in enumerate(assembled_views[:2], 1):
         a_image = images[assembled]
@@ -519,6 +576,8 @@ def run_bin_review(
             )
             assembled = list(dict.fromkeys(m["view"] for m in by_area))
             review = review_object(out, inputs, record, clouds, assembled)
+            # The fit the views show; a VLM run compares it with the judged run's.
+            review["fit_total"] = record["fit_total"]
             rule = choose_retry(
                 record["gate"],
                 review["overlay_iou"],

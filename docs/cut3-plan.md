@@ -115,6 +115,22 @@ The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub sec
 3. **The verdicts are committed** as `ci/vlm_verdicts.json`, so the model's output is visible in review before anything acts on it.
 4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
 
+**Legible sheets first.** Run 42934419274's sheets were checked by eye before any Gemini call.
+
+- **Isolated views:** each view was framed around every Gaussian, so a few floaters left small objects a dot in five of eight views (object 7). The picture is now framed on the mesh. Gaussians outside that frame are not drawn, but they still count in the measured IoU, which is identical to before over 1,600 random renders.
+- **Overlay:** the whole photo shrunk into one tile left small objects about 15 px wide. It is now cut to the object and enlarged.
+
+The rule's choices cannot change, so the first round needs a fresh `review` run for new sheets, and that run should reproduce 0.3268 before review and 0.3235 after.
+
+**How the first round is read (set before the number).**
+
+- **What it measures:** a retry is still kept only when the fit distance improves, and that test no longer tracks GT (phase A). So this round measures only which objects Gemini sends to a retry, not whether it judges fits better.
+- **Where the signal is:** where Gemini and the rule agree, the outcome is identical, so the signal is the per-object GT change on the objects where they disagree, reported with `agrees_with_rule`. Gemini choosing `keep` everywhere ties 0.327 and says nothing. Beating 0.323 by retrying less is not evidence that Gemini sees better.
+- **Next round:** Gemini judges each retry's before and after views, replacing the fit-distance acceptance.
+- **Check before reading the score:** `score_before_review` must be 0.3268, and each object's `fit_total` must match the judged run's. Otherwise the verdicts were applied to a different scene (the bin dir is shared across branches).
+
+**Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
+
 Why this shape: the GPU workflow pins `secrets.VAST_API_KEY` to one reference and allows only the pipeline choice as input, so a second box step or a run-id input there would loosen two security pins. The commit step costs one hop and makes the model's output auditable. SF-19 is measured against both 0.327 (no review) and 0.323 (the rule).
 
 Canvas rows: "Visual review" (agent lane), "Orchestrator", and the section 3.1 "Agent repair loop".

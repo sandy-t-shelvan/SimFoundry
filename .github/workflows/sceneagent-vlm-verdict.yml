@@ -53,9 +53,10 @@ jobs:
       - name: Gemini verdict per object
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          REVIEW_RUN: ${{ inputs.review_run }}
         run: |
           set -euo pipefail
-          python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json
+          python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json --source-run "$REVIEW_RUN"
 
       - name: Upload the verdicts
         if: always()

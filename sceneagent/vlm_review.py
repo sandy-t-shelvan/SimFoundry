@@ -134,7 +134,9 @@ def read_sheets(zip_path: Path) -> dict[int, bytes]:
     return dict(sorted(sheets.items()))
 
 
-def judge(sheets: dict[int, bytes], harness: ImageHarness) -> dict[str, Any]:
+def judge(
+    sheets: dict[int, bytes], harness: ImageHarness, source_run: str = ""
+) -> dict[str, Any]:
     """One Gemini call per sheet. A failed call or bad reply is recorded, not guessed."""
     objects: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
@@ -149,6 +151,7 @@ def judge(sheets: dict[int, bytes], harness: ImageHarness) -> dict[str, Any]:
                 {"object": number, "error": f"{type(exc).__name__}: {exc}"[:300]}
             )
     return {
+        "source_run": source_run,
         "model": harness.model_id,
         "prompt_sha256": prompt_sha256(),
         "prompt_source": "ours",
@@ -162,7 +165,14 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--sheets", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--source-run",
+        default="",
+        help="gpu-smoke run id the sheets came from, recorded in the verdicts",
+    )
     args = parser.parse_args(argv)
+    if args.source_run and not re.fullmatch(r"[0-9]{1,20}", args.source_run):
+        parser.error("--source-run must be a run id (digits only)")
     if harness is None:
         from sceneagent.harness import selected_harness
 
@@ -171,7 +181,7 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
     if not sheets:
         print("no object_<n>.png sheets in the zip", file=sys.stderr)
         return 1
-    verdicts = judge(sheets, harness)
+    verdicts = judge(sheets, harness, args.source_run)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(verdicts, indent=2) + "\n", encoding="utf-8")
     counts = {d: 0 for d in DECISIONS}
