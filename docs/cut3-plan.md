@@ -243,6 +243,8 @@ Canvas rows: "Visual review" (agent lane), "Orchestrator", and the section 3.1 "
 
 The paper's §3.4 in full, on every bin object. Nothing in this phase changes `fitted_splat` or the mlp-physics-prior files.
 
+**SF-20 and SF-21 runner side (2026-11-11, KAN-21 and KAN-22).** `sceneagent.material_runner` runs the equation (2) vote and the second-pass audit on the GitHub runner, where the Gemini key is. The vote reuses `material_vote.run_material_vote` as it is; the audit writes `material_review.json` (provisional class, audit class, final class, reason, `signed_by` a coding agent). It reads a `crops.zip` the box writes. Still to do: a box step that cuts per-object crops into `crops.zip`, a verdict-workflow mode that runs `vote` then `audit`, and a box step that applies `material_review.json` to the physics export.
+
 **The prior is Sandeep's, used as it is.** It lives in [`sandy-t-shelvan/physics-prior-mlp`](https://github.com/sandy-t-shelvan/physics-prior-mlp) and is pinned by commit (`b052009` on 2026-11-10). Its two notes are `paper/physics_prior_mlp.pdf` and `paper/mlp_physx_physgaussian.pdf` ("Using the MLP prior with PhysX and PhysGaussian").
 - **Checkpoint (the model):** [`data/mlp/physics_prior_splat.npz`](https://github.com/sandy-t-shelvan/physics-prior-mlp/blob/b052009284d7794fc38fb8d158d5eb5c9fb1a7cb/data/mlp/physics_prior_splat.npz), epoch 10 of a 14-epoch run.
   - 260,290 bytes, SHA-256 `7d737d52e82e1363efa7dbdb0dd1986b6f9d5d3461829bac9420802cfc09c125`.
