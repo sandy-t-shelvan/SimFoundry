@@ -367,3 +367,20 @@ def test_a_failed_depth_worker_rejects_with_its_last_lines(tmp_path):
     entry = json.loads((out / "ledger.json").read_text())["entries"][-1]
     assert entry["decision"] == "reject"
     assert "No module named depth_anything_3" in entry["reason"]
+
+
+def test_consensus_keeps_gaussians_two_views_agree_on():
+    masks = [
+        {
+            "view": "a.png",
+            "gaussians": np.array([1, 2, 3, 9]),
+        },  # 9: a floater only a sees
+        {"view": "a.png", "gaussians": np.array([4])},
+        {"view": "b.png", "gaussians": np.array([1, 2, 3, 4])},
+    ]
+    kept, union = ba.consensus_gaussians(masks, 2)
+    assert kept.tolist() == [1, 2, 3, 4] and union == 5
+    # One view only: min(kappa, 1) = 1 keeps the union.
+    kept, union = ba.consensus_gaussians(masks[:2], 2)
+    assert kept.tolist() == [1, 2, 3, 4, 9] and union == 5
+    assert ba.consensus_gaussians(masks, 1)[0].size == 5
