@@ -139,13 +139,14 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 | Gemini (8 `keep`, 2 `icp_flip`, 4 `sam3d_next_view`) | 0.3267 | 0.0211 m |
 
 - **They agree on 3 of 14.**
-- **Gemini avoids the rule's harm.** The rule's flips cost GT 24 (crate, 0.083 → 0.005) and GT 38 (0.395 → 0.372), against small gains on three others. Gemini kept all five of those objects.
+- **Gemini avoids the rule's harm.** The rule's flips cost GT 24 (crate, 0.083 → 0.005) and GT 38 (0.395 → 0.372), against small gains on three others. Under Gemini all five stayed as placed: four keeps, and one rejected regeneration (object 5, GT 38: silhouette 0.569 → 0.528).
 - **Gemini's regenerations, one at a time:**
   - object 8, the two fused fruits the rule kept: GT 6 0.525 → 0.570;
   - object 0, the bottle: GT 29 0.333 → 0.290;
-  - object 4: GT 19 0.173 → 0.170.
-  - Each was kept because its silhouette improved, and object 0's did while its GT fell: the same acceptance problem phase A found for the fit distance.
-- **Run-to-run spread:** the first `review_vlm` (run 42942342408) gave 0.3270 and 0.0208 m. Regeneration is not bit-identical, so differences of about 0.0003 are noise.
+  - object 4: GT 19 0.173 → 0.170;
+  - object 5: regenerated, rejected (silhouette fell), unchanged.
+  - The three kept were kept because their silhouette improved, and object 0's did while its GT fell: the same acceptance problem phase A found for the fit distance.
+- **Run-to-run spread: one retry outcome flipped.** The first `review_vlm` (run 42942342408) kept 2 retries and scored 0.3270 and 0.0208 m; the rerun kept 3 and scored 0.3267 and 0.0211 m. SAM 3D regeneration is not bit-identical, so one regeneration crossed the silhouette bar in one run and not the other. The first run's per-object file was not published, so which one is unknown, and **the per-object regeneration effects above are not stable from run to run.** The next round needs deterministic regenerations or more than one run per verdict set.
 - **Reading, as set in advance:** Gemini ties no review and beats the rule by retrying less. That is not yet evidence that it judges fits better. It does pick the right retry on two errors the rule cannot see (merged objects, wrong shape), and its retries are then accepted by a test that does not track GT.
 - **Next:** Gemini judges each retry's before and after views, so acceptance is the VLM's, not the silhouette's or the fit distance's.
 
