@@ -1,0 +1,80 @@
+{
+  "source_run": "42939458339",
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "4b8cad46e12f7124b9fdc67303414ad31298d865f290fa317ad3ef55533e93b7",
+  "prompt_source": "ours",
+  "vlm_calls": 14,
+  "objects": [
+    {
+      "object": 0,
+      "decision": "sam3d_next_view",
+      "reason": "The generated mesh has an incorrect split tubular shape that does not match the bottle, indicating reconstruction failure from this view."
+    },
+    {
+      "object": 1,
+      "decision": "keep",
+      "reason": "The fitted mesh closely matches the box dimensions, aligns with the blue point cloud across views, and accurately overlays the object in the camera images."
+    },
+    {
+      "object": 2,
+      "decision": "keep",
+      "reason": "The cylindrical mesh shape fits the coffee can well, with blue points accurately conforming to the surface across all angles and clean registration overlays."
+    },
+    {
+      "object": 3,
+      "decision": "icp_flip",
+      "reason": "The mesh is roughly 180 degrees flipped, with its neck pointing up and to the left instead of down and to the right to fill the green outline."
+    },
+    {
+      "object": 4,
+      "decision": "sam3d_next_view",
+      "reason": "The fitted mesh and its silhouette are completely displaced from the green segmentation mask onto an adjacent object, so a rotation retry will not fix the fit."
+    },
+    {
+      "object": 5,
+      "decision": "sam3d_next_view",
+      "reason": "The reconstructed mesh is a simple cylinder that fails to capture the knife blade geometry shown in the segmentation mask."
+    },
+    {
+      "object": 6,
+      "decision": "keep",
+      "reason": "The reconstructed 3D points match the mesh's cylindrical body, handle, and spout tightly across all views."
+    },
+    {
+      "object": 7,
+      "decision": "keep",
+      "reason": "The reconstructed 3D points tightly conform to the mesh surface and the assembled views align accurately."
+    },
+    {
+      "object": 8,
+      "decision": "sam3d_next_view",
+      "reason": "The reconstructed mesh merges two separate fruits into a single double-lobed shape."
+    },
+    {
+      "object": 9,
+      "decision": "icp_flip",
+      "reason": "The mesh is oriented backwards with its body and handle reversed relative to both the point cloud and the image outline."
+    },
+    {
+      "object": 10,
+      "decision": "keep",
+      "reason": "The cylindrical mesh matches the tomato soup can well and the blue points align closely with the mesh surface across all views."
+    },
+    {
+      "object": 11,
+      "decision": "keep",
+      "reason": "The reconstructed 3D points tightly align with the mesh surface across all viewpoints and the projected overlays match the object accurately."
+    },
+    {
+      "object": 12,
+      "decision": "keep",
+      "reason": "The reconstructed crate mesh matches the object's geometry and aligns closely with both the 3D points and the 2D segmentation mask."
+    },
+    {
+      "object": 13,
+      "decision": "sam3d_next_view",
+      "reason": "The reconstructed mesh has lemon-like tips and incorrect proportions, making its projected silhouette much larger than the actual round red fruit in the image."
+    }
+  ],
+  "failed": []
+}
