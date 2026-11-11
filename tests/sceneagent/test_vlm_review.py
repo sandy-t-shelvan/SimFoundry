@@ -215,6 +215,9 @@ def test_review_vlm_runs_the_reviewer_on_the_committed_verdicts():
         "/workspace/r/" + VLM_VERDICTS_RELATIVE,
     ]
     assert "review_vlm" in BIN_PIPELINES
+    # Run 42941668034: the file was committed under ci/, which is never
+    # shipped, so the box found nothing. It must be in what rsync copies.
+    assert VLM_VERDICTS_RELATIVE.startswith("sceneagent/")
     assert PIPELINES["review_vlm"][0][-2:] == (br.VLM_RETRY_ITEM, br.VLM_SCORE_ITEM)
     assert "bin_review_vlm.json" in FETCH_NAMES
     assert "sf4-artifacts/bin_review_vlm.json" in GPU_WORKFLOW.read_text(
@@ -257,3 +260,29 @@ def test_the_source_run_must_be_a_run_id(tmp_path):
             ],
             harness=FakeHarness([]),
         )
+
+
+def test_the_committed_verdict_file_is_shipped_to_the_box(tmp_path):
+    from sceneagent.vast_smoke import VLM_VERDICTS_RELATIVE, iter_shipped_files
+
+    checkout = tmp_path / "checkout"
+    verdicts = checkout / VLM_VERDICTS_RELATIVE
+    verdicts.parent.mkdir(parents=True)
+    verdicts.write_text("{}", encoding="utf-8")
+    (checkout / "ci").mkdir()
+    (checkout / "ci" / "vlm_verdicts.json").write_text("{}", encoding="utf-8")
+    shipped = iter_shipped_files(checkout)
+    assert verdicts in shipped
+    assert checkout / "ci" / "vlm_verdicts.json" not in shipped
+
+
+def test_every_published_file_is_fetched_and_uploaded():
+    # Run 42942342408 fetched bin_review_vlm.json, then a third hand-kept list
+    # dropped it before upload. One constant now feeds the copy step.
+    from sceneagent.vast_smoke import FETCH_NAMES, PUBLISHED_NAMES
+
+    workflow = GPU_WORKFLOW.read_text(encoding="utf-8")
+    uploaded = set(re.findall(r"sf4-artifacts/([A-Za-z0-9_.]+)", workflow))
+    assert PUBLISHED_NAMES <= set(FETCH_NAMES)
+    assert PUBLISHED_NAMES <= uploaded, PUBLISHED_NAMES - uploaded
+    assert "bin_review_vlm.json" in PUBLISHED_NAMES

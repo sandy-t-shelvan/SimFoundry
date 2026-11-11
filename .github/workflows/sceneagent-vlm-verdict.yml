@@ -4,7 +4,7 @@
 # secret; the one secret it reads is GEMINI_API_KEY, in the one step that
 # calls Gemini. It reads review_sheets.zip from a finished sceneagent-gpu-smoke
 # run (the review_run input) and uploads vlm_verdicts.json. That file is then
-# committed to the branch as ci/vlm_verdicts.json, so the model's output is
+# committed to the branch as sceneagent/verdicts/vlm_verdicts.json, so the model's output is
 # reviewed before the gpu-smoke "review_vlm" choice applies it on the box.
 name: sceneagent-vlm-verdict
 

@@ -59,6 +59,7 @@ The score files were never committed before PR #50: `.gitignore`'s `*core*` matc
 | SF-31 container split (KAN-37, PR #47, closed) | no | 0.109 | 0.032 m | (not committed) |
 | SF-32 SAM 3D pose rescale (KAN-38, PR #48) | yes | **0.327** | **0.021 m** | `…_58301075_kappa2_rescale.json` |
 | … then the rule-based reviewer (SF-19) | (evidence) | 0.323 | 0.024 m | `…_58301075_kappa2_rescale_reviewed.json` |
+| … then Gemini's verdicts (SF-19 VLM, PR #54) | (evidence) | 0.327 | 0.021 m | `…_58301075_kappa2_rescale_vlm_reviewed.json` |
 
 The rescale multiplies SAM 3D's translation and size by our depth of the object over MoGe's depth in its mask (median 0.334): SAM 3D's starts were about three times too far and too large. The best SAM 3D start went from 5.79 to 0.090 splat units from its Gaussians. On top of it, the rule-based reviewer kept 5 flips that lowered the fit distance slightly and cost a little against GT (0.327 → 0.323), so Phase B's VLM verdict is measured against both. 0.327 is above the paper's 6.9% for original SimFoundry and below its 60.75% for SceneAgent; both stay the paper's.
 

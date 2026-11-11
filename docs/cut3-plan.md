@@ -74,6 +74,7 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 | κ=2 + container split (PR #47, SF-31): **not kept** | association 42927798966, place 42929004562 | 0.109 | 0.032 m |
 | **κ=2 + SAM 3D pose rescale (PR #48, SF-32)** | association 42929907431, sam3d 42930467798, place 42932270322 | **0.327** | **0.021 m** |
 | … then the rule-based reviewer (SF-19) | review 42934419274 | 0.323 | 0.024 m |
+| … then Gemini's verdicts (SF-19 VLM, PR #54) | verdict 42941121692, review_vlm 42943461864 | 0.327 | 0.021 m |
 
 κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene.
 
@@ -112,7 +113,7 @@ The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub sec
 
 1. **Box draws.** gpu-smoke `review` draws each object's eleven views into `review_sheets.zip` (Vast and SSH keys only).
 2. **Runner judges.** The new runner-only workflow `sceneagent-vlm-verdict` takes that run's id, downloads the sheets, and runs `sceneagent.vlm_review`: one Gemini call per sheet, a fixed prompt (ours, hashed into the output), JSON constrained to the three retries. It uploads `vlm_verdicts.json`. It holds `GEMINI_API_KEY` in the Gemini step only, has read-only permissions, and never connects to the box. A failed call is recorded per object, never guessed.
-3. **The verdicts are committed** as `ci/vlm_verdicts.json`, so the model's output is visible in review before anything acts on it.
+3. **The verdicts are committed** as `sceneagent/verdicts/vlm_verdicts.json` (the box receives only `sceneagent/` and the Fruits video), so the model's output is visible in review before anything acts on it.
 4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
 
 **Legible sheets first.** Run 42934419274's sheets were checked by eye before any Gemini call.
@@ -128,6 +129,26 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 - **Where the signal is:** where Gemini and the rule agree, the outcome is identical, so the signal is the per-object GT change on the objects where they disagree, reported with `agrees_with_rule`. Gemini choosing `keep` everywhere ties 0.327 and says nothing. Beating 0.323 by retrying less is not evidence that Gemini sees better.
 - **Next round:** Gemini judges each retry's before and after views, replacing the fit-distance acceptance.
 - **Check before reading the score:** `score_before_review` must be 0.3268, and each object's `fit_total` must match the judged run's. Otherwise the verdicts were applied to a different scene (the bin dir is shared across branches).
+
+**Round 1 result (2026-11-11).** Gemini judged the sheets of review run 42939458339 (verdict run 42941121692: 14 calls, none failed) and `review_vlm` applied them (run 42943461864). The placement matched the judged one: 0.3268 before review, and every object's `fit_total` identical.
+
+| Review | F1@1cm | Matched Chamfer |
+|---|---|---|
+| None | 0.3268 | 0.0211 m |
+| Rule (12 `icp_flip`, 2 `keep`) | 0.3235 | 0.0237 m |
+| Gemini (8 `keep`, 2 `icp_flip`, 4 `sam3d_next_view`) | 0.3267 | 0.0211 m |
+
+- **They agree on 3 of 14.**
+- **Gemini avoids the rule's harm.** The rule's flips cost GT 24 (crate, 0.083 → 0.005) and GT 38 (0.395 → 0.372), against small gains on three others. Under Gemini all five stayed as placed: four keeps, and one rejected regeneration (object 5, GT 38: silhouette 0.569 → 0.528).
+- **Gemini's regenerations, one at a time:**
+  - object 8, the two fused fruits the rule kept: GT 6 0.525 → 0.570;
+  - object 0, the bottle: GT 29 0.333 → 0.290;
+  - object 4: GT 19 0.173 → 0.170;
+  - object 5: regenerated, rejected (silhouette fell), unchanged.
+  - The three kept were kept because their silhouette improved, and object 0's did while its GT fell: the same acceptance problem phase A found for the fit distance.
+- **Run-to-run spread: one retry outcome flipped.** The first `review_vlm` (run 42942342408) kept 2 retries and scored 0.3270 and 0.0208 m; the rerun kept 3 and scored 0.3267 and 0.0211 m. SAM 3D regeneration is not bit-identical, so one regeneration crossed the silhouette bar in one run and not the other. The first run's per-object file was not published, so which one is unknown, and **the per-object regeneration effects above are not stable from run to run.** The next round needs deterministic regenerations or more than one run per verdict set.
+- **Reading, as set in advance:** Gemini ties no review and beats the rule by retrying less. That is not yet evidence that it judges fits better. It does pick the right retry on two errors the rule cannot see (merged objects, wrong shape), and its retries are then accepted by a test that does not track GT.
+- **Next:** Gemini judges each retry's before and after views, so acceptance is the VLM's, not the silhouette's or the fit distance's.
 
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 
