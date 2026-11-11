@@ -73,6 +73,7 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 | **κ=2 (PR #45, SF-30)** | association 42924495643, place 42925055261 | **0.125** | **0.046 m** |
 | κ=2 + container split (PR #47, SF-31): **not kept** | association 42927798966, place 42929004562 | 0.109 | 0.032 m |
 | **κ=2 + SAM 3D pose rescale (PR #48, SF-32)** | association 42929907431, sam3d 42930467798, place 42932270322 | **0.327** | **0.021 m** |
+| … then the rule-based reviewer (SF-19) | review 42934419274 | 0.323 | 0.024 m |
 
 κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene.
 
@@ -84,6 +85,8 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 - against GT, 12 matches improve (GT 9: 0.18 → 0.94, GT 17: 0.27 → 0.94), GT 3 falls (0.32 → 0.25), GT 37 loses its match and GT 40 gains one (0.49).
 
 The size bound and the new start change in the same run, so their shares are not separated; seeds that won both times also fit better, which points at the bound. No ground truth is used, and no constant is fitted to this scene. The `ours_iteration_1` gate still rejects all 14 (its cutoffs are unchanged). The paper's bin numbers (6.9% for original SimFoundry, 60.75% for SceneAgent) stay the paper's. Score file: `docs/results/…_58301075_kappa2_rescale.json`.
+
+**The rule-based reviewer no longer helps.** On top of the rescale, SF-19 called `icp_flip` on 12 of 14 objects and `keep` on 2, and kept 5 flips because each lowered the fit distance a little (by 0.00003–0.017). Against GT the bin got slightly worse: F1 0.327 → 0.323, Chamfer 0.021 → 0.024 m (`…_kappa2_rescale_reviewed.json`). On κ=2 alone it had helped (0.125 → 0.128). With better starts, a smaller fit distance no longer means a better placement. Its isolated-view agreement is below 0.5 on 12 objects even where the overlay agrees (0.78–0.90 on objects 1, 2 and 11), which points at the rule, not the fit. This is the case Phase B's VLM verdict is for: it is measured against both 0.327 and the rule's 0.323.
 
 | Item | Done when | GPU |
 |---|---|---|
