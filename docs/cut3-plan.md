@@ -75,6 +75,7 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 | **κ=2 + SAM 3D pose rescale (PR #48, SF-32)** | association 42929907431, sam3d 42930467798, place 42932270322 | **0.327** | **0.021 m** |
 | … then the rule-based reviewer (SF-19) | review 42934419274 | 0.323 | 0.024 m |
 | … then Gemini's verdicts (SF-19 VLM, PR #54) | verdict 42941121692, review_vlm 42943461864 | 0.327 | 0.021 m |
+| … Gemini picks and accepts retries (round 2, PR #55) | verdicts 42947401149 and 42964570514, candidates 42963190714, apply 42965157633 | 0.327 | 0.021 m |
 
 κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene.
 
@@ -166,6 +167,34 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 - **Oracle (evaluation only, ours):** keeping a retry is better when keeping it alone raises scene F1@1cm. It is computed in the apply step, after Gemini has judged, and nowhere earlier.
 - **Report:** how often Gemini's acceptance agrees with the oracle, and how often the old test does, on the same candidates (ties excluded). Also scene F1 for no review, test-accepted, Gemini-accepted and oracle (an upper bound).
 - **Caveat:** n is about five, so the result is indicative only.
+
+**Round 2 result (2026-11-11).**
+
+- **Retry verdicts** (run 42947401149, judged on review run 42939458339's placement): keep 9, `icp_flip` 1, `sam3d_next_view` 4. Object 13 has no other view, so 3 regenerations and 1 flip ran (candidates run 42963190714, hash `e03b08b8…`). The flip moved nothing and was not judged, leaving 3 blind pairs.
+- **Pair verdicts** (run 42964570514): Gemini picked A once and B twice, which maps to the retry each time. Its reasons name visible flaws: an extra handle with no points on the bottle, a silhouette shifted left on object 4, a double-lobed mesh on the fused fruits. The silhouette test also keeps all three, so the two accepted scenes are the same.
+- **Applied and scored** (run 42965157633):
+
+| Acceptance | F1@1cm | Matched Chamfer |
+|---|---|---|
+| None | 0.3268 | 0.0211 m |
+| Silhouette/fit test | 0.3272 | 0.0211 m |
+| Gemini | 0.3272 | 0.0211 m |
+| Oracle (upper bound, evaluation only) | 0.3291 | 0.0208 m |
+
+| Object | Retry | Gemini | Test | Oracle | F1 change if kept alone |
+|---|---|---|---|---|---|
+| 8 (two fused fruits) | regenerate | keep | keep | keep | +0.0023 |
+| 0 (bottle) | regenerate | keep | keep | reject | −0.0016 |
+| 4 | regenerate | keep | keep | reject | −0.0003 |
+
+**Reading, against the measure set in advance.**
+
+- **Agreement with the oracle:** Gemini 1 of 3, the test 1 of 3. With n = 3 this says nothing about which judge is better. It does show Gemini does not yet beat the test.
+- **The bottle is the informative case.** Gemini judged the regenerated bottle better because it is one clean bottle where the old mesh had a stray handle, and by eye that is right. Against GT it is worse: the cleaner mesh is placed or sized worse in the scene. The sheets show shape plausibility well, and placement accuracy at the centimetre level that F1@1cm scores, much less well.
+- **What the oracle bound says:** the most any judge could add on these candidates is 0.3268 → 0.3291. Better acceptance alone cannot move the bin much. The retries themselves, especially regeneration from a weaker view, are now the limit.
+- **Next:**
+  - more decisions per run: candidates for all 14 objects, with Gemini choosing among before, flip and regenerate (the advisor's option);
+  - a placement-focused view in the sheets (mesh against points at true scale, side by side), so a cleaner-looking but misplaced mesh shows as misplaced.
 
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 
