@@ -110,6 +110,10 @@ cutoffs stay), "F1 at 1 cm and Chamfer".
 
 The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub secret `GEMINI_API_KEY` (decision 2). The GPU workflow forwards no secrets to the box by design, so the calls run on the GitHub runner, on the contact sheets and renders the box publishes.
 
+**SF-18 step-runner critic, first part (2026-11-11, `sceneagent.step_critic`).** Per-stage prompts (masks, Gaussians, mesh, parts) and one schema: accept or reject, a reason, and a retry note for a reject. `judge` runs on the runner and writes `review/<stage>.json`, which is dc1's shape. The box side covers three pieces: it draws the masks review image from the masks stage's own files, turns committed verdicts into ledger lines (dc2's shape), and allows at most one retry per stage. The masks stage is hooked first. Still to wire:
+- a `step` mode in the verdict workflow (the one place that holds `GEMINI_API_KEY`);
+- a box pipeline that publishes `review_steps.zip` and re-runs a rejected stage with the note.
+
 **Runner plumbing (built once, reused by SF-18 and SF-24).** Each secret lives in exactly one step of one workflow, and the stages hand off through files:
 
 1. **Box draws.** gpu-smoke `review` draws each object's eleven views into `review_sheets.zip` (Vast and SSH keys only).
