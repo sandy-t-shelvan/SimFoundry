@@ -83,8 +83,8 @@ def _uk(status, **extra):
         "geolocation": "United Kingdom, GB",
         "ssh_host": "ssh6.vast.ai",
         "ssh_port": 35512,
-        "public_ipaddr": "47.186.21.5",
-        "ports": {"22/tcp": [{"HostPort": "51808"}]},
+        "public_ipaddr": "87.192.102.26",
+        "ports": {"22/tcp": [{"HostPort": "29423"}]},
         "gpu_name": "RTX 4090",
         "jupyter_token": "do-not-log",
         "extra_env": [["SECRET", "nope"]],
@@ -2486,7 +2486,7 @@ _FAKE_PRIVATE = (
 )
 
 
-def _host_pin(directory, host="47.186.21.5", port=51808):
+def _host_pin(directory, host="87.192.102.26", port=29423):
     path = Path(directory) / "known_host"
     path.write_text(
         f"[{host}]:{port} ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKeyForSf4SmokeOnly\n",
@@ -2501,25 +2501,25 @@ def test_ssh_endpoint_uses_the_direct_port_and_ignores_the_proxy():
         ssh_host="ssh5.vast.ai",
         ssh_port=16868,
     )
-    assert ssh_endpoint(row) == ("47.186.21.5", 51808)
+    assert ssh_endpoint(row) == ("87.192.102.26", 29423)
     pin_line = [
         line.strip()
         for line in KNOWN_HOST_PATH.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
     assert pin_line == [
-        "[47.186.21.5]:51808 ssh-ed25519 "
-        "AAAAC3NzaC1lZDI1NTE5AAAAIH7JFtqbfWEbYZ1gmfTNF5DmcvB1gmiXb0gDFFtCkJYr"
+        "[87.192.102.26]:29423 ssh-ed25519 "
+        "AAAAC3NzaC1lZDI1NTE5AAAAIGvtJtF90s5EpabLy3HUhJCWVft/gXrssvwqOzjagO8L"
     ]
     assert (
-        load_known_host_line(KNOWN_HOST_PATH, "47.186.21.5", 51808).strip()
+        load_known_host_line(KNOWN_HOST_PATH, "87.192.102.26", 29423).strip()
         == (pin_line[0])
     )
     with pytest.raises(InstanceNotApproved, match="does not match"):
         load_known_host_line(KNOWN_HOST_PATH, "ssh5.vast.ai", 16868)
     numeric = _uk("running")
-    numeric["ports"] = {"22/tcp": [{"HostPort": 51808}]}
-    assert ssh_endpoint(numeric) == ("47.186.21.5", 51808)
+    numeric["ports"] = {"22/tcp": [{"HostPort": 29423}]}
+    assert ssh_endpoint(numeric) == ("87.192.102.26", 29423)
 
 
 def test_ssh_endpoint_refuses_a_missing_or_invalid_direct_endpoint():
