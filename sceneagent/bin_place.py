@@ -454,6 +454,54 @@ def measure_fit(
     }
 
 
+def object_depth_m(
+    inputs: dict[str, Any], target: np.ndarray, view: str
+) -> float | None:
+    """Median camera depth of the object's Gaussians in ``view``, in DA3 metres."""
+    image = inputs["images"][view]
+    camera = inputs["cameras"][image["camera_id"]]
+    world = splat_to_colmap(target, inputs["transform"], inputs["scale"])
+    u, v, z = project(world, image, camera)
+    with np.errstate(invalid="ignore"):
+        ok = (
+            (z > 0)
+            & (u >= 0)
+            & (u < camera["width"])
+            & (v >= 0)
+            & (v < camera["height"])
+        )
+    if not ok.any():
+        return None
+    metres_per_colmap = inputs["scale"] * float(
+        inputs["association"]["unit"]["metres_per_unit"]
+    )
+    return float(np.median(z[ok])) * metres_per_colmap
+
+
+def depth_ratio(
+    inputs: dict[str, Any], target: np.ndarray, view: str, pose: dict[str, Any]
+) -> float | None:
+    """Our depth of the object over SAM 3D's own (MoGe) depth inside its mask.
+
+    SAM 3D places the object in MoGe's metric frame; if MoGe's scale differs
+    from ours, translation and size are both off by this factor. Ours.
+    """
+    theirs = pose.get("mask_depth_m")
+    if not theirs:
+        return None
+    ours = object_depth_m(inputs, target, view)
+    return None if ours is None else ours / float(theirs)
+
+
+def rescale_pose(pose: dict[str, Any], ratio: float) -> dict[str, Any]:
+    """SAM 3D's pose with its translation and size multiplied by ``ratio``."""
+    return {
+        **pose,
+        "translation": [float(t) * ratio for t in pose["translation"]],
+        "scale": [float(c) * ratio for c in pose["scale"]],
+    }
+
+
 def place_one(
     out: Path,
     inputs: dict[str, Any],
@@ -467,15 +515,21 @@ def place_one(
     m_per_unit = float(inputs["association"]["unit"]["metres_per_unit"])
     target = inputs["positions"][inputs["sets"][f"object_{number}"]]
     source = sample_mesh(glb, ICP_SOURCE_POINTS)
+    poses = {"sam3d_pose": pose}
+    ratio = depth_ratio(inputs, target, view, pose)
+    if ratio is not None:
+        poses["sam3d_rescaled"] = rescale_pose(pose, ratio)
     starts = {
-        f"sam3d_pose/{camera}/{fix}": pose_to_splat(
-            pose, inputs["images"][view], transform, dp_scale, m_per_unit, matrix, flip
+        f"{kind}/{camera}/{fix}": pose_to_splat(
+            p, inputs["images"][view], transform, dp_scale, m_per_unit, matrix, flip
         )
+        for kind, p in poses.items()
         for camera, flip in CAMERA_FLIPS.items()
         for fix, matrix in FRAME_FIXES.items()
     }
     starts.update(centred_starts(starts, source, target))
-    prior = next(iter(starts.values()))[0]
+    # The size bound follows SAM 3D's size in our metres when it can be measured.
+    prior = next(s for name, s in starts.items() if name.startswith(list(poses)[-1]))[0]
     start_name, result, tried = best_icp(source, target, starts, prior)
     dense = sample_mesh(glb, POINTS_PER_OBJECT, seed=1)
     cloud = apply_similarity(
@@ -496,6 +550,7 @@ def place_one(
             "translation": np.asarray(result["translation"]).tolist(),
         },
         "fit_total": tried["best_total"],
+        "pose_depth_ratio": ratio,
     }
     record.update(measure_fit(out, inputs, number, glb, target, result))
     return cloud, record

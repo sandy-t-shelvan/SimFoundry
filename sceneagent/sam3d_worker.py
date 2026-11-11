@@ -34,6 +34,29 @@ def _floats(value) -> list:
     return np.asarray(value, dtype=float).reshape(-1).tolist()
 
 
+def mask_depth(pointmap, mask) -> float | None:
+    """Median depth of SAM 3D's own pointmap (MoGe, metres) inside the object mask.
+
+    The pointmap can come back smaller than the image, so the mask is sampled
+    down to it by nearest neighbour. ``bin_place`` divides its own depth of the
+    object by this to rescale SAM 3D's pose into the splat's metres.
+    """
+    import numpy as np
+
+    if pointmap is None:
+        return None
+    if hasattr(pointmap, "detach"):
+        pointmap = pointmap.detach().float().cpu().numpy()
+    points = np.asarray(pointmap, dtype=float)
+    height, width = points.shape[:2]
+    rows = np.arange(height) * mask.shape[0] // height
+    cols = np.arange(width) * mask.shape[1] // width
+    inside = mask[np.ix_(rows, cols)]
+    z = np.abs(points[..., 2][inside])
+    z = z[np.isfinite(z) & (z > 0)]
+    return float(np.median(z)) if z.size else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--jobs", type=Path, required=True)
@@ -74,6 +97,9 @@ def main(argv: list[str] | None = None) -> int:
                 k: _floats(output[k]) for k in ("rotation", "translation", "scale")
             }
             pose.update(convention="local to camera, PyTorch3D camera frame, wxyz")
+            depth = mask_depth(output.get("pointmap"), mask)
+            if depth is not None:
+                pose["mask_depth_m"] = depth
             glb = output.get("glb")
             if glb is None:
                 raise RuntimeError(f"no glb in the output (keys {sorted(output)})")

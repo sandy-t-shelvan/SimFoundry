@@ -23,13 +23,13 @@ This subsection is the newest status and supersedes the Cut 1 tables below where
 | 4. Meshes | SF-29 / KAN-32 (To Do) | PR #42 | SAM 3D meshed all 25 objects ([run 42760087159](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42760087159)). |
 | 4. ICP and first score | SF-8 / KAN-8 (In Review), SF-28 | PR #42 | Observed-to-mesh trimmed similarity ICP, with one camera-based scene similarity. **F1@1cm 0.058, matched Chamfer 0.130 m** (`docs/results/bin_000091_score_…chamfer.json`, [run 42762718646](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42762718646)). Silhouette IoU median 0.16. |
 | 5. Per-object reviewer | SF-19 / KAN-20 (In Progress) | PR #44 (merged `6d184cb`) | 11 drawn views per object; retries are `icp_flip` and `sam3d_next_view`, chosen by rule (the VLM verdict is SF-18). **F1 0.067, Chamfer 0.125 m** after review (`…_reviewed.json`). |
-| Parallel mapper check | (none) | open: PR #43 | COLMAP 4.1.1 `global_mapper` against incremental on the bin and Fruits (`docs/results/mapper_compare_bin_fruits.json`). |
+| Parallel mapper check | (none; feeds KAN-48) | PR #43 (merged `3074fa2`) | COLMAP 4.1.1 `global_mapper` against incremental on the bin and Fruits (`docs/results/mapper_compare_bin_fruits.json`). Bin: same cameras, incremental faster, so the bin keeps it. Fruits: global registers all 300 frames about 3.5–4× faster; all-pairs matching plus `global_mapper` is the video choice for M6. |
 
 **Against the paper.** On this scene the paper reports SimFoundry's original pipeline at 6.9% F1 and SceneAgent at 60.75%. Cut 2's 5.8% → 6.7% is at the original pipeline's level, not SceneAgent's. The three causes found are the work of Cut 3 phase A:
 
-1. Floater Gaussians in object sets. Camera consensus κ = 2 is in PR #45 (the paper uses κ = 1).
-2. Container-sized groups that swallow their neighbours. A 0.35 m extent split is in PR #47.
-3. SAM 3D pose starts about 0.75 m off. A mask-depth rescale of the pose is in PR #48.
+1. Floater Gaussians in object sets. Camera consensus κ = 2, PR #45, merged: F1 0.079 → 0.125 on 58301075 (the paper uses κ = 1).
+2. Container-sized groups that swallow their neighbours. A 0.35 m extent split, PR #47: F1 fell to 0.109, not kept.
+3. SAM 3D pose starts about 0.75 m off. A mask-depth rescale of the pose, PR #48: F1 0.125 → 0.327, kept.
 
 Not yet separated: how much of the 0.058 → 0.067 gain comes from centred ICP starts and how much from the reviewer's retries.
 
@@ -49,6 +49,18 @@ Not yet separated: how much of the 0.058 → 0.067 gain comes from centred ICP s
 That is above the paper's 6.9% for original SimFoundry, but it comes from the box's older nerfstudio, not a method change: fewer Gaussians, then 14 groups instead of 25. M1 counts a score file per *change*, so this run is the new baseline that Cut 3's SF-30 to SF-32 are measured against.
 
 The score files were never committed before PR #50: `.gitignore`'s `*core*` matched "score". PR #50 and PR #44 add them, with `docs/results/` excepted.
+
+**Cut 3 phase A on 58301075 (2026-11-11).** One change per run, each against the run before it; details in [`docs/cut3-plan.md`](cut3-plan.md) phase A.
+
+| Change | Kept | F1@1cm | Matched Chamfer | Score file |
+|---|---|---|---|---|
+| Baseline κ=1 | — | 0.079 | 0.070 m | `…_58301075.json` |
+| SF-30 κ=2 (KAN-36, PR #45, merged `a1ff080`) | yes | 0.125 | 0.046 m | `…_58301075_kappa2.json` |
+| SF-31 container split (KAN-37, PR #47, closed) | no | 0.109 | 0.032 m | (not committed) |
+| SF-32 SAM 3D pose rescale (KAN-38, PR #48) | yes | **0.327** | **0.021 m** | `…_58301075_kappa2_rescale.json` |
+| … then the rule-based reviewer (SF-19) | (evidence) | 0.323 | 0.024 m | `…_58301075_kappa2_rescale_reviewed.json` |
+
+The rescale multiplies SAM 3D's translation and size by our depth of the object over MoGe's depth in its mask (median 0.334): SAM 3D's starts were about three times too far and too large. The best SAM 3D start went from 5.79 to 0.090 splat units from its Gaussians. On top of it, the rule-based reviewer kept 5 flips that lowered the fit distance slightly and cost a little against GT (0.327 → 0.323), so Phase B's VLM verdict is measured against both. 0.327 is above the paper's 6.9% for original SimFoundry and below its 60.75% for SceneAgent; both stay the paper's.
 
 ### Roadmap to the MVP (2026-11-10)
 

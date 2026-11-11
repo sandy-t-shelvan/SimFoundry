@@ -196,3 +196,52 @@ def test_centred_starts_keep_rotation_and_scale_and_move_onto_the_target():
     assert scale == 0.7 and np.allclose(r, rotation)
     moved = apply_similarity(source, scale, r, t)
     assert np.allclose(moved.mean(axis=0), target.mean(axis=0))
+
+
+def test_depth_ratio_rescales_sam3d_into_our_metres():
+    camera = {
+        "model": "PINHOLE",
+        "width": 40,
+        "height": 40,
+        "params": [20.0, 20.0, 20.0, 20.0],
+    }
+    inputs = {
+        "images": {
+            "v.png": {"qvec": [1.0, 0, 0, 0], "tvec": [0.0, 0.0, 0.0], "camera_id": 1}
+        },
+        "cameras": {1: camera},
+        "transform": np.hstack([np.eye(3), np.zeros((3, 1))]),
+        "scale": 2.0,  # splat = 2 x COLMAP
+        "association": {"unit": {"metres_per_unit": 0.5}},  # 0.5 m per splat unit
+    }
+    # Gaussians 3 COLMAP units deep: 6 splat units, 3 m.
+    target = 2.0 * np.array([[0.0, 0.0, 3.0], [0.1, 0.0, 3.0], [0.0, 0.1, 3.0]])
+    assert bin_place.object_depth_m(inputs, target, "v.png") == pytest.approx(3.0)
+    pose = {
+        "rotation": [1, 0, 0, 0],
+        "translation": [0.1, 0.2, 1.5],
+        "scale": [0.2] * 3,
+        "mask_depth_m": 1.5,
+    }
+    ratio = bin_place.depth_ratio(inputs, target, "v.png", pose)
+    assert ratio == pytest.approx(2.0)
+    scaled = bin_place.rescale_pose(pose, ratio)
+    assert scaled["translation"] == pytest.approx([0.2, 0.4, 3.0]) and scaled[
+        "scale"
+    ] == pytest.approx([0.4] * 3)
+    assert (
+        bin_place.depth_ratio(inputs, target, "v.png", {"rotation": [1, 0, 0, 0]})
+        is None
+    )
+
+
+def test_mask_depth_samples_the_mask_down_to_the_pointmap():
+    from sceneagent.sam3d_worker import mask_depth
+
+    mask = np.zeros((8, 8), dtype=bool)
+    mask[4:, 4:] = True
+    points = np.zeros((4, 4, 3))
+    points[..., 2] = 9.0
+    points[2:, 2:, 2] = 1.5  # the masked quarter
+    assert mask_depth(points, mask) == pytest.approx(1.5)
+    assert mask_depth(None, mask) is None
