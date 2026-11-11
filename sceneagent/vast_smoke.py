@@ -95,9 +95,11 @@ REMOTE_BIN_OUT = "/workspace/sf4-smoke/bin"
 REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
 # The setup stages run detached on the box (setsid nohup), so a dropped
 # runner does not stop them; each run waits this long, then reports what is
-# done. A COLMAP CUDA build plus four envs can take longer than one run, and
-# the next dispatch resumes (each stage is skipped once it has succeeded).
-SETUP_WAIT_S = 6000
+# done and what is running. A COLMAP CUDA build plus four envs takes longer
+# than one run, and the next dispatch resumes (each stage is skipped once it
+# has succeeded). 30 minutes, not 100: a stalled stage shows up sooner
+# (run 43107275324 sat idle with no way to see why).
+SETUP_WAIT_S = 1800
 # Where the runner writes the Hugging Face token for the `setup` pipeline only
 # (Sandeep, 2026-11-11: send it so SAM 3D's gated weights can be fetched).
 # It travels on ssh stdin, never in an argv, an environment or a log.

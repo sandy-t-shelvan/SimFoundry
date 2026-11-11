@@ -291,12 +291,22 @@ def sha256(path):
     return h.hexdigest()
 
 
+def running_stage():
+    """The stage that has a log but no result yet: what the install is doing now."""
+    for name in stages:
+        if (logs / f"{name}.log").is_file() and not (state / f"{name}.ok").is_file() and not (state / f"{name}.failed").is_file():
+            return name
+    return None
+
+
 results = {}
 for name in stages:
     if (state / f"{name}.ok").is_file():
         results[name] = {"status": "ok", "at": (state / f"{name}.ok").read_text().strip()}
     elif (state / f"{name}.failed").is_file():
         results[name] = {"status": "failed", "exit": (state / f"{name}.failed").read_text().strip(), "log_tail": tail(name)}
+    elif name == running_stage():
+        results[name] = {"status": "running", "log_tail": tail(name, 12)}
     else:
         results[name] = {"status": "pending"}
 envs = env["ENVS"]
@@ -316,6 +326,8 @@ document = {
     "stages": results,
     "all_ok": all(r["status"] == "ok" for r in results.values()),
     "finished": (state / "done").is_file(),
+    # Stage start/ok/failed lines only (run_stage writes nothing else here).
+    "run_log": [l for l in pathlib.Path("/workspace/setup/run.log").read_text(errors="replace").splitlines()[-30:] if not SECRETISH.search(l)] if pathlib.Path("/workspace/setup/run.log").is_file() else [],
     "versions": versions,
     "commits": {
         "colmap": env["COLMAP_TAG"],
