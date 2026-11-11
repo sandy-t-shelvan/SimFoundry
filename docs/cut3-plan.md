@@ -65,15 +65,25 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 
 ## Phase A: bin data quality (6 points)
 
-**Result so far (2026-11-10, box 58301075).** These are F1@1cm and matched Chamfer, delivered against GT:
+**Result so far (2026-11-11, box 58301075).** These are F1@1cm and matched Chamfer, delivered against GT:
 
 | Change | Runs | F1@1cm | Chamfer |
 |---|---|---|---|
 | Baseline, κ=1 (main) | place 42916527232 | 0.079 | 0.070 m |
 | **κ=2 (PR #45, SF-30)** | association 42924495643, place 42925055261 | **0.125** | **0.046 m** |
 | κ=2 + container split (PR #47, SF-31): **not kept** | association 42927798966, place 42929004562 | 0.109 | 0.032 m |
+| **κ=2 + SAM 3D pose rescale (PR #48, SF-32)** | association 42929907431, sam3d 42930467798, place 42932270322 | **0.327** | **0.021 m** |
 
-κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene. The pose rescale (#48) is measured next against 0.125.
+κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene.
+
+**Pose rescale (#48), kept.** SAM 3D now records MoGe's median depth inside the object's mask (1.14–1.66 m on the 14 objects), and placement divides our depth of the object's Gaussians in the same view by it. The ratio is 0.31–0.46 (median 0.334): MoGe puts every object about three times farther away than the splat does, so SAM 3D's translation and size were both about three times too large. Multiplying both by the ratio gives one more ICP start, `sam3d_rescaled`, and the fit's size bound now follows the rescaled size. Against the same 14 groups:
+
+- the best SAM 3D start lands a median 0.090 splat units from its Gaussians, against 5.79 for the raw pose and 0.464 for the centred start;
+- 5 of 14 fits now win from a rescaled start (seeds 6, raw pose 2, centred 1; before: seeds 8, centred 4, raw pose 2);
+- every object's fit distance falls (14 of 14);
+- against GT, 12 matches improve (GT 9: 0.18 → 0.94, GT 17: 0.27 → 0.94), GT 3 falls (0.32 → 0.25), GT 37 loses its match and GT 40 gains one (0.49).
+
+The size bound and the new start change in the same run, so their shares are not separated; seeds that won both times also fit better, which points at the bound. No ground truth is used, and no constant is fitted to this scene. The `ours_iteration_1` gate still rejects all 14 (its cutoffs are unchanged). The paper's bin numbers (6.9% for original SimFoundry, 60.75% for SceneAgent) stay the paper's. Score file: `docs/results/…_58301075_kappa2_rescale.json`.
 
 | Item | Done when | GPU |
 |---|---|---|
