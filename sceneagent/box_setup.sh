@@ -120,10 +120,11 @@ s_da3() {
 s_env_nerf() {
   [ -x "$ENVS/nerf/bin/python3" ] || "$MAMBA" create -y -p "$ENVS/nerf" python=3.10
   "$ENVS/nerf/bin/pip" install torch==2.1.2 torchvision==0.16.2 --index-url "$TORCH_CU121"
-  # torch 2.1.2's extension builder imports pkg_resources, which setuptools
-  # 82 removed; without this gsplat never compiles (found on 60254439).
-  "$ENVS/nerf/bin/pip" install "setuptools>=69,<81"
   "$ENVS/nerf/bin/pip" install ninja nerfstudio==1.1.4 gsplat==1.0.0
+  # torch 2.1.2's extension builder imports pkg_resources, which setuptools
+  # 82 removed. nerfstudio pulls that newer setuptools, so the pin has to
+  # come after it or gsplat never compiles (found on 60254439).
+  "$ENVS/nerf/bin/pip" install "setuptools>=69,<81"
   # gsplat compiles its kernels on first use; do it here, not in the first splat run.
   cd /tmp
   "$ENVS/nerf/bin/python3" -c "import gsplat, torch; from gsplat.cuda._backend import _C; assert _C is not None and torch.cuda.is_available()"

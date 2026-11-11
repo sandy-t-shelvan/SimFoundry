@@ -119,6 +119,9 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     # Each one stopped or broke a stage on 60254439 (2026-11-11).
     text = SCRIPT.read_text(encoding="utf-8")
     assert '"setuptools>=69,<81"' in text  # torch 2.1.2 needs pkg_resources
+    nerf = text.split("s_env_nerf() {", 1)[1].split("\n}", 1)[0]
+    # nerfstudio upgrades setuptools, so the pin only sticks if it comes second.
+    assert nerf.index("nerfstudio==1.1.4") < nerf.index('"setuptools>=69,<81"')
     assert '"transformers>=4.46,<5"' in text  # 5.x refuses torch 2.5.1
     assert "addict yapf timm" in text
     assert "from grounding_dino.groundingdino import _C" in text
