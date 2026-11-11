@@ -196,3 +196,18 @@ def test_centred_starts_keep_rotation_and_scale_and_move_onto_the_target():
     assert scale == 0.7 and np.allclose(r, rotation)
     moved = apply_similarity(source, scale, r, t)
     assert np.allclose(moved.mean(axis=0), target.mean(axis=0))
+
+
+def test_meshes_of_set_aside_objects_are_skipped(tmp_path):
+    # Run 42928685493: the container split dropped object 0 from objects.npz
+    # while its SAM 3D mesh from an earlier run was still listed.
+    inputs = {
+        "sam3d": {
+            "objects": [{"object": 0, "ok": True, "view": "000001.png", "pose": {}}]
+        },
+        "sets": {"object_1": np.arange(3)},
+    }
+    result = bin_place.place_objects(tmp_path, inputs)
+    assert result["placed"] == {}
+    assert result["objects"][0]["placed"] is False
+    assert "set aside" in result["objects"][0]["reason"]

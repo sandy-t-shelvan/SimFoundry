@@ -517,6 +517,18 @@ def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
                 }
             )
             continue
+        if f"object_{number}" not in inputs["sets"]:
+            # Set aside by the container split after this mesh was made; its
+            # mesh stays on disk but it is no longer an object to place.
+            records.append(
+                {
+                    "object": number,
+                    "view": obj["view"],
+                    "placed": False,
+                    "reason": "not in association objects (set aside)",
+                }
+            )
+            continue
         glb = out / "sam3d" / f"object_{number}.glb"
         cloud, record = place_one(out, inputs, number, obj["pose"], obj["view"], glb)
         placed[f"object_{number}"] = cloud
