@@ -267,6 +267,30 @@ FETCH_NAMES = (
     "mapper_compare.json",
     "inventory.txt",
 )
+# The fetched files that become the workflow artifact. One list, so a new
+# evidence file cannot be fetched and then silently dropped (run 42942342408
+# fetched bin_review_vlm.json and published nothing of it). The workflow's
+# upload list must name the same files; a test checks both.
+PUBLISHED_NAMES = frozenset(
+    {
+        "plan.json",
+        "ledger.json",
+        "manifest.json",
+        "run4_evidence.json",
+        "bin_evidence.json",
+        "splat_evidence.json",
+        "ns_eval.json",
+        "masks_evidence.json",
+        "association_evidence.json",
+        "sam3d_evidence.json",
+        "bin_score.json",
+        "bin_review.json",
+        "bin_review_vlm.json",
+        "review_sheets.zip",
+        "mapper_compare.json",
+        "inventory.txt",
+    }
+)
 PUBLIC_FIELDS = (
     "id",
     "actual_status",
@@ -1984,23 +2008,7 @@ def publish_artifacts(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
     for rel, data in prepared:
-        if Path(rel).name not in {
-            "plan.json",
-            "ledger.json",
-            "manifest.json",
-            "run4_evidence.json",
-            "bin_evidence.json",
-            "splat_evidence.json",
-            "ns_eval.json",
-            "masks_evidence.json",
-            "association_evidence.json",
-            "sam3d_evidence.json",
-            "bin_score.json",
-            "bin_review.json",
-            "review_sheets.zip",
-            "mapper_compare.json",
-            "inventory.txt",
-        }:
+        if Path(rel).name not in PUBLISHED_NAMES:
             continue
         target = artifact_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)

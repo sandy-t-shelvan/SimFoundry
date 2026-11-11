@@ -274,3 +274,15 @@ def test_the_committed_verdict_file_is_shipped_to_the_box(tmp_path):
     shipped = iter_shipped_files(checkout)
     assert verdicts in shipped
     assert checkout / "ci" / "vlm_verdicts.json" not in shipped
+
+
+def test_every_published_file_is_fetched_and_uploaded():
+    # Run 42942342408 fetched bin_review_vlm.json, then a third hand-kept list
+    # dropped it before upload. One constant now feeds the copy step.
+    from sceneagent.vast_smoke import FETCH_NAMES, PUBLISHED_NAMES
+
+    workflow = GPU_WORKFLOW.read_text(encoding="utf-8")
+    uploaded = set(re.findall(r"sf4-artifacts/([A-Za-z0-9_.]+)", workflow))
+    assert PUBLISHED_NAMES <= set(FETCH_NAMES)
+    assert PUBLISHED_NAMES <= uploaded, PUBLISHED_NAMES - uploaded
+    assert "bin_review_vlm.json" in PUBLISHED_NAMES
