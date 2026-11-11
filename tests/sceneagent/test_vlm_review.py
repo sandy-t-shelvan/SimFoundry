@@ -308,8 +308,17 @@ def test_verdicts_apply_only_to_the_placement_they_were_judged_on():
         br.check_placement(None, _records({0: 0.09243}))
 
 
-def test_the_committed_round_one_verdicts_are_refused_without_a_placement():
-    meta, _ = br.load_verdicts(ROOT / "sceneagent" / "verdicts" / "vlm_verdicts.json")
+def test_verdicts_without_a_judged_placement_are_refused(tmp_path):
+    # Round 1's file (merged in #54) predates judged_placement. A file like it
+    # must be refused; the test builds one rather than reading whatever
+    # verdict file is committed, which changes every round.
+    path = tmp_path / "round1.json"
+    path.write_text(
+        json.dumps({"objects": [{"object": 0, "decision": "keep", "reason": ""}]}),
+        encoding="utf-8",
+    )
+    meta, _ = br.load_verdicts(path)
+    assert meta["judged_placement"] is None
     with pytest.raises(ValueError, match="no judged placement"):
         br.check_placement(meta["judged_placement"], _records({0: 0.09243}))
 
