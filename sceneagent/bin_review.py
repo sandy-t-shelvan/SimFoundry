@@ -73,6 +73,7 @@ PLACEMENT_TOL = 1e-6
 OVERLAY_OK = 0.5
 ISOLATED_OK = 0.5
 TILE_PX = 256
+SECOND_OVERLAY = "registration_overlay_2"
 FOOTPRINT_DIVISOR = 4
 RENDER_POINTS = 60000
 OBLIQUE = {
@@ -273,7 +274,12 @@ def save_views(views: dict[str, np.ndarray], folder: Path, name: str) -> Path:
     view_dir = folder / "reviewer_views"
     view_dir.mkdir(parents=True, exist_ok=True)
     tiles = []
-    for view_name, _group in REQUIRED_VIEWS:
+    names = [view_name for view_name, _group in REQUIRED_VIEWS]
+    if SECOND_OVERLAY in views:
+        # A matched pair shows a second overlay view; it takes the sheet's
+        # one empty slot, next to the first overlay.
+        names.insert(names.index("registration_overlay") + 1, SECOND_OVERLAY)
+    for view_name in names:
         Image.fromarray(views[view_name]).save(view_dir / f"{name}-{view_name}.png")
         tile = _thumb(views[view_name])
         ImageDraw.Draw(tile).text((4, 4), view_name, fill=(0, 0, 0))
@@ -587,11 +593,18 @@ def review_object(
     clouds: dict[str, np.ndarray],
     assembled_views: list[str],
     folder: Path | None = None,
+    overlay_views: list[str] | None = None,
 ) -> dict[str, Any]:
     """Draw the eleven views of one placed object and measure them.
 
     ``folder`` defaults to ``reviewer/object_<n>``; the pair builder draws a
     retry's result elsewhere so it does not overwrite the before views.
+
+    ``overlay_views`` (at most two) are the photos the registration overlay
+    is drawn on; by default the record's own view. A before/after pair passes
+    the same views for both sheets, so the two differ only in the mesh and
+    its placement (round 2 drew each on its own source view). The overlay
+    IoU is measured on the first.
     """
     import trimesh
     from PIL import Image
@@ -615,27 +628,31 @@ def review_object(
             points, normals, gaussians, direction
         )
     images, cameras = inputs["images"], inputs["cameras"]
-    view = record["view"]
-    image = images[view]
-    camera = cameras[image["camera_id"]]
     world = splat_to_colmap(points, inputs["transform"], inputs["scale"])
-    rendered = bin_place.render_mask(
-        world, image, camera, bin_place.SILHOUETTE_DILATE_PX
-    )
     obj_masks = next(
         o for o in inputs["association"]["object_list"] if o["object"] == number
     )
-    mask_ref = next(
-        (m for m in obj_masks["masks"] if m["view"] == view), obj_masks["masks"][0]
-    )
-    stack = np.load(out / "masks" / f"{Path(mask_ref['view']).stem}.npz")["masks"]
-    mask = stack[mask_ref["mask_index"]]
-    with Image.open(out / "images" / view) as handle:
-        photo = np.array(handle.convert("RGB"))
-    views["registration_overlay"] = crop_to_object(
-        draw_overlay(photo, mask, rendered), mask | rendered
-    )
-    overlay_iou = silhouette_iou(rendered, mask)
+    overlay_iou: float | None = None
+    shown = list(dict.fromkeys(overlay_views or [record["view"]]))[:2]
+    for slot, view in zip(("registration_overlay", SECOND_OVERLAY), shown):
+        image = images[view]
+        camera = cameras[image["camera_id"]]
+        rendered = bin_place.render_mask(
+            world, image, camera, bin_place.SILHOUETTE_DILATE_PX
+        )
+        mask_ref = next(
+            (m for m in obj_masks["masks"] if m["view"] == view),
+            obj_masks["masks"][0],
+        )
+        stack = np.load(out / "masks" / f"{Path(mask_ref['view']).stem}.npz")["masks"]
+        mask = stack[mask_ref["mask_index"]]
+        with Image.open(out / "images" / view) as handle:
+            photo = np.array(handle.convert("RGB"))
+        views[slot] = crop_to_object(
+            draw_overlay(photo, mask, rendered), mask | rendered
+        )
+        if overlay_iou is None:
+            overlay_iou = silhouette_iou(rendered, mask)
     for k, assembled in enumerate(assembled_views[:2], 1):
         a_image = images[assembled]
         with Image.open(out / "images" / assembled) as handle:

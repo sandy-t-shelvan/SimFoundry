@@ -1,0 +1,149 @@
+{
+  "scores": {
+    "no_review": {
+      "f1_mean": 0.32679104780321827,
+      "chamfer_mean_matched_m": 0.021086974411052034
+    },
+    "test_accepted": {
+      "f1_mean": 0.32841590394933384,
+      "chamfer_mean_matched_m": 0.020567056323928242
+    },
+    "vlm_accepted": {
+      "f1_mean": 0.32734697630472315,
+      "chamfer_mean_matched_m": 0.02073425507117365
+    },
+    "oracle_upper_bound": {
+      "f1_mean": 0.33033979658111384,
+      "chamfer_mean_matched_m": 0.020648402023193842
+    }
+  },
+  "agreement_with_oracle": {
+    "vlm": 1,
+    "test": 2,
+    "judged": 3
+  },
+  "oracle_rule": "ours, evaluation only: a retry is better when keeping it alone raises the scene F1@1cm; computed after the VLM judged",
+  "objects": [
+    {
+      "object": 0,
+      "decision": "sam3d_next_view",
+      "kind": "sam3d_next_view",
+      "vlm": "after",
+      "vlm_reason": "In fit B, the mesh shape matches the object correctly and the red silhouette aligns much more accurately with the green segmentation outlines in the registration overlays.",
+      "vlm_source": "VLM",
+      "test": "after",
+      "oracle": "before",
+      "f1_delta_if_kept": -0.0019238926317799998
+    },
+    {
+      "object": 1,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 2,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 3,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 4,
+      "decision": "sam3d_next_view",
+      "kind": "sam3d_next_view",
+      "vlm": "before",
+      "vlm_reason": "Fit B uses the complete object model with its cap on, allowing the reconstructed 3D points to align much more accurately with the mesh surfaces across all axis views.",
+      "vlm_source": "VLM",
+      "test": "after",
+      "oracle": "after",
+      "f1_delta_if_kept": 0.0010689276446106954
+    },
+    {
+      "object": 5,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 6,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 7,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 8,
+      "decision": "sam3d_next_view",
+      "kind": "sam3d_next_view",
+      "vlm": "after",
+      "vlm_reason": "Fit B uses a single-fruit mesh that matches the actual object, whereas Fit A incorrectly fits a double-lobed mesh.",
+      "vlm_source": "VLM",
+      "test": "after",
+      "oracle": "after",
+      "f1_delta_if_kept": 0.0024798211332848763
+    },
+    {
+      "object": 9,
+      "decision": "icp_flip",
+      "kind": "icp_flip",
+      "vlm": "before",
+      "vlm_reason": "retry moved nothing; not judged",
+      "vlm_source": "retry moved nothing; not judged",
+      "test": "before",
+      "oracle": "tie",
+      "f1_delta_if_kept": 0.0
+    },
+    {
+      "object": 10,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 11,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 12,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    },
+    {
+      "object": 13,
+      "decision": "keep",
+      "kind": null,
+      "candidate": "none"
+    }
+  ],
+  "vlm": {
+    "candidates_hash": "e6f608993abdb59c305582545ceef117b562398a09e73ebd6bc95e7c3d7231d7",
+    "source_run": "42976670426",
+    "model": "gemini-3.8-flash",
+    "prompt_sha256": "0df7449c022b562ef14444c2ed0c954647acba276c36e9fc8c76e243cceb0bc8",
+    "vlm_calls": 3
+  },
+  "run": {
+    "box": "vast instance 58301075",
+    "retry_verdict_run": 42947401149,
+    "candidates_run": 42976670426,
+    "candidates_hash": "e6f608993abdb59c305582545ceef117b562398a09e73ebd6bc95e7c3d7231d7",
+    "pair_verdict_run": 42977750829,
+    "apply_run": 42977960610,
+    "placement": "kappa=2 + SAM 3D pose rescale (PR #48); judged on review run 42939458339",
+    "note": "ours, round 3: matched pairs (both sheets drawn on the same photos and masks, PR #56); same retry verdicts as round 2, regenerations re-run (not bit-identical); n=3 judged pairs, indicative only"
+  }
+}

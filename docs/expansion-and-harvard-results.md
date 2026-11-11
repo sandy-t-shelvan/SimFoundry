@@ -61,8 +61,9 @@ The score files were never committed before PR #50: `.gitignore`'s `*core*` matc
 | … then the rule-based reviewer (SF-19) | (evidence) | 0.323 | 0.024 m | `…_58301075_kappa2_rescale_reviewed.json` |
 | … then Gemini's verdicts (SF-19 VLM, PR #54) | (evidence) | 0.327 | 0.021 m | `…_58301075_kappa2_rescale_vlm_reviewed.json` |
 | … Gemini picks and accepts retries (round 2, PR #55) | (evidence) | 0.327 | 0.021 m | `…_58301075_kappa2_rescale_vlm_accepted.json` |
+| … the same on matched pairs (round 3, PR #56; always accept 0.328, oracle 0.330) | (evidence) | 0.327 | 0.021 m | `…_58301075_kappa2_rescale_vlm_accepted_matched.json` |
 
-The rescale multiplies SAM 3D's translation and size by our depth of the object over MoGe's depth in its mask (median 0.334): SAM 3D's starts were about three times too far and too large. The best SAM 3D start went from 5.79 to 0.090 splat units from its Gaussians. On top of it, the rule-based reviewer kept 5 flips that lowered the fit distance slightly and cost a little against GT (0.327 → 0.323), so Phase B's VLM verdict is measured against both. 0.327 is above the paper's 6.9% for original SimFoundry and below its 60.75% for SceneAgent; both stay the paper's.
+The rescale multiplies SAM 3D's translation and size by our depth of the object over MoGe's depth in its mask (median 0.334): SAM 3D's starts were about three times too far and too large. The best SAM 3D start went from 5.79 to 0.090 splat units from its Gaussians. On top of it, the rule-based reviewer kept 5 flips that lowered the fit distance slightly and cost a little against GT (0.327 → 0.323), so Phase B's VLM verdict is measured against both. Rounds 2 and 3 let Gemini accept each retry from a blind before/after pair. On three regenerations per run, Gemini does not yet beat accepting every retry (round 3: 0.3273 against 0.3284; best possible pick 0.3303), and its reasons describe mesh plausibility rather than geometry against GT. 0.327 is above the paper's 6.9% for original SimFoundry and below its 60.75% for SceneAgent; both stay the paper's.
 
 ### Roadmap to the MVP (2026-11-10)
 

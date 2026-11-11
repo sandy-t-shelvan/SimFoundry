@@ -236,8 +236,19 @@ def build_candidates(
                 continue
             name = f"object_{n}"
             views = assembled_views(inputs, n)
+            # Both sheets show the overlay on the same photos (the original
+            # view, and a regeneration's own view), so A and B differ only in
+            # the mesh and its placement. Round 2 drew each on its own view.
+            shown = list(dict.fromkeys([records[n]["view"], item["view"]]))
+            item["overlay_views"] = shown
             before = br.review_object(
-                out, inputs, records[n], clouds, views, folder=folder / "before" / name
+                out,
+                inputs,
+                records[n],
+                clouds,
+                views,
+                folder=folder / "before" / name,
+                overlay_views=shown,
             )
             after_record = {
                 **records[n],
@@ -252,6 +263,7 @@ def build_candidates(
                 {**clouds, name: candidate_clouds[n]},
                 views,
                 folder=folder / "after" / name,
+                overlay_views=shown,
             )
             item.update(order[n])
             drawn[n] = {"before": before["sheet"], "after": after["sheet"]}

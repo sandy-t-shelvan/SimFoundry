@@ -163,3 +163,18 @@ def test_the_overlay_is_cut_to_the_object_and_enlarged():
     assert max(crop.shape[:2]) >= 512
     assert crop.shape[0] < 1080 and crop.shape[1] < 1920
     assert br.crop_to_object(image, np.zeros_like(region)) is image
+
+
+def test_a_second_overlay_takes_the_empty_slot_next_to_the_first(tmp_path):
+    views = {name: np.full((256, 256, 3), 200, np.uint8) for name, _ in br.REQUIRED_VIEWS}
+    sheet = br.save_views(views, tmp_path / "one", "object_0")
+    views[br.SECOND_OVERLAY] = np.zeros((256, 256, 3), np.uint8)
+    sheet2 = br.save_views(views, tmp_path / "two", "object_0")
+    from PIL import Image
+
+    assert Image.open(sheet).size == Image.open(sheet2).size == (1024, 768)
+    assert (
+        tmp_path / "two" / "reviewer_views" / "object_0-registration_overlay_2.png"
+    ).is_file()
+    tile = np.asarray(Image.open(sheet2))[100:150, 256 + 100 : 256 + 150]
+    assert tile.mean() < 50  # the dark second overlay sits in slot 2

@@ -85,13 +85,16 @@ RESPONSE_SCHEMA: dict[str, Any] = {
 # so "which fits better" cannot be answered by position. The prompt is ours.
 PAIR_PROMPT = """\
 You are reviewing two fits of the same object in a reconstructed bin of
-household objects. Each image is a contact sheet with the same eleven
-labelled tiles, described below; one sheet is fit A, the other fit B. They
-differ only in the object's mesh and its placement.
+household objects. Each image is a contact sheet with the same labelled
+tiles, described below; one sheet is fit A, the other fit B. Both sheets use
+the same photos and the same segmentation masks, so they differ only in the
+object's mesh and its placement.
 
-- registration_overlay: the object's photo, its segmentation mask outlined
-  in green and the fitted mesh's projected silhouette in red. Better: the
-  red silhouette fills the green outline and stays inside it.
+- registration_overlay (and registration_overlay_2 when present): the
+  object's photo from one or two camera views, its segmentation mask
+  outlined in green and the fitted mesh's projected silhouette in red. The
+  views are the same in both sheets. Better: the red silhouette fills the
+  green outline and stays inside it, in every view shown.
 - axis_* and oblique_*: the fitted mesh, shaded grey, with the object's
   reconstructed points over it in blue. Better: the blue points lie on the
   grey surface from every side (points cover only the sides cameras saw).

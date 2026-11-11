@@ -201,6 +201,38 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
   2. More decisions per run: candidates for all 14 objects, with Gemini choosing among before, flip and regenerate.
   3. A placement-focused view in the sheets (mesh against points at true scale, side by side).
 
+**Round 3, step 1: matched pairs (2026-11-11).** `review_object` takes the views the registration overlay is drawn on. The pair builder passes the same ones to both sheets: the original view and, for a regeneration, its own view, which appears as `registration_overlay_2` in the sheet's empty slot. Both sheets now show the same photos and masks, so the pair prompt's "differ only in the mesh and its placement" is true, and the prompt names the second overlay. Normal review is unchanged (one overlay on the record's own view, same IoU). The two sheets share views and masks; their crops still differ, because each is cut around its own mesh.
+
+**Round 3, step 1 result (2026-11-11).**
+
+- **Candidates** (run 42976670426, hash `e6f60899…`): same retry verdicts as round 2 (`726278c4…`), regenerations re-run. 3 regenerations (objects 0, 4, 8) and 1 flip that moved nothing (object 9, not judged). Each regeneration's pair shows two overlays: the original view and the regeneration's view.
+- **Pair verdicts** (run 42977750829): Gemini picked B on all three. The A/B order was the same as round 2. That means taking the regeneration for objects 0 and 8 and keeping the original for object 4.
+- **Applied and scored** (run 42977960610). Compare within this round only: the regenerated meshes differ from round 2's (SAM 3D is not bit-identical). The always-accept score moved 0.3272 → 0.3284 between rounds with the same decisions.
+
+| Policy | F1@1cm | Matched Chamfer |
+|---|---|---|
+| Never accept | 0.3268 | 0.0211 m |
+| Always accept (what the silhouette/fit test did here) | 0.3284 | 0.0206 m |
+| Gemini | 0.3273 | 0.0207 m |
+| Oracle (best F1 pick; evaluation only)\* | 0.3303 | 0.0206 m |
+
+\* The oracle maximises F1, not Chamfer: always accept has a slightly lower Chamfer (0.02057 m against 0.02065 m).
+
+| Object | Retry | Gemini | Test | Oracle | F1 change if kept alone | Round 2 change |
+|---|---|---|---|---|---|---|
+| 8 (two fused fruits) | regenerate | keep | keep | keep | +0.0025 | +0.0023 |
+| 4 | regenerate | reject | keep | keep | +0.0011 | −0.0003 |
+| 0 (bottle) | regenerate | keep | keep | reject | −0.0019 | −0.0016 |
+
+**Reading.**
+
+- **The test was "always accept".** It accepted every changed candidate in both rounds, so its 2 of 3 here only counts how many regenerations happened to be good. Read it as: on these candidates, always accepting beat Gemini (0.3284 against 0.3273). Three pairs cannot rank the judges.
+- **The bottle repeated with matched overlays.** Gemini again preferred the regenerated bottle and named the mesh shape and silhouette. Against GT it is again worse (−0.0019). Round 2's unmatched-overlay explanation is no longer needed for the bottle. The placement/scale explanation is still not established.
+- **Object 4's oracle label is unstable.** It changed sign between rounds on a different regenerated mesh, so it is within regeneration noise. Objects 0 and 8 kept their sign.
+- **Object 4's pick is model variance.** A repeat verdict on the same pairs and prompt (run 42979528622, not applied) picked A, B, B → B, A, B: object 4 flipped to the regeneration, which the oracle prefers, and objects 0 and 8 held with the same reasons. With that repeat, Gemini's picks equal always accept (0.3284) and agree with the oracle on 2 of 3. So on this pair Gemini's choice moves between runs, and one run per pair is not a stable verdict.
+- **Position habit:** the repeat answered B, A, B on the same order, so "B on 3 of 3" was not a fixed habit. Two runs cannot rule out a lean.
+- **What it says overall:** Gemini's reasons describe mesh plausibility (a clean bottle, a single fruit, a cap on), while the oracle scores geometry against GT. Three decisions per run cannot separate judges, and one call per pair is not stable. These support round 3's next two items, more decisions per run and a placement-focused view, in either order.
+
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 
 Why this shape: the GPU workflow pins `secrets.VAST_API_KEY` to one reference and allows only the pipeline choice as input, so a second box step or a run-id input there would loosen two security pins. The commit step costs one hop and makes the model's output auditable. SF-19 is measured against both 0.327 (no review) and 0.323 (the rule).
