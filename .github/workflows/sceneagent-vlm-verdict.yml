@@ -12,9 +12,14 @@ on:
   workflow_dispatch:
     inputs:
       review_run:
-        description: sceneagent-gpu-smoke run id whose review_sheets.zip is judged
+        description: sceneagent-gpu-smoke run id whose sheets are judged
         type: string
         required: true
+      mode:
+        description: "retry: pick each object's retry from review_sheets.zip; accept: judge each retry's before/after pair from review_pairs.zip"
+        type: choice
+        options: [retry, accept]
+        default: retry
 
 permissions:
   contents: read
@@ -54,9 +59,14 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           REVIEW_RUN: ${{ inputs.review_run }}
+          VERDICT_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json --source-run "$REVIEW_RUN" --review-json review-input/bin_review.json
+          if [ "$VERDICT_MODE" = "accept" ]; then
+            python -m sceneagent.vlm_review --mode accept --pairs review-input/review_pairs.zip --candidates review-input/candidates.json --out vlm-out/accept_verdicts.json --source-run "$REVIEW_RUN"
+          else
+            python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json --source-run "$REVIEW_RUN" --review-json review-input/bin_review.json
+          fi
 
       - name: Upload the verdicts
         if: always()
@@ -65,4 +75,4 @@ jobs:
           name: sceneagent-vlm-verdicts
           retention-days: 14
           if-no-files-found: error
-          path: vlm-out/vlm_verdicts.json
+          path: vlm-out/

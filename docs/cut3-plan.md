@@ -150,6 +150,23 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 - **Reading, as set in advance:** Gemini ties no review and beats the rule by retrying less. That is not yet evidence that it judges fits better. It does pick the right retry on two errors the rule cannot see (merged objects, wrong shape), and its retries are then accepted by a test that does not track GT.
 - **Next:** Gemini judges each retry's before and after views, so acceptance is the VLM's, not the silhouette's or the fit distance's.
 
+**Round 2: the VLM accepts retries (set before any number).** Round 1 left acceptance with the old tests, which do not track GT. In round 2 Gemini also accepts:
+
+1. **Retry verdicts:** a fresh Gemini run on review run 42939458339's sheets, with `judged_placement`. The round 1 file is refused by the guard.
+2. **Box builds candidates** (gpu-smoke `review_candidates`, `bin_review_pairs build`):
+   - runs each chosen retry once and saves the result under `reviewer/pairs/<hash>/`, where the hash covers every saved cloud;
+   - draws each changed object's before and after sheets as a blind pair, A and B in an order from a recorded seed (`PAIR_SEED`);
+   - writes `candidates.json`, which maps A and B back and stays out of the model's input.
+   - A flip that moved nothing is not drawn or judged. A flip candidate is still the best of three half-turns by fit distance, so Gemini sees only the fit-distance winner.
+3. **Gemini judges pairs** (`sceneagent-vlm-verdict`, mode `accept`): one call per pair, A then B, with its own prompt (hashed into the output). The prompt never says which side is the retry. The output names the candidate hash.
+4. **Box applies** (gpu-smoke `review_accept`, `bin_review_pairs apply`): loads the saved candidates by hash, refuses on any hash, cloud or placement mismatch, never regenerates, and keeps the side Gemini judged better.
+
+**Metric, set in advance.** With about five retried objects, scene F1 barely moves, so the measure is per decision:
+
+- **Oracle (evaluation only, ours):** keeping a retry is better when keeping it alone raises scene F1@1cm. It is computed in the apply step, after Gemini has judged, and nowhere earlier.
+- **Report:** how often Gemini's acceptance agrees with the oracle, and how often the old test does, on the same candidates (ties excluded). Also scene F1 for no review, test-accepted, Gemini-accepted and oracle (an upper bound).
+- **Caveat:** n is about five, so the result is indicative only.
+
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 
 Why this shape: the GPU workflow pins `secrets.VAST_API_KEY` to one reference and allows only the pipeline choice as input, so a second box step or a run-id input there would loosen two security pins. The commit step costs one hop and makes the model's output auditable. SF-19 is measured against both 0.327 (no review) and 0.323 (the rule).

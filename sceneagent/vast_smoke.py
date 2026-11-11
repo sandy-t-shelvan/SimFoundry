@@ -170,6 +170,19 @@ PIPELINES = {
         ),
         "GraspClutter6D 000091",
     ),
+    "review_candidates": (
+        ("benchmark scene", "SAM 3D meshes", "review candidates", "review pairs drawn"),
+        "GraspClutter6D 000091",
+    ),
+    "review_accept": (
+        (
+            "benchmark scene",
+            "SAM 3D meshes",
+            "reviewer retries (VLM accepted)",
+            "bin score (VLM accepted)",
+        ),
+        "GraspClutter6D 000091",
+    ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
 }
@@ -186,6 +199,8 @@ BIN_PIPELINES = frozenset(
         "place",
         "review",
         "review_vlm",
+        "review_candidates",
+        "review_accept",
         "mapper",
     }
 )
@@ -195,6 +210,8 @@ BIN_PIPELINES = frozenset(
 # file lives under sceneagent/ (run 42941668034 looked for ci/ and found
 # nothing); widening what is shipped would loosen that boundary.
 VLM_VERDICTS_RELATIVE = "sceneagent/verdicts/vlm_verdicts.json"
+# Round 2's pair verdicts travel the same way.
+ACCEPT_VERDICTS_RELATIVE = "sceneagent/verdicts/accept_verdicts.json"
 
 
 def remote_out(pipeline: str) -> str:
@@ -264,6 +281,9 @@ FETCH_NAMES = (
     "bin_review.json",
     "bin_review_vlm.json",
     "review_sheets.zip",
+    "candidates.json",
+    "review_pairs.zip",
+    "bin_review_accept.json",
     "mapper_compare.json",
     "inventory.txt",
 )
@@ -287,6 +307,9 @@ PUBLISHED_NAMES = frozenset(
         "bin_review.json",
         "bin_review_vlm.json",
         "review_sheets.zip",
+        "candidates.json",
+        "review_pairs.zip",
+        "bin_review_accept.json",
         "mapper_compare.json",
         "inventory.txt",
     }
@@ -740,6 +763,28 @@ def build_remote_command(
             out,
             "--verdicts",
             verdicts,
+        ]
+    if pipeline == "review_candidates":
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.bin_review_pairs",
+            "build",
+            "--out",
+            out,
+            "--verdicts",
+            f"{repo}/{VLM_VERDICTS_RELATIVE}",
+        ]
+    if pipeline == "review_accept":
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.bin_review_pairs",
+            "apply",
+            "--out",
+            out,
+            "--accept",
+            f"{repo}/{ACCEPT_VERDICTS_RELATIVE}",
         ]
     if pipeline == "mapper":
         return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
