@@ -1,0 +1,99 @@
+{
+  "mode": "accept",
+  "candidates_hash": "e6f608993abdb59c305582545ceef117b562398a09e73ebd6bc95e7c3d7231d7",
+  "source_run": "42976670426",
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "8d214cb540ea7a6d8e2a64605af7439caa1fe7d7729b74feffe695a47416b2fc",
+  "prompt_source": "ours",
+  "vlm_calls": 12,
+  "vote_orders": [
+    "AB",
+    "BA",
+    "AB",
+    "BA"
+  ],
+  "objects": [
+    {
+      "object": 0,
+      "better": "B",
+      "reason": "Fit B uses the correct single-body mesh that accurately matches the object's geometry and point cloud, whereas fit A has an incorrect branching geometry that severely overshoots the mask in the registration overlays.",
+      "votes": [
+        {
+          "order": "AB",
+          "better": "B",
+          "reason": "Fit B uses the correct single-body mesh that accurately matches the object's geometry and point cloud, whereas fit A has an incorrect branching geometry that severely overshoots the mask in the registration overlays."
+        },
+        {
+          "order": "BA",
+          "better": "B",
+          "reason": "Fit A uses the correct dumbbell model and aligns closely with the mask in registration_overlay, whereas Fit B uses an incorrect mesh that severely overshoots the mask."
+        },
+        {
+          "order": "AB",
+          "better": "B",
+          "reason": "Fit B uses the correct dumbbell-shaped model, which aligns closely with the segmentation mask in the registration overlays, whereas Fit A uses an incorrect branching mesh that extends far beyond the mask."
+        },
+        {
+          "order": "BA",
+          "better": "B",
+          "reason": "Fit A aligns well with the dumbbell's segmentation mask in the registration overlays, whereas Fit B's projected silhouette is severely misaligned and shifted far outside the outline."
+        }
+      ]
+    },
+    {
+      "object": 4,
+      "better": "B",
+      "reason": "Fit A uses the complete model with the cap on, properly supporting the surface points on top, whereas fit B uses a capless model where points float over an empty cavity.",
+      "votes": [
+        {
+          "order": "AB",
+          "better": "A",
+          "reason": "Fit A uses the correct model with the marker-holding slot/contour, which matches the reconstructed object's shape and the green segmentation outline much better than Fit B's generic block."
+        },
+        {
+          "order": "BA",
+          "better": "B",
+          "reason": "Fit A uses the complete model with the cap on, properly supporting the surface points on top, whereas fit B uses a capless model where points float over an empty cavity."
+        },
+        {
+          "order": "AB",
+          "better": "B",
+          "reason": "Fit B uses the correct closed-cap mesh matching the smooth, capped container seen in the photos and reconstructed points, whereas Fit A uses an open container mesh with an exposed internal screw spindle."
+        },
+        {
+          "order": "BA",
+          "better": "B",
+          "reason": "The reconstructed blue points in the oblique and axis views lie directly on the outer surface in fit A, whereas in fit B they float over an incorrect cavity in the mesh."
+        }
+      ]
+    },
+    {
+      "object": 8,
+      "better": "B",
+      "reason": "Fit B correctly selects a single-fruit mesh that matches the actual object, whereas fit A uses an incorrect two-sphere mesh that bulges outside the segmentation mask in registration_overlay_2.",
+      "votes": [
+        {
+          "order": "AB",
+          "better": "B",
+          "reason": "Fit B correctly selects a single-fruit mesh that matches the actual object, whereas fit A uses an incorrect two-sphere mesh that bulges outside the segmentation mask in registration_overlay_2."
+        },
+        {
+          "order": "BA",
+          "better": "B",
+          "reason": "Fit A uses an appropriate single-body fruit model that stays neatly inside the mask in registration_overlay_2, whereas Fit B uses an incorrect two-lobed geometry that spills outside the mask."
+        },
+        {
+          "order": "AB",
+          "better": "B",
+          "reason": "Fit B correctly uses a single-fruit mesh that matches the orange object, whereas Fit A fits a double-lobed mesh that extends beyond the true shape."
+        },
+        {
+          "order": "BA",
+          "better": "B",
+          "reason": "In registration_overlay_2, fit A's silhouette stays within the mask outline, whereas fit B spills significantly outside it."
+        }
+      ]
+    }
+  ],
+  "failed": []
+}

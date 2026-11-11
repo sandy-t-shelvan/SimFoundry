@@ -241,6 +241,18 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 - **Baseline:** the same 4-vote scheme on round 3's sheets (run 42976670426, no placement tiles), runner only. The comparison is then baseline votes against placement votes on identical candidates.
 - **Expected outcome, written before the run.** The silhouette test favours the regenerated bottle (0.250 → 0.270), and its fit to the Gaussians after regeneration was not recorded. If the new bottle covers the Gaussians as well as the old one, the placement tiles cannot show its error (the Gaussians are what both meshes were fitted to), and Gemini will keep accepting it. A correct rejection needs the after footprint to visibly miss points the before footprint covers. Objects 4 and 8 should be accepted if the tiles help at all, since both oracle labels favour the retry.
 
+**Round 3, step 2: baseline votes (run 43066793118, 2026-11-11).** The 4-vote scheme on round 3's sheets (no placement tiles), 12 calls, none failed. Votes are mapped back to A/B. Committed as `docs/results/vlm_pair_votes_000091_round3_sheets.json`.
+
+| Object | Votes (AB, BA, AB, BA) | Majority | Kept | Oracle |
+|---|---|---|---|---|
+| 0 (bottle) | B B B B | B | regeneration | reject (−0.0019) |
+| 4 | A B B B | B | original | keep (+0.0011) |
+| 8 (fused fruits) | B B B B | B | regeneration | keep (+0.0025) |
+
+- Same decisions as round 3's applied verdict, so the scene is that run's: F1 0.3273, agreement with the oracle 1 of 3. No apply run is needed.
+- **The bottle and fruit preferences are not a position habit:** with B shown first, Gemini still picked it. The bottle is a stable, wrong preference on these sheets.
+- **Object 4 leans to the original, 3 to 1.** The single-call repeat had picked the retry, which is the minority here.
+
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 
 Why this shape: the GPU workflow pins `secrets.VAST_API_KEY` to one reference and allows only the pipeline choice as input, so a second box step or a run-id input there would loosen two security pins. The commit step costs one hop and makes the model's output auditable. SF-19 is measured against both 0.327 (no review) and 0.323 (the rule).
