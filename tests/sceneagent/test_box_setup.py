@@ -113,3 +113,16 @@ def test_no_published_file_may_hold_the_token(tmp_path, monkeypatch):
     with pytest.raises(vs.SmokeError, match="No artifacts were published"):
         vs.publish_artifacts(run, tmp_path / "artifacts", api_key="")
     assert not (tmp_path / "artifacts").exists()
+
+
+def test_the_fixes_found_on_the_box_stay_in_the_script():
+    # Each one stopped or broke a stage on 60254439 (2026-11-11).
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert '"setuptools>=69,<81"' in text  # torch 2.1.2 needs pkg_resources
+    assert '"transformers>=4.46,<5"' in text  # 5.x refuses torch 2.5.1
+    assert "addict yapf timm" in text
+    assert "from grounding_dino.groundingdino import _C" in text
+    assert "from groundingdino import _C" not in text  # same .so twice aborts
+    assert "pipdeptree==2.28.0" in text and "PIP_CONSTRAINT" in text
+    da3 = text.split("s_da3() {", 1)[1].split("\n}", 1)[0]
+    assert da3.index('install -e "$DA3_ROOT"') < da3.index("install numpy==2.4.6")

@@ -107,6 +107,9 @@ s_da3() {
   clone https://github.com/ByteDance-Seed/Depth-Anything-3 "$DA3_ROOT"
   # Its dependencies only; bin_scale puts the checkout's src on PYTHONPATH.
   "$ENVS/sa/bin/pip" install -e "$DA3_ROOT"
+  # DA3's pyproject asks for numpy<2 and pip downgrades it; CI's 2.4.6 still
+  # imports DA3, and the pipeline is tested against it, so put it back.
+  "$ENVS/sa/bin/pip" install numpy==2.4.6
   cd /tmp
   PYTHONPATH="$DA3_ROOT/src" "$ENVS/sa/bin/python3" -c "import depth_anything_3"
   # The weights bin_scale loads, into the cache it reads (HF_HUB_CACHE).
@@ -117,6 +120,9 @@ s_da3() {
 s_env_nerf() {
   [ -x "$ENVS/nerf/bin/python3" ] || "$MAMBA" create -y -p "$ENVS/nerf" python=3.10
   "$ENVS/nerf/bin/pip" install torch==2.1.2 torchvision==0.16.2 --index-url "$TORCH_CU121"
+  # torch 2.1.2's extension builder imports pkg_resources, which setuptools
+  # 82 removed; without this gsplat never compiles (found on 60254439).
+  "$ENVS/nerf/bin/pip" install "setuptools>=69,<81"
   "$ENVS/nerf/bin/pip" install ninja nerfstudio==1.1.4 gsplat==1.0.0
   # gsplat compiles its kernels on first use; do it here, not in the first splat run.
   cd /tmp
@@ -132,13 +138,17 @@ s_env_gsam2() {
   cd "$GSAM_ROOT"
   SAM2_BUILD_ALLOW_ERRORS=1 "$ENVS/gsam2/bin/pip" install -e .
   "$ENVS/gsam2/bin/pip" install --no-build-isolation -e grounding_dino
-  "$ENVS/gsam2/bin/pip" install opencv-python-headless pycocotools supervision
+  # GroundingDINO's runtime imports; transformers 5.x refuses torch 2.5.1.
+  "$ENVS/gsam2/bin/pip" install opencv-python-headless pycocotools supervision \
+    addict yapf timm "transformers>=4.46,<5"
   mkdir -p gdino_checkpoints
   [ -s gdino_checkpoints/groundingdino_swint_ogc.pth ] || \
     wget -q -O gdino_checkpoints/groundingdino_swint_ogc.pth "$GDINO_URL"
   cd /tmp
   PYTHONPATH="$GSAM_ROOT" "$ENVS/gsam2/bin/python3" -c \
-    "import groundingdino; from groundingdino.models import build_model; from groundingdino import _C"
+    "from grounding_dino.groundingdino import _C"
+  # Import the CUDA op once, under one name: loading the same .so again as
+  # groundingdino._C aborts the interpreter on exit (found on 60254439).
 }
 
 s_sam_weights() {
@@ -156,6 +166,10 @@ s_sam3d() {
   export CONDA_PREFIX="$SAM3D_ENV"
   export PATH="$SAM3D_ENV/bin:$PATH"
   export PIP_EXTRA_INDEX_URL="https://pypi.ngc.nvidia.com $TORCH_CU121"
+  # The dev extra pulls unpinned pipdeptree; 4.x depends on nab-* packages and
+  # pip backtracks through versions without end (found on 60254439).
+  echo "pipdeptree==2.28.0" > "$ROOT/sam3d-constraints.txt"
+  export PIP_CONSTRAINT="$ROOT/sam3d-constraints.txt"
   "$pip" install -e '.[dev]'
   "$pip" install -e '.[p3d]'
   PIP_FIND_LINKS="https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.5.1_cu121.html" \
