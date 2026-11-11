@@ -183,6 +183,10 @@ PIPELINES = {
         ),
         "GraspClutter6D 000091",
     ),
+    "review_redraw": (
+        ("benchmark scene", "SAM 3D meshes", "review pairs redrawn"),
+        "GraspClutter6D 000091",
+    ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
 }
@@ -201,6 +205,7 @@ BIN_PIPELINES = frozenset(
         "review_vlm",
         "review_candidates",
         "review_accept",
+        "review_redraw",
         "mapper",
     }
 )
@@ -781,6 +786,18 @@ def build_remote_command(
             "-m",
             "sceneagent.bin_review_pairs",
             "apply",
+            "--out",
+            out,
+            "--accept",
+            f"{repo}/{ACCEPT_VERDICTS_RELATIVE}",
+        ]
+    if pipeline == "review_redraw":
+        # Redraws the candidate set the committed accept verdicts name.
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.bin_review_pairs",
+            "redraw",
             "--out",
             out,
             "--accept",

@@ -100,6 +100,13 @@ object's mesh and its placement.
   grey surface from every side (points cover only the sides cameras saw).
 - assembled_1, assembled_2: every fitted object on two photos, this object
   in red. Better: the red shape sits on the right object.
+- placement_x, placement_y, placement_z (when present): the object's
+  reconstructed points in blue and the fitted mesh's footprint in grey, seen
+  along three axes, in one frame set by the points alone. The frame and the
+  points are the same in both sheets, so a difference in the grey shape's
+  size or position is a real difference in the fit. A red edge means the
+  mesh runs out of the frame on that side. Better: the grey footprint covers
+  the blue points without spilling far past them.
 
 The first image is fit A and the second is fit B. Which fit matches the real
 object better? Answer as JSON: {"better": "A" or "B", "reason": "<one short
@@ -114,6 +121,9 @@ PAIR_SCHEMA: dict[str, Any] = {
     },
     "required": ["better", "reason"],
 }
+# Two calls in each display order (round 4). Equal counts are the point: with
+# AB, BA, AB a judge that always names the second image would win 2 to 1.
+VOTE_ORDERS = ("AB", "BA", "AB", "BA")
 PAIR_RE = re.compile(r"^object_(\d{1,4})_([AB])\.png$")
 HASH_RE = re.compile(r"[0-9a-f]{64}")
 
@@ -220,23 +230,54 @@ def candidates_hash_from(candidates_json: Path) -> str:
     return digest
 
 
+def tally(votes: list[dict[str, str]]) -> tuple[str, str]:
+    """The majority side and the first reason given for it; ``tie`` on an even split."""
+    a = sum(1 for v in votes if v["better"] == "A")
+    b = len(votes) - a
+    if a == b:
+        return "tie", "votes split evenly across the two orders"
+    winner = "A" if a > b else "B"
+    return winner, next(v["reason"] for v in votes if v["better"] == winner)
+
+
 def judge_pairs(
     pairs: dict[int, tuple[bytes, bytes]],
     harness: ImageHarness,
     candidates_hash: str,
     source_run: str = "",
+    orders: tuple[str, ...] = VOTE_ORDERS,
 ) -> dict[str, Any]:
-    """One call per pair, A then B. A failed call or bad reply is recorded, not guessed."""
+    """Several calls per pair, shown in both orders; the majority side is kept.
+
+    Round 3 showed one call is not stable (a repeat flipped object 4). Each
+    order is used equally often, so a habit of naming the first or second
+    image cancels to a tie rather than deciding; a tie keeps the original on
+    the box. A ``BA`` call shows B first and its answer is mapped back. A
+    failed call or bad reply fails the object; nothing is guessed.
+    """
     objects: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for number, (a, b) in pairs.items():
         try:
-            text = harness.complete(
-                PAIR_PROMPT,
-                images=[(a, "image/png"), (b, "image/png")],
-                response_schema=PAIR_SCHEMA,
+            votes = []
+            for order in orders:
+                first, second = (a, b) if order == "AB" else (b, a)
+                reply = parse_pair(
+                    harness.complete(
+                        PAIR_PROMPT,
+                        images=[(first, "image/png"), (second, "image/png")],
+                        response_schema=PAIR_SCHEMA,
+                    )
+                )
+                shown = reply["better"]
+                better = shown if order == "AB" else {"A": "B", "B": "A"}[shown]
+                votes.append(
+                    {"order": order, "better": better, "reason": reply["reason"]}
+                )
+            better, reason = tally(votes)
+            objects.append(
+                {"object": number, "better": better, "reason": reason, "votes": votes}
             )
-            objects.append({"object": number, **parse_pair(text)})
         except Exception as exc:  # recorded per object; the key is already redacted
             failed.append(
                 {"object": number, "error": f"{type(exc).__name__}: {exc}"[:300]}
@@ -249,6 +290,7 @@ def judge_pairs(
         "prompt_sha256": pair_prompt_sha256(),
         "prompt_source": "ours",
         "vlm_calls": harness.call_count,
+        "vote_orders": list(orders),
         "objects": objects,
         "failed": failed,
     }

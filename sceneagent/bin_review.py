@@ -74,6 +74,19 @@ OVERLAY_OK = 0.5
 ISOLATED_OK = 0.5
 TILE_PX = 256
 SECOND_OVERLAY = "registration_overlay_2"
+# Ours, not the paper's: tiles framed on the object's Gaussians alone, so a
+# before/after pair shares one frame and a change in the mesh's size or
+# position shows as a change in the picture. The isolated views frame on each
+# mesh, which hides both (round 3: a regenerated bottle 27% smaller looked the
+# same size). Drawn only when asked for, so the paper's eleven views and the
+# retry prompt that names them are unchanged.
+PLACEMENT_VIEWS = {
+    "placement_x": np.array([1.0, 0, 0]),
+    "placement_y": np.array([0, 1.0, 0]),
+    "placement_z": np.array([0, 0, 1.0]),
+}
+PLACEMENT_PERCENTILE = 95
+PLACEMENT_MARGIN = 1.6
 FOOTPRINT_DIVISOR = 4
 RENDER_POINTS = 60000
 OBLIQUE = {
@@ -186,6 +199,68 @@ def render_isolated(
     return image, iou
 
 
+def placement_frame(gaussians: np.ndarray) -> tuple[np.ndarray, float]:
+    """A cube centred on the Gaussians, sized to hold most of them.
+
+    Median and a percentile, not mean and max, because floaters exist. Depends
+    on the Gaussians only, so both sheets of a pair get the identical frame.
+    """
+    centre = np.median(gaussians, axis=0)
+    spread = np.percentile(np.abs(gaussians - centre), PLACEMENT_PERCENTILE, axis=0)
+    return centre, PLACEMENT_MARGIN * max(float(spread.max()), 1e-9)
+
+
+def render_placement(
+    points: np.ndarray,
+    gaussians: np.ndarray,
+    direction: np.ndarray,
+    frame: tuple[np.ndarray, float],
+    size: int = TILE_PX,
+) -> np.ndarray:
+    """The mesh's footprint (grey) and the Gaussians (blue) in a fixed frame.
+
+    A light grid divides the frame in quarters. A mesh that runs out of the
+    frame is clipped and that edge is drawn red, so it cannot just vanish.
+    """
+    centre, half = frame
+    d = direction / np.linalg.norm(direction)
+    right, up = view_basis(d)
+
+    def coords(cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return (
+            (cloud - centre) @ right / (2 * half) + 0.5,
+            0.5 - (cloud - centre) @ up / (2 * half),
+        )
+
+    image = np.full((size, size, 3), 255, dtype=np.uint8)
+    for k in (1, 2, 3):
+        line = round(k * (size - 1) / 4)
+        image[line, :] = image[:, line] = 225
+    x, y = coords(points)
+    inside = (x >= 0) & (x <= 1) & (y >= 0) & (y <= 1)
+    footprint = np.zeros((size, size), dtype=bool)
+    footprint[
+        (y[inside] * (size - 1)).astype(int), (x[inside] * (size - 1)).astype(int)
+    ] = True
+    image[_dilate(footprint, 1)] = 150
+    gx, gy = coords(gaussians)
+    g_in = (gx >= 0) & (gx <= 1) & (gy >= 0) & (gy <= 1)
+    image[(gy[g_in] * (size - 1)).astype(int), (gx[g_in] * (size - 1)).astype(int)] = (
+        np.array([30, 90, 255], dtype=np.uint8)
+    )
+    red = np.array([230, 30, 30], dtype=np.uint8)
+    band = 3
+    if (x < 0).any():
+        image[:, :band] = red
+    if (x > 1).any():
+        image[:, -band:] = red
+    if (y < 0).any():
+        image[:band, :] = red
+    if (y > 1).any():
+        image[-band:, :] = red
+    return image
+
+
 def draw_overlay(
     photo: np.ndarray, mask: np.ndarray, rendered: np.ndarray
 ) -> np.ndarray:
@@ -279,6 +354,7 @@ def save_views(views: dict[str, np.ndarray], folder: Path, name: str) -> Path:
         # A matched pair shows a second overlay view; it takes the sheet's
         # one empty slot, next to the first overlay.
         names.insert(names.index("registration_overlay") + 1, SECOND_OVERLAY)
+    names += [view_name for view_name in PLACEMENT_VIEWS if view_name in views]
     for view_name in names:
         Image.fromarray(views[view_name]).save(view_dir / f"{name}-{view_name}.png")
         tile = _thumb(views[view_name])
@@ -594,6 +670,7 @@ def review_object(
     assembled_views: list[str],
     folder: Path | None = None,
     overlay_views: list[str] | None = None,
+    placement: bool = False,
 ) -> dict[str, Any]:
     """Draw the eleven views of one placed object and measure them.
 
@@ -605,6 +682,9 @@ def review_object(
     the same views for both sheets, so the two differ only in the mesh and
     its placement (round 2 drew each on its own source view). The overlay
     IoU is measured on the first.
+
+    ``placement`` adds the three ``PLACEMENT_VIEWS`` tiles (ours), framed on
+    the object's Gaussians so a pair's two sheets share the frame.
     """
     import trimesh
     from PIL import Image
@@ -627,6 +707,10 @@ def review_object(
         views[view_name], isolated[view_name] = render_isolated(
             points, normals, gaussians, direction
         )
+    if placement:
+        frame = placement_frame(gaussians)
+        for view_name, direction in PLACEMENT_VIEWS.items():
+            views[view_name] = render_placement(points, gaussians, direction, frame)
     images, cameras = inputs["images"], inputs["cameras"]
     world = splat_to_colmap(points, inputs["transform"], inputs["scale"])
     obj_masks = next(

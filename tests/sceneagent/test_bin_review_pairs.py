@@ -134,10 +134,15 @@ def test_pairs_are_read_whole_and_judged_a_then_b(tmp_path):
     harness = FakeHarness(
         ['{"better": "B", "reason": "red fills green"}', RuntimeError("HTTP 503")]
     )
-    result = vr.judge_pairs(pairs, harness, "c" * 64, "42939458339")
+    result = vr.judge_pairs(pairs, harness, "c" * 64, "42939458339", orders=("AB",))
     assert result["mode"] == "accept" and result["candidates_hash"] == "c" * 64
     assert result["objects"] == [
-        {"object": 3, "better": "B", "reason": "red fills green"}
+        {
+            "object": 3,
+            "better": "B",
+            "reason": "red fills green",
+            "votes": [{"order": "AB", "better": "B", "reason": "red fills green"}],
+        }
     ]
     assert [f["object"] for f in result["failed"]] == [5]
     assert harness.calls[0][1] == [(b"a3", "image/png"), (b"b3", "image/png")]
@@ -200,11 +205,112 @@ def test_both_pair_sheets_draw_the_overlay_on_the_same_views():
     # differ only in the mesh. Both sheets now get the same overlay views.
     import inspect
 
-    source = inspect.getsource(rp.build_candidates)
+    source = inspect.getsource(rp.draw_pairs)
     assert source.count("overlay_views=shown") == 2
+    assert source.count("placement=placement") == 2
+    assert "draw_pairs(" in inspect.getsource(rp.build_candidates)
     assert 'shown = list(dict.fromkeys([records[n]["view"], item["view"]]))' in source
 
 
 def test_the_pair_prompt_says_the_photos_are_shared():
     assert "same photos and the same segmentation masks" in vr.PAIR_PROMPT
     assert "registration_overlay_2" in vr.PAIR_PROMPT
+
+
+def _reply(side: str) -> str:
+    return json.dumps({"better": side, "reason": f"picked {side}"})
+
+
+def test_a_habit_of_naming_the_second_image_ties():
+    # Round 3 answered B on 3 of 3. Votes are split evenly across the two
+    # display orders, so a judge that always names the second image ties.
+    harness = FakeHarness([_reply("B")] * 4)
+    result = vr.judge_pairs({3: (b"a", b"b")}, harness, "c" * 64)
+    item = result["objects"][0]
+    assert item["better"] == "tie"
+    assert [v["better"] for v in item["votes"]] == ["B", "A", "B", "A"]
+    assert harness.calls[1][1] == [(b"b", "image/png"), (b"a", "image/png")]
+    assert result["vlm_calls"] == 4 and result["vote_orders"] == list(vr.VOTE_ORDERS)
+
+
+def test_a_consistent_preference_survives_both_orders():
+    # Prefers the real B: says B when it is second, A when it is shown first.
+    harness = FakeHarness([_reply("B"), _reply("A"), _reply("B"), _reply("A")])
+    item = vr.judge_pairs({3: (b"a", b"b")}, harness, "c" * 64)["objects"][0]
+    assert item["better"] == "B" and item["reason"] == "picked B"
+
+
+def test_the_default_orders_are_balanced():
+    assert vr.VOTE_ORDERS.count("AB") == vr.VOTE_ORDERS.count("BA") > 0
+
+
+def test_one_failed_vote_fails_the_object():
+    harness = FakeHarness([_reply("A"), RuntimeError("HTTP 503")])
+    result = vr.judge_pairs({3: (b"a", b"b")}, harness, "c" * 64)
+    assert result["objects"] == [] and [f["object"] for f in result["failed"]] == [3]
+
+
+def test_a_tie_keeps_the_original(tmp_path):
+    item = {"A": "after", "B": "before", "unchanged": False}
+    assert rp.choose(item, {"better": "tie", "reason": ""})[0] == "before"
+    path = tmp_path / "a.json"
+    path.write_text(
+        json.dumps(
+            {
+                "mode": "accept",
+                "candidates_hash": "a" * 64,
+                "objects": [{"object": 3, "better": "tie", "reason": "split"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert rp.load_accept_verdicts(path)[1][3]["better"] == "tie"
+
+
+def test_redraw_reuses_the_judged_candidates_and_their_order(tmp_path, monkeypatch):
+    folder, digest = _saved_candidates(tmp_path)
+    accept = tmp_path / "accept.json"
+    accept.write_text(
+        json.dumps({"mode": "accept", "candidates_hash": digest, "objects": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rp, "_placement", lambda out: ({}, {}, {}))
+    seen = {}
+
+    def fake_draw(out, inputs, clouds, records, items, saved, where, order, placement):
+        seen.update(order=order, placement=placement, where=where, saved=list(saved))
+        return {3: {}}
+
+    monkeypatch.setattr(rp, "draw_pairs", fake_draw)
+    assert rp.redraw_pairs(tmp_path, accept) == 0
+    assert seen["order"] == {3: {"A": "after", "B": "before"}}
+    assert seen["placement"] is True and seen["saved"] == [3]
+    assert seen["where"] == folder / "placement"
+    copied = json.loads((tmp_path / "candidates.json").read_text(encoding="utf-8"))
+    assert copied["candidates_hash"] == digest
+    ledger = json.loads((tmp_path / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["entries"][-1]["item"] == rp.REDRAW_ITEM
+    assert ledger["entries"][-1]["decision"] == "accept"
+    np.save(folder / "object_3.npy", np.zeros((4, 3)))
+    assert rp.redraw_pairs(tmp_path, accept) == 1
+
+
+def test_redraw_runs_on_the_box_from_the_committed_accept_verdicts():
+    from sceneagent.vast_smoke import (
+        ACCEPT_VERDICTS_RELATIVE,
+        BIN_PIPELINES,
+        PIPELINES,
+        build_remote_command,
+    )
+
+    argv = build_remote_command("/w/r", "/w/o", pipeline="review_redraw")
+    assert argv[2:4] == ["sceneagent.bin_review_pairs", "redraw"]
+    assert argv[-1] == "/w/r/" + ACCEPT_VERDICTS_RELATIVE
+    assert "review_redraw" in BIN_PIPELINES
+    assert PIPELINES["review_redraw"][0][-1:] == rp.REDRAW_REQUIRED
+
+
+def test_the_pair_prompt_describes_the_placement_tiles():
+    for name in ("placement_x", "placement_y", "placement_z", "when present"):
+        assert name in vr.PAIR_PROMPT
+    assert "placement_" not in vr.PROMPT

@@ -166,7 +166,9 @@ def test_the_overlay_is_cut_to_the_object_and_enlarged():
 
 
 def test_a_second_overlay_takes_the_empty_slot_next_to_the_first(tmp_path):
-    views = {name: np.full((256, 256, 3), 200, np.uint8) for name, _ in br.REQUIRED_VIEWS}
+    views = {
+        name: np.full((256, 256, 3), 200, np.uint8) for name, _ in br.REQUIRED_VIEWS
+    }
     sheet = br.save_views(views, tmp_path / "one", "object_0")
     views[br.SECOND_OVERLAY] = np.zeros((256, 256, 3), np.uint8)
     sheet2 = br.save_views(views, tmp_path / "two", "object_0")
@@ -178,3 +180,56 @@ def test_a_second_overlay_takes_the_empty_slot_next_to_the_first(tmp_path):
     ).is_file()
     tile = np.asarray(Image.open(sheet2))[100:150, 256 + 100 : 256 + 150]
     assert tile.mean() < 50  # the dark second overlay sits in slot 2
+
+
+def _cube(half: float, n: int = 2000, seed: int = 0) -> np.ndarray:
+    return np.random.default_rng(seed).uniform(-half, half, size=(n, 3))
+
+
+def test_the_placement_frame_depends_on_the_gaussians_only():
+    gaussians = _cube(1.0)
+    frame = br.placement_frame(gaussians)
+    small = br.render_placement(
+        _cube(0.5, seed=1), gaussians, np.array([1.0, 0, 0]), frame
+    )
+    large = br.render_placement(
+        _cube(0.9, seed=2), gaussians, np.array([1.0, 0, 0]), frame
+    )
+    # Same frame, so the larger mesh draws a larger grey footprint.
+    grey = lambda image: int((image == 150).all(axis=2).sum())
+    assert grey(large) > 1.5 * grey(small)
+
+
+def test_a_few_floaters_do_not_set_the_frame():
+    gaussians = _cube(1.0)
+    with_floaters = np.vstack([gaussians, np.full((10, 3), 50.0)])
+    centre, half = br.placement_frame(gaussians)
+    centre2, half2 = br.placement_frame(with_floaters)
+    assert half2 < 1.2 * half and np.abs(centre2 - centre).max() < 0.1
+
+
+def test_a_mesh_out_of_the_frame_marks_that_edge_red():
+    gaussians = _cube(1.0)
+    frame = br.placement_frame(gaussians)
+    inside = br.render_placement(_cube(0.5), gaussians, np.array([0, 0, 1.0]), frame)
+    shifted = _cube(0.5) + np.array([10.0, 0, 0])
+    outside = br.render_placement(shifted, gaussians, np.array([0, 0, 1.0]), frame)
+    red = np.array([230, 30, 30])
+    assert not (inside == red).all(axis=2).any()
+    assert (outside == red).all(axis=2).sum() > 0
+
+
+def test_placement_tiles_add_a_row_and_the_default_sheet_is_unchanged(tmp_path):
+    from PIL import Image
+
+    views = {
+        name: np.full((256, 256, 3), 200, np.uint8) for name, _ in br.REQUIRED_VIEWS
+    }
+    plain = br.save_views(dict(views), tmp_path / "plain", "object_0")
+    views[br.SECOND_OVERLAY] = np.zeros((256, 256, 3), np.uint8)
+    for name in br.PLACEMENT_VIEWS:
+        views[name] = np.zeros((256, 256, 3), np.uint8)
+    full = br.save_views(views, tmp_path / "full", "object_0")
+    assert Image.open(plain).size == (1024, 768)
+    assert Image.open(full).size == (1024, 1024)
+    assert not set(br.PLACEMENT_VIEWS) & {name for name, _ in REQUIRED_VIEWS}

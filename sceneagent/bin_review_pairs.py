@@ -52,13 +52,18 @@ from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE
 
 CANDIDATES_ITEM = "review candidates"
 PAIRS_ITEM = "review pairs drawn"
+REDRAW_ITEM = "review pairs redrawn"
 ACCEPT_ITEM = "reviewer retries (VLM accepted)"
 ACCEPT_SCORE_ITEM = "bin score (VLM accepted)"
 BUILD_REQUIRED = (CANDIDATES_ITEM, PAIRS_ITEM)
 APPLY_REQUIRED = (ACCEPT_ITEM, ACCEPT_SCORE_ITEM)
+REDRAW_REQUIRED = (REDRAW_ITEM,)
 PAIRS_DIR = Path("reviewer") / "pairs"
 PAIR_SEED = 20261111
 SIDES = ("A", "B")
+# A pair verdict may also be a tie: the VLM's votes split evenly across the
+# two display orders. A tie keeps the original, as a missing verdict does.
+TIE = "tie"
 HASH_RE = re.compile(r"[0-9a-f]{64}")
 
 Runner = Callable[..., Any]
@@ -128,6 +133,66 @@ def _placement(
     clouds: dict[str, np.ndarray] = dict(placement["placed"])
     records = {r["object"]: r for r in placement["objects"] if r.get("placed")}
     return inputs, clouds, records
+
+
+def draw_pairs(
+    out: Path,
+    inputs: dict[str, Any],
+    clouds: dict[str, np.ndarray],
+    records: dict[int, dict[str, Any]],
+    items: list[dict[str, Any]],
+    saved: dict[int, np.ndarray],
+    folder: Path,
+    order: dict[int, dict[str, str]],
+    placement: bool = False,
+) -> dict[int, dict[str, str]]:
+    """Each changed candidate's before and after sheets; ``review_pairs.zip`` in ``order``."""
+    drawn = {}
+    for item in items:
+        n = item["object"]
+        if item.get("unchanged") or n not in saved:
+            continue
+        name = f"object_{n}"
+        views = assembled_views(inputs, n)
+        # Both sheets show the overlay on the same photos (the original view,
+        # and a regeneration's own view), so A and B differ only in the mesh
+        # and its placement. Round 2 drew each on its own view.
+        shown = list(dict.fromkeys([records[n]["view"], item["view"]]))
+        item["overlay_views"] = shown
+        before = br.review_object(
+            out,
+            inputs,
+            records[n],
+            clouds,
+            views,
+            folder=folder / "before" / name,
+            overlay_views=shown,
+            placement=placement,
+        )
+        after_record = {
+            **records[n],
+            "similarity": item["similarity"],
+            "glb": item["glb"],
+            "view": item["view"],
+        }
+        after = br.review_object(
+            out,
+            inputs,
+            after_record,
+            {**clouds, name: saved[n]},
+            views,
+            folder=folder / "after" / name,
+            overlay_views=shown,
+            placement=placement,
+        )
+        drawn[n] = {"before": before["sheet"], "after": after["sheet"]}
+    with zipfile.ZipFile(
+        out / "review_pairs.zip", "w", zipfile.ZIP_DEFLATED
+    ) as archive:
+        for n, sheets in drawn.items():
+            for side in SIDES:
+                archive.write(sheets[order[n][side]], f"object_{n}_{side}.png")
+    return drawn
 
 
 def build_candidates(
@@ -229,50 +294,19 @@ def build_candidates(
         )
         changed = [i["object"] for i in with_cloud if not i.get("unchanged")]
         order = pair_order(changed, seed)
-        drawn = {}
-        for item in with_cloud:
-            n = item["object"]
-            if item.get("unchanged"):
-                continue
-            name = f"object_{n}"
-            views = assembled_views(inputs, n)
-            # Both sheets show the overlay on the same photos (the original
-            # view, and a regeneration's own view), so A and B differ only in
-            # the mesh and its placement. Round 2 drew each on its own view.
-            shown = list(dict.fromkeys([records[n]["view"], item["view"]]))
-            item["overlay_views"] = shown
-            before = br.review_object(
-                out,
-                inputs,
-                records[n],
-                clouds,
-                views,
-                folder=folder / "before" / name,
-                overlay_views=shown,
-            )
-            after_record = {
-                **records[n],
-                "similarity": item["similarity"],
-                "glb": item["glb"],
-                "view": item["view"],
-            }
-            after = br.review_object(
-                out,
-                inputs,
-                after_record,
-                {**clouds, name: candidate_clouds[n]},
-                views,
-                folder=folder / "after" / name,
-                overlay_views=shown,
-            )
-            item.update(order[n])
-            drawn[n] = {"before": before["sheet"], "after": after["sheet"]}
-        with zipfile.ZipFile(
-            out / "review_pairs.zip", "w", zipfile.ZIP_DEFLATED
-        ) as archive:
-            for n, sheets in drawn.items():
-                for side in SIDES:
-                    archive.write(sheets[order[n][side]], f"object_{n}_{side}.png")
+        for n in changed:
+            next(i for i in with_cloud if i["object"] == n).update(order[n])
+        drawn = draw_pairs(
+            out,
+            inputs,
+            clouds,
+            records,
+            with_cloud,
+            candidate_clouds,
+            folder,
+            order,
+            placement=True,
+        )
         pairs_entry.update(decision="accept", use_gpu=False, pairs=len(drawn))
         manifest = {
             "scene": SCENE,
@@ -317,8 +351,8 @@ def load_accept_verdicts(
         better = item.get("better") if isinstance(item, dict) else None
         if not isinstance(number, int) or isinstance(number, bool):
             raise ValueError(f"pair object {number!r} is not an integer")
-        if better not in SIDES:
-            raise ValueError(f"pair verdict {better!r} is not A or B")
+        if better not in (*SIDES, TIE):
+            raise ValueError(f"pair verdict {better!r} is not A, B or tie")
         reason = item.get("reason")
         verdicts[number] = {
             "better": better,
@@ -367,6 +401,8 @@ def choose(item: dict[str, Any], verdict: dict[str, str] | None) -> tuple[str, s
         return "before", "retry moved nothing; not judged"
     if verdict is None:
         return "before", "no VLM verdict"
+    if verdict["better"] == TIE:
+        return "before", "VLM votes tied; original kept"
     return item[verdict["better"]], "VLM"
 
 
@@ -412,7 +448,7 @@ def apply_accepted(
             oracle = "after" if delta > 0 else "before" if delta < 0 else "tie"
             row.update(
                 vlm=vlm_side,
-                vlm_reason=why if why != "VLM" else verdicts[n]["reason"],
+                vlm_reason=verdicts[n]["reason"] if n in verdicts else why,
                 vlm_source=why,
                 test=test_side,
                 oracle=oracle,
@@ -479,6 +515,57 @@ def apply_accepted(
     return 0 if all(outcomes.get(i) == "accept" for i in APPLY_REQUIRED) else 1
 
 
+def redraw_pairs(out: Path | str, accept: Path | str) -> int:
+    """Draw the judged candidates' pairs again, with the placement tiles.
+
+    No retry runs: the meshes are the saved set the accept verdicts name, so a
+    new verdict on these sheets is compared on exactly the candidates the
+    oracle already scored (regeneration is not repeatable, and round 3's
+    object 4 changed sign between regenerations). The A/B order is the one
+    recorded at build.
+    """
+    out = Path(out)
+    ledger = _load_ledger(out)
+    entries = [
+        e for e in ledger.get("entries", []) if e.get("item") not in REDRAW_REQUIRED
+    ]
+    entry: dict[str, Any] = {"item": REDRAW_ITEM}
+    try:
+        meta, _verdicts = load_accept_verdicts(Path(accept))
+        digest = meta["candidates_hash"]
+        manifest, saved = load_candidates(out, digest)
+        inputs, clouds, records = _placement(out)
+        judged = {i["object"]: i["fit_total"] for i in manifest["judged_placement"]}
+        br.check_placement(judged, records)
+        items = [i for i in manifest["objects"] if i["object"] in saved]
+        order = {
+            i["object"]: {side: i[side] for side in SIDES}
+            for i in items
+            if not i.get("unchanged")
+        }
+        folder = out / PAIRS_DIR / digest[:16] / "placement"
+        drawn = draw_pairs(
+            out, inputs, clouds, records, items, saved, folder, order, placement=True
+        )
+        # The runner reads the candidates from the artifact; the set is the
+        # saved one, unchanged.
+        (out / "candidates.json").write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        entry.update(
+            decision="accept",
+            use_gpu=False,
+            pairs=len(drawn),
+            candidates_hash=digest,
+            placement_views=list(br.PLACEMENT_VIEWS),
+        )
+    except (OSError, ValueError, KeyError, RuntimeError, StopIteration) as exc:
+        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
+    entries.append(entry)
+    _write_ledger(out, ledger, entries)
+    return 0 if entry["decision"] == "accept" else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="stage", required=True)
@@ -489,9 +576,16 @@ def main(argv: list[str] | None = None) -> int:
     apply.add_argument("--out", type=Path, required=True)
     apply.add_argument("--accept", type=Path, required=True)
     apply.add_argument("--data", type=Path, default=Path(DATA_DIR))
+    redraw = sub.add_parser(
+        "redraw", help="draw the judged candidates again, with placement tiles"
+    )
+    redraw.add_argument("--out", type=Path, required=True)
+    redraw.add_argument("--accept", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.stage == "build":
         return build_candidates(args.out, args.verdicts)
+    if args.stage == "redraw":
+        return redraw_pairs(args.out, args.accept)
     return apply_accepted(args.out, args.accept, args.data)
 
 
