@@ -59,6 +59,12 @@ VIEWS_ITEM = "reviewer views"
 RETRY_ITEM = "reviewer retries"
 SCORE_ITEM = "bin score (reviewed)"
 REQUIRED = (VIEWS_ITEM, RETRY_ITEM, SCORE_ITEM)
+# With --verdicts the VLM chooses the retries. Its items and files sit beside
+# the rule's, so the two reviews of one placement can be compared.
+VLM_RETRY_ITEM = "reviewer retries (VLM)"
+VLM_SCORE_ITEM = "bin score (VLM reviewed)"
+VLM_REQUIRED = (VIEWS_ITEM, VLM_RETRY_ITEM, VLM_SCORE_ITEM)
+VLM_DECISIONS = ("keep", "icp_flip", "sam3d_next_view")
 # Ours. The silhouette cut reuses the ours_iteration_1 gate's minimum.
 OVERLAY_OK = 0.5
 ISOLATED_OK = 0.5
@@ -132,26 +138,46 @@ def render_isolated(
         row = np.clip((y * (size - 1)).astype(int), 0, size - 1)
         return row, col
 
-    image = np.full((size, size, 3), 255, dtype=np.uint8)
     row, col = pixels(points)
-    depth = (points - centre) @ d
-    shade = (60 + 180 * np.abs(normals @ d)).astype(np.uint8)
-    order = np.argsort(-depth)  # far first, so the nearest point is written last
-    image[row[order], col[order]] = shade[order, None]
     g_row, g_col = pixels(gaussians)
-    g_mask = np.zeros((size, size), dtype=bool)
-    g_mask[g_row, g_col] = True
-    image[g_mask] = (0.5 * image[g_mask] + 0.5 * np.array([30, 90, 255])).astype(
-        np.uint8
-    )
     # Footprints on a coarser grid, so gaps between samples do not count as
-    # disagreement.
+    # disagreement. Measured in the frame that holds every Gaussian.
     coarse = -(-size // FOOTPRINT_DIVISOR)
     mesh_mask = np.zeros((coarse, coarse), dtype=bool)
     mesh_mask[row // FOOTPRINT_DIVISOR, col // FOOTPRINT_DIVISOR] = True
     g_coarse = np.zeros((coarse, coarse), dtype=bool)
     g_coarse[g_row // FOOTPRINT_DIVISOR, g_col // FOOTPRINT_DIVISOR] = True
     iou = silhouette_iou(_dilate(mesh_mask, 1), _dilate(g_coarse, 1))
+    # The picture is framed on the mesh instead: a few floaters far out would
+    # otherwise shrink the object to a dot (run 42934419274, object 7). A
+    # Gaussian outside that frame is not drawn. The IoU above is unchanged.
+    view = (
+        1.3
+        * 2
+        * max(
+            np.abs((points - centre) @ right).max(),
+            np.abs((points - centre) @ up).max(),
+            1e-9,
+        )
+    )
+    image = np.full((size, size, 3), 255, dtype=np.uint8)
+    x, y = (points - centre) @ right / view + 0.5, 0.5 - (points - centre) @ up / view
+    row = np.clip((y * (size - 1)).astype(int), 0, size - 1)
+    col = np.clip((x * (size - 1)).astype(int), 0, size - 1)
+    depth = (points - centre) @ d
+    shade = (60 + 180 * np.abs(normals @ d)).astype(np.uint8)
+    order = np.argsort(-depth)  # far first, so the nearest point is written last
+    image[row[order], col[order]] = shade[order, None]
+    gx = (gaussians - centre) @ right / view + 0.5
+    gy = 0.5 - (gaussians - centre) @ up / view
+    inside = (gx >= 0) & (gx <= 1) & (gy >= 0) & (gy <= 1)
+    g_mask = np.zeros((size, size), dtype=bool)
+    g_mask[
+        (gy[inside] * (size - 1)).astype(int), (gx[inside] * (size - 1)).astype(int)
+    ] = True
+    image[g_mask] = (0.5 * image[g_mask] + 0.5 * np.array([30, 90, 255])).astype(
+        np.uint8
+    )
     return image, iou
 
 
@@ -166,6 +192,35 @@ def draw_overlay(
     outline = mask & ~_erode(mask)
     out[_dilate(outline, 2)] = np.array([40, 255, 40], dtype=np.uint8)
     return out
+
+
+def crop_to_object(
+    image: np.ndarray, region: np.ndarray, margin: float = 0.5, min_px: int = 96
+) -> np.ndarray:
+    """``image`` cut to ``region``'s box plus a margin, enlarged to at least 512 px.
+
+    The whole photo shrunk into one tile leaves a small object a few pixels
+    wide (run 42934419274, object 7), too small to judge red against green.
+    Display only: nothing is measured on the crop.
+    """
+    from PIL import Image
+
+    rows, cols = np.nonzero(region)
+    if rows.size == 0:
+        return image
+    height, width = region.shape
+    half = max(int(np.ptp(rows)) + 1, int(np.ptp(cols)) + 1, min_px) * (0.5 + margin)
+    cy, cx = (rows.min() + rows.max()) / 2, (cols.min() + cols.max()) / 2
+    top, bottom = int(max(cy - half, 0)), int(min(cy + half, height))
+    left, right = int(max(cx - half, 0)), int(min(cx + half, width))
+    crop = Image.fromarray(image[top:bottom, left:right])
+    scale = max(1.0, 512 / max(crop.size))
+    if scale > 1.0:
+        crop = crop.resize(
+            (round(crop.width * scale), round(crop.height * scale)),
+            Image.Resampling.LANCZOS,
+        )
+    return np.array(crop)
 
 
 def _erode(mask: np.ndarray) -> np.ndarray:
@@ -243,6 +298,61 @@ def choose_retry(
     if (overlay_iou is None or overlay_iou < OVERLAY_OK) and has_next_view:
         return "sam3d_next_view"
     return "keep"
+
+
+def load_verdicts(path: Path) -> tuple[dict[str, Any], dict[int, dict[str, str]]]:
+    """The VLM verdict file from :mod:`sceneagent.vlm_review`, checked.
+
+    It is model output, so every field is validated: an object is an integer
+    and a decision one of the three retries. Anything else raises. Returns the
+    file's metadata (model, prompt hash, call count) and the verdict per object.
+    """
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("objects"), list):
+        raise ValueError("verdict file has no objects list")
+    verdicts: dict[int, dict[str, str]] = {}
+    for item in payload["objects"]:
+        number = item.get("object") if isinstance(item, dict) else None
+        decision = item.get("decision") if isinstance(item, dict) else None
+        if not isinstance(number, int) or isinstance(number, bool):
+            raise ValueError(f"verdict object {number!r} is not an integer")
+        if decision not in VLM_DECISIONS:
+            raise ValueError(f"verdict decision {decision!r} is not a retry")
+        reason = item.get("reason")
+        verdicts[number] = {
+            "decision": decision,
+            "reason": reason[:400] if isinstance(reason, str) else "",
+        }
+    meta = {
+        key: payload.get(key)
+        for key in (
+            "source_run",
+            "model",
+            "prompt_sha256",
+            "prompt_source",
+            "vlm_calls",
+        )
+    }
+    meta["failed_objects"] = [
+        f.get("object") for f in payload.get("failed") or [] if isinstance(f, dict)
+    ]
+    return meta, verdicts
+
+
+def vlm_decision(
+    verdict: dict[str, str] | None, has_next_view: bool
+) -> tuple[str, str]:
+    """The retry to run for one object under the VLM, and why.
+
+    No verdict (the call failed) means no retry; the rule is not substituted.
+    ``sam3d_next_view`` with no other view to use cannot run, so it keeps.
+    """
+    if verdict is None:
+        return "keep", "no VLM verdict"
+    decision = verdict["decision"]
+    if decision == "sam3d_next_view" and not has_next_view:
+        return "keep", "VLM chose sam3d_next_view; no other view"
+    return decision, "VLM"
 
 
 def flip_starts(
@@ -363,7 +473,9 @@ def review_object(
     mask = stack[mask_ref["mask_index"]]
     with Image.open(out / "images" / view) as handle:
         photo = np.array(handle.convert("RGB"))
-    views["registration_overlay"] = draw_overlay(photo, mask, rendered)
+    views["registration_overlay"] = crop_to_object(
+        draw_overlay(photo, mask, rendered), mask | rendered
+    )
     overlay_iou = silhouette_iou(rendered, mask)
     for k, assembled in enumerate(assembled_views[:2], 1):
         a_image = images[assembled]
@@ -399,20 +511,28 @@ def run_bin_review(
     *,
     runner: Runner = subprocess.run,
     sam3d_config: Callable[[], Path] | None = None,
+    verdicts: Path | str | None = None,
 ) -> int:
-    """Place, draw and measure every object's views, retry, rescore."""
+    """Place, draw and measure every object's views, retry, rescore.
+
+    With ``verdicts`` (a :mod:`sceneagent.vlm_review` file) the VLM's choice
+    replaces the rule's for each object, the rule's is logged beside it, and
+    the evidence, ledger items and score file are the ``_vlm`` ones.
+    """
     from sceneagent import bin_sam3d
 
     out, data = Path(out), Path(data)
+    use_vlm = verdicts is not None
+    required = VLM_REQUIRED if use_vlm else REQUIRED
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         ledger = {"entries": []}
-    entries = [e for e in ledger.get("entries", []) if e.get("item") not in REQUIRED]
+    entries = [e for e in ledger.get("entries", []) if e.get("item") not in required]
     views_entry: dict[str, Any] = {"item": VIEWS_ITEM}
-    retry_entry: dict[str, Any] = {"item": RETRY_ITEM}
-    score_entry: dict[str, Any] = {"item": SCORE_ITEM}
+    retry_entry: dict[str, Any] = {"item": VLM_RETRY_ITEM if use_vlm else RETRY_ITEM}
+    score_entry: dict[str, Any] = {"item": VLM_SCORE_ITEM if use_vlm else SCORE_ITEM}
     evidence: dict[str, Any] = {
         "scene": SCENE,
         "rule": {
@@ -422,7 +542,11 @@ def run_bin_review(
         },
         "objects": [],
     }
+    vlm: dict[int, dict[str, str]] = {}
     try:
+        if verdicts is not None:
+            evidence["vlm"], vlm = load_verdicts(Path(verdicts))
+            evidence["rule"]["applied"] = "logged only; the VLM chooses"
         inputs = bin_place._load(out)
         placement = bin_place.place_objects(out, inputs)
         clouds: dict[str, np.ndarray] = dict(placement["placed"])
@@ -452,12 +576,26 @@ def run_bin_review(
             )
             assembled = list(dict.fromkeys(m["view"] for m in by_area))
             review = review_object(out, inputs, record, clouds, assembled)
-            review["decision"] = choose_retry(
+            # The fit the views show; a VLM run compares it with the judged run's.
+            review["fit_total"] = record["fit_total"]
+            rule = choose_retry(
                 record["gate"],
                 review["overlay_iou"],
                 review["isolated_mean"],
                 number in following,
             )
+            if use_vlm:
+                verdict = vlm.get(number)
+                decision, source = vlm_decision(verdict, number in following)
+                review.update(
+                    decision=decision,
+                    decision_source=source,
+                    rule_decision=rule,
+                    vlm_decision=verdict["decision"] if verdict else None,
+                    vlm_reason=verdict["reason"] if verdict else None,
+                )
+            else:
+                review["decision"] = rule
             reviews[number] = review
         drawn = sum(r["manifest_status"] == "present" for r in reviews.values())
         views_entry.update(
@@ -544,9 +682,19 @@ def run_bin_review(
             sam3d_next_view=decisions.count("sam3d_next_view"),
             retries_kept=kept,
         )
+        if use_vlm:
+            retry_entry.update(
+                vlm_model=evidence["vlm"].get("model"),
+                vlm_calls=evidence["vlm"].get("vlm_calls"),
+                agrees_with_rule=sum(
+                    r["decision"] == r["rule_decision"] for r in reviews.values()
+                ),
+            )
         for number, review in reviews.items():
             evidence["objects"].append({"object": number, **review})
-        score = bin_place.score_scene(data, inputs, clouds, tag="_reviewed")
+        score = bin_place.score_scene(
+            data, inputs, clouds, tag="_vlm_reviewed" if use_vlm else "_reviewed"
+        )
         evidence["score"] = score
         (out / score["file_name"]).write_text(
             json.dumps(score, indent=2) + "\n", encoding="utf-8"
@@ -573,19 +721,25 @@ def run_bin_review(
     entries += [views_entry, retry_entry, score_entry]
     ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
-    (out / "bin_review.json").write_text(
+    (out / ("bin_review_vlm.json" if use_vlm else "bin_review.json")).write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
-    decision = {e.get("item"): e.get("decision") for e in entries}
-    return 0 if all(decision.get(item) == "accept" for item in REQUIRED) else 1
+    outcomes = {e.get("item"): e.get("decision") for e in entries}
+    return 0 if all(outcomes.get(item) == "accept" for item in required) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--data", type=Path, default=Path(DATA_DIR))
+    parser.add_argument(
+        "--verdicts",
+        type=Path,
+        default=None,
+        help="VLM verdict file from sceneagent.vlm_review; the VLM picks the retries",
+    )
     args = parser.parse_args(argv)
-    return run_bin_review(args.out, args.data)
+    return run_bin_review(args.out, args.data, verdicts=args.verdicts)
 
 
 if __name__ == "__main__":

@@ -108,6 +108,31 @@ cutoffs stay), "F1 at 1 cm and Chamfer".
 
 The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub secret `GEMINI_API_KEY` (decision 2). The GPU workflow forwards no secrets to the box by design, so the calls run on the GitHub runner, on the contact sheets and renders the box publishes.
 
+**Runner plumbing (built once, reused by SF-18 and SF-24).** Each secret lives in exactly one step of one workflow, and the stages hand off through files:
+
+1. **Box draws.** gpu-smoke `review` draws each object's eleven views into `review_sheets.zip` (Vast and SSH keys only).
+2. **Runner judges.** The new runner-only workflow `sceneagent-vlm-verdict` takes that run's id, downloads the sheets, and runs `sceneagent.vlm_review`: one Gemini call per sheet, a fixed prompt (ours, hashed into the output), JSON constrained to the three retries. It uploads `vlm_verdicts.json`. It holds `GEMINI_API_KEY` in the Gemini step only, has read-only permissions, and never connects to the box. A failed call is recorded per object, never guessed.
+3. **The verdicts are committed** as `ci/vlm_verdicts.json`, so the model's output is visible in review before anything acts on it.
+4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
+
+**Legible sheets first.** Run 42934419274's sheets were checked by eye before any Gemini call.
+
+- **Isolated views:** each view was framed around every Gaussian, so a few floaters left small objects a dot in five of eight views (object 7). The picture is now framed on the mesh. Gaussians outside that frame are not drawn, but they still count in the measured IoU, which is identical to before over 1,600 random renders.
+- **Overlay:** the whole photo shrunk into one tile left small objects about 15 px wide. It is now cut to the object and enlarged.
+
+The rule's choices cannot change, so the first round needs a fresh `review` run for new sheets, and that run should reproduce 0.3268 before review and 0.3235 after.
+
+**How the first round is read (set before the number).**
+
+- **What it measures:** a retry is still kept only when the fit distance improves, and that test no longer tracks GT (phase A). So this round measures only which objects Gemini sends to a retry, not whether it judges fits better.
+- **Where the signal is:** where Gemini and the rule agree, the outcome is identical, so the signal is the per-object GT change on the objects where they disagree, reported with `agrees_with_rule`. Gemini choosing `keep` everywhere ties 0.327 and says nothing. Beating 0.323 by retrying less is not evidence that Gemini sees better.
+- **Next round:** Gemini judges each retry's before and after views, replacing the fit-distance acceptance.
+- **Check before reading the score:** `score_before_review` must be 0.3268, and each object's `fit_total` must match the judged run's. Otherwise the verdicts were applied to a different scene (the bin dir is shared across branches).
+
+**Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
+
+Why this shape: the GPU workflow pins `secrets.VAST_API_KEY` to one reference and allows only the pipeline choice as input, so a second box step or a run-id input there would loosen two security pins. The commit step costs one hop and makes the model's output auditable. SF-19 is measured against both 0.327 (no review) and 0.323 (the rule).
+
 Canvas rows: "Visual review" (agent lane), "Orchestrator", and the section 3.1 "Agent repair loop".
 
 ## Phase C: full §3.4 physics on the bin (9 points)
@@ -166,6 +191,10 @@ After the MVP: 4D and 4DCodeBench (§3.6), sisters and hybrid scenes (§3.8–3.
    - **Build shared plumbing once.** B's Gemini runner job (secret on the runner only, artifact hand-off, `vlm_calls`, redaction) is reused by C's vote and audit, so B goes before C.
    - **One change per experiment.** Within A, κ=2, then the container split, then the pose rescale, each scored on its own against the 0.079 baseline.
 2. **VLM: settled (2026-11-10).** The Gemini API, `gemini-3.8-flash`, with the key only from the GitHub secret `GEMINI_API_KEY` (KAN-15 approval). The GPU workflow forwards no secrets to the box, so the VLM calls run on the GitHub runner, on the review sheets and renders the box publishes. Every run records `vlm_calls`, and no key string appears in logs or artifacts.
+
+   **Agents: same API (Sandeep, 2026-11-11).** The agents use the same Gemini API as the VLM: the same client (`harness.GeminiHarness`), the same model (`gemini-3.8-flash`), the same key, and the same runner-only workflow pattern. That covers the orchestrator plan (SF-24 part 2, `harness.request_plan`), the step-runner visual QA (SF-18) and the reviewer (SF-19). One adapter means one place for key handling, redaction and `vlm_calls` counting.
+
+   Figure 5's six harness products stay recorded and uncalled (`harness_status`). The paper's best bin number, 60.75%, is with Codex as the harness, so our agent results are labelled as Gemini's and not presented as the same agent's.
 3. **MLP prior: settled (2026-11-10).** Sandeep's prior is already trained the paper's way (GSO and ABO, `gemini-3.8-flash` labels), so it is used as it is from `physics-prior-mlp` at a pinned commit, with no retraining.
 4. **MessyKitchens data (Cut 5).** Is the shared capture and its GT available to us?
 5. **Box time.** Phase A alone is about six GPU runs of 5–15 minutes each, and 58301075 has to be running.

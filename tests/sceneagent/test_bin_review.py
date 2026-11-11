@@ -129,3 +129,37 @@ def test_review_is_a_bin_pipeline():
     assert remote_out("review") == REMOTE_BIN_OUT
     assert PIPELINES["review"][0][-1] == "bin score (reviewed)"
     assert {"bin_review.json", "review_sheets.zip"} <= set(FETCH_NAMES)
+
+
+def test_far_floaters_do_not_shrink_the_drawn_object_or_change_the_iou():
+    # Run 42934419274, object 7: a few floaters framed five of eight views
+    # around empty space and left the fruit a dot. The picture is framed on
+    # the mesh; the IoU is still measured with every Gaussian.
+    points = _sphere()
+    normals = points
+    near = points[:1500] * 1.01
+    floaters = np.array([[40.0, 0, 0], [0, -35.0, 0], [0, 0, 50.0]])
+    direction = br.AXES["axis_pos_x"]
+    clean, clean_iou = br.render_isolated(points, normals, near, direction)
+    noisy, iou = br.render_isolated(
+        points, normals, np.vstack([near, floaters]), direction
+    )
+
+    def span(image):
+        rows, cols = np.nonzero((image != 255).any(axis=2))
+        return max(np.ptp(rows), np.ptp(cols)) / br.TILE_PX
+
+    assert span(noisy) > 0.6  # the sphere fills most of the tile
+    assert abs(span(noisy) - span(clean)) < 0.05
+    assert iou is not None and clean_iou is not None
+    assert iou < clean_iou  # the floaters still count against the fit
+
+
+def test_the_overlay_is_cut_to_the_object_and_enlarged():
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    region = np.zeros((1080, 1920), dtype=bool)
+    region[500:530, 900:925] = True  # a 30 px object, like run 42934419274's fruit
+    crop = br.crop_to_object(image, region)
+    assert max(crop.shape[:2]) >= 512
+    assert crop.shape[0] < 1080 and crop.shape[1] < 1920
+    assert br.crop_to_object(image, np.zeros_like(region)) is image

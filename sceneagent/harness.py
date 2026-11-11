@@ -15,11 +15,13 @@ missing key raises ``MissingGeminiApiKeyError`` before any HTTP call.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from typing import Any, Protocol
 
 from sceneagent.agent_loop import harness_status
@@ -135,12 +137,37 @@ class GeminiHarness:
             f"GeminiHarness(model_id={self.model_id!r}, call_count={self.call_count})"
         )
 
-    def complete(self, prompt: str) -> str:
-        """Call the model. The key check runs before ``call_count`` or HTTP."""
+    def complete(
+        self,
+        prompt: str,
+        images: Sequence[tuple[bytes, str]] = (),
+        response_schema: dict[str, Any] | None = None,
+    ) -> str:
+        """Call the model. The key check runs before ``call_count`` or HTTP.
+
+        ``images`` are ``(bytes, mime_type)`` pairs sent inline after the
+        prompt. ``response_schema`` asks for JSON in that shape; the caller
+        still validates the reply, since a schema is a request, not a promise.
+        """
 
         key = load_gemini_api_key()
         url = f"{API_ROOT}/models/{GEMINI_MODEL_ID}:generateContent"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        parts: list[dict[str, Any]] = [{"text": prompt}]
+        for blob, mime_type in images:
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": base64.b64encode(blob).decode("ascii"),
+                    }
+                }
+            )
+        payload: dict[str, Any] = {"contents": [{"parts": parts}]}
+        if response_schema is not None:
+            payload["generationConfig"] = {
+                "responseMimeType": "application/json",
+                "responseSchema": response_schema,
+            }
         redactor = _RedactFilter(key)
         logger.addFilter(redactor)
         failed: HarnessCallError | None = None
