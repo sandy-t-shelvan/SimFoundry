@@ -114,7 +114,7 @@ The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub sec
 1. **Box draws.** gpu-smoke `review` draws each object's eleven views into `review_sheets.zip` (Vast and SSH keys only).
 2. **Runner judges.** The new runner-only workflow `sceneagent-vlm-verdict` takes that run's id, downloads the sheets, and runs `sceneagent.vlm_review`: one Gemini call per sheet, a fixed prompt (ours, hashed into the output), JSON constrained to the three retries. It uploads `vlm_verdicts.json`. It holds `GEMINI_API_KEY` in the Gemini step only, has read-only permissions, and never connects to the box. A failed call is recorded per object, never guessed.
 3. **The verdicts are committed** as `sceneagent/verdicts/vlm_verdicts.json` (the box receives only `sceneagent/` and the Fruits video), so the model's output is visible in review before anything acts on it.
-4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
+4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box first checks that the scene is still placed as in the judged run (same objects, same fit distances, recorded in the verdicts as `judged_placement`) and refuses otherwise, then validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
 
 **Legible sheets first.** Run 42934419274's sheets were checked by eye before any Gemini call.
 
@@ -136,7 +136,7 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 |---|---|---|
 | None | 0.3268 | 0.0211 m |
 | Rule (12 `icp_flip`, 2 `keep`) | 0.3235 | 0.0237 m |
-| Gemini (8 `keep`, 2 `icp_flip`, 4 `sam3d_next_view`) | 0.3267 | 0.0211 m |
+| Gemini (chose 7 `keep`, 2 `icp_flip`, 5 `sam3d_next_view`; object 13 has no other view, so 8 keep, 2 flip and 4 regenerations ran) | 0.3267 | 0.0211 m |
 
 - **They agree on 3 of 14.**
 - **Gemini avoids the rule's harm.** The rule's flips cost GT 24 (crate, 0.083 → 0.005) and GT 38 (0.395 → 0.372), against small gains on three others. Under Gemini all five stayed as placed: four keeps, and one rejected regeneration (object 5, GT 38: silhouette 0.569 → 0.528).

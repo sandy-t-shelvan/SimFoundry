@@ -56,7 +56,7 @@ jobs:
           REVIEW_RUN: ${{ inputs.review_run }}
         run: |
           set -euo pipefail
-          python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json --source-run "$REVIEW_RUN"
+          python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json --source-run "$REVIEW_RUN" --review-json review-input/bin_review.json
 
       - name: Upload the verdicts
         if: always()

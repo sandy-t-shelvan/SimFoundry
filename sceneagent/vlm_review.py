@@ -134,8 +134,30 @@ def read_sheets(zip_path: Path) -> dict[int, bytes]:
     return dict(sorted(sheets.items()))
 
 
+def read_judged_placement(review_json: Path) -> list[dict[str, Any]]:
+    """Each object's fit distance in the run whose sheets are judged.
+
+    ``bin_review --verdicts`` refuses to apply the verdicts unless the scene
+    on the box is still placed this way, since object numbers mean nothing
+    across placements.
+    """
+    payload = json.loads(Path(review_json).read_text(encoding="utf-8"))
+    placement = []
+    for item in payload.get("objects") or []:
+        number, fit = item.get("object"), item.get("fit_total")
+        if not isinstance(number, int) or not isinstance(fit, (int, float)):
+            raise ValueError(f"object {number!r} has no fit_total in {review_json}")
+        placement.append({"object": number, "fit_total": float(fit)})
+    if not placement:
+        raise ValueError(f"no objects in {review_json}")
+    return sorted(placement, key=lambda item: item["object"])
+
+
 def judge(
-    sheets: dict[int, bytes], harness: ImageHarness, source_run: str = ""
+    sheets: dict[int, bytes],
+    harness: ImageHarness,
+    source_run: str = "",
+    judged_placement: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One Gemini call per sheet. A failed call or bad reply is recorded, not guessed."""
     objects: list[dict[str, Any]] = []
@@ -158,6 +180,7 @@ def judge(
         "vlm_calls": harness.call_count,
         "objects": objects,
         "failed": failed,
+        "judged_placement": judged_placement,
     }
 
 
@@ -170,6 +193,12 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
         default="",
         help="gpu-smoke run id the sheets came from, recorded in the verdicts",
     )
+    parser.add_argument(
+        "--review-json",
+        type=Path,
+        default=None,
+        help="bin_review.json of the same run; its fit distances bind the verdicts to that placement",
+    )
     args = parser.parse_args(argv)
     if args.source_run and not re.fullmatch(r"[0-9]{1,20}", args.source_run):
         parser.error("--source-run must be a run id (digits only)")
@@ -181,7 +210,8 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
     if not sheets:
         print("no object_<n>.png sheets in the zip", file=sys.stderr)
         return 1
-    verdicts = judge(sheets, harness, args.source_run)
+    judged = read_judged_placement(args.review_json) if args.review_json else None
+    verdicts = judge(sheets, harness, args.source_run, judged)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(verdicts, indent=2) + "\n", encoding="utf-8")
     counts = {d: 0 for d in DECISIONS}

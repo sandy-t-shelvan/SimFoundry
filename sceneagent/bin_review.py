@@ -65,6 +65,10 @@ VLM_RETRY_ITEM = "reviewer retries (VLM)"
 VLM_SCORE_ITEM = "bin score (VLM reviewed)"
 VLM_REQUIRED = (VIEWS_ITEM, VLM_RETRY_ITEM, VLM_SCORE_ITEM)
 VLM_DECISIONS = ("keep", "icp_flip", "sam3d_next_view")
+# Fit distances are rounded to 5 decimals and placement is deterministic
+# (runs 42934419274 and 42939458339 matched exactly), so any real difference
+# means a different scene.
+PLACEMENT_TOL = 1e-6
 # Ours. The silhouette cut reuses the ours_iteration_1 gate's minimum.
 OVERLAY_OK = 0.5
 ISOLATED_OK = 0.5
@@ -336,7 +340,54 @@ def load_verdicts(path: Path) -> tuple[dict[str, Any], dict[int, dict[str, str]]
     meta["failed_objects"] = [
         f.get("object") for f in payload.get("failed") or [] if isinstance(f, dict)
     ]
+    judged = payload.get("judged_placement")
+    if judged is None:
+        meta["judged_placement"] = None
+    else:
+        if not isinstance(judged, list):
+            raise ValueError("judged_placement is not a list")
+        placement: dict[int, float] = {}
+        for item in judged:
+            number = item.get("object") if isinstance(item, dict) else None
+            fit = item.get("fit_total") if isinstance(item, dict) else None
+            if not isinstance(number, int) or isinstance(number, bool):
+                raise ValueError(f"judged object {number!r} is not an integer")
+            if not isinstance(fit, (int, float)) or isinstance(fit, bool):
+                raise ValueError(f"judged fit_total {fit!r} is not a number")
+            placement[number] = float(fit)
+        meta["judged_placement"] = placement
     return meta, verdicts
+
+
+def check_placement(
+    judged: dict[int, float] | None, records: dict[int, dict[str, Any]]
+) -> None:
+    """Refuse verdicts judged on a different scene than the one placed now.
+
+    The verdict file carries the fit distance of every object in the run
+    whose sheets the VLM saw. Object numbers are only meaningful for that
+    placement: after a new grouping, "object 8" can be another object, and
+    the review would still finish with a plausible score.
+    """
+    if judged is None:
+        raise ValueError(
+            "the verdict file records no judged placement, so it cannot be "
+            "checked against this scene; judge this run's sheets again"
+        )
+    if set(judged) != set(records):
+        raise ValueError(
+            f"verdicts were judged on objects {sorted(judged)}, "
+            f"this placement has {sorted(records)}"
+        )
+    moved = [
+        n
+        for n, record in records.items()
+        if abs(float(record["fit_total"]) - judged[n]) > PLACEMENT_TOL
+    ]
+    if moved:
+        raise ValueError(
+            f"objects {sorted(moved)} are placed differently from the judged run"
+        )
 
 
 def vlm_decision(
@@ -557,6 +608,9 @@ def run_bin_review(
             k: unreviewed[k] for k in ("f1_mean", "chamfer_mean_matched_m", "matches")
         }
         records = {r["object"]: r for r in placement["objects"] if r.get("placed")}
+        if use_vlm:
+            check_placement(evidence["vlm"]["judged_placement"], records)
+            evidence["vlm"]["placement_check"] = "matches the judged run"
         detections = inputs["detections"]
         area = {
             (view, d["mask_index"]): int(d.get("mask_area_px", 0))
