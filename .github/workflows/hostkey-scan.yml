@@ -1,5 +1,6 @@
 # Throwaway: read instance 60254439's public SSH host key twice so it can be
 # reviewed and pinned in ci/vast-ssh-known-host. No secrets. Not for main.
+# Re-pushed after the Actions spending limit was raised (2026-11-11).
 name: hostkey-scan
 on:
   push:
