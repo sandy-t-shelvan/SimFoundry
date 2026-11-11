@@ -112,7 +112,7 @@ The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub sec
 
 1. **Box draws.** gpu-smoke `review` draws each object's eleven views into `review_sheets.zip` (Vast and SSH keys only).
 2. **Runner judges.** The new runner-only workflow `sceneagent-vlm-verdict` takes that run's id, downloads the sheets, and runs `sceneagent.vlm_review`: one Gemini call per sheet, a fixed prompt (ours, hashed into the output), JSON constrained to the three retries. It uploads `vlm_verdicts.json`. It holds `GEMINI_API_KEY` in the Gemini step only, has read-only permissions, and never connects to the box. A failed call is recorded per object, never guessed.
-3. **The verdicts are committed** as `ci/vlm_verdicts.json`, so the model's output is visible in review before anything acts on it.
+3. **The verdicts are committed** as `sceneagent/verdicts/vlm_verdicts.json` (the box receives only `sceneagent/` and the Fruits video), so the model's output is visible in review before anything acts on it.
 4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
 
 **Legible sheets first.** Run 42934419274's sheets were checked by eye before any Gemini call.

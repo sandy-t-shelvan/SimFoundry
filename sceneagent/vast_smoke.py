@@ -191,8 +191,10 @@ BIN_PIPELINES = frozenset(
 )
 # The VLM verdicts reach the box as a committed file in the shipped checkout:
 # sceneagent.vlm_review writes it on a runner that holds GEMINI_API_KEY, and the
-# box never sees that key.
-VLM_VERDICTS_RELATIVE = "ci/vlm_verdicts.json"
+# box never sees that key. rsync ships only sceneagent/ and Fruits.mp4, so the
+# file lives under sceneagent/ (run 42941668034 looked for ci/ and found
+# nothing); widening what is shipped would loosen that boundary.
+VLM_VERDICTS_RELATIVE = "sceneagent/verdicts/vlm_verdicts.json"
 
 
 def remote_out(pipeline: str) -> str:
