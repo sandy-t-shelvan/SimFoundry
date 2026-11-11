@@ -71,8 +71,9 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 |---|---|---|---|
 | Baseline, κ=1 (main) | place 42916527232 | 0.079 | 0.070 m |
 | **κ=2 (PR #45, SF-30)** | association 42924495643, place 42925055261 | **0.125** | **0.046 m** |
+| κ=2 + container split (PR #47, SF-31): **not kept** | association 42927798966, place 42929004562 | 0.109 | 0.032 m |
 
-κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) and the pose rescale (#48) are measured next against 0.125.
+κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene. The pose rescale (#48) is measured next against 0.125.
 
 | Item | Done when | GPU |
 |---|---|---|
