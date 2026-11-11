@@ -1,26 +1,26 @@
 {
   "mode": "accept",
-  "candidates_hash": "e03b08b885c5cc5c4d8e9788ac2b8152af728929d53bb391633491209a4df2ab",
-  "source_run": "42963190714",
+  "candidates_hash": "e6f608993abdb59c305582545ceef117b562398a09e73ebd6bc95e7c3d7231d7",
+  "source_run": "42976670426",
   "model": "gemini-3.8-flash",
-  "prompt_sha256": "b3c45aa98860ef97909c901c8241052a3853620735cdc8bd4a551c428b721337",
+  "prompt_sha256": "0df7449c022b562ef14444c2ed0c954647acba276c36e9fc8c76e243cceb0bc8",
   "prompt_source": "ours",
   "vlm_calls": 3,
   "objects": [
     {
       "object": 0,
       "better": "B",
-      "reason": "The reconstructed blue points conform closely to the mesh surface in B, whereas the mesh in A has an extraneous handle with no supporting points and misaligns with the mask."
+      "reason": "In fit B, the mesh shape matches the object correctly and the red silhouette aligns much more accurately with the green segmentation outlines in the registration overlays."
     },
     {
       "object": 4,
-      "better": "A",
-      "reason": "In fit A, the projected silhouette in the registration overlay properly covers the green mask, whereas in fit B it is severely shifted to the left."
+      "better": "B",
+      "reason": "Fit B uses the complete object model with its cap on, allowing the reconstructed 3D points to align much more accurately with the mesh surfaces across all axis views."
     },
     {
       "object": 8,
       "better": "B",
-      "reason": "Fit B correctly reconstructs a single fruit rather than an erroneous double-lobed mesh, matching the segmentation outline tightly in the registration overlay."
+      "reason": "Fit B uses a single-fruit mesh that matches the actual object, whereas Fit A incorrectly fits a double-lobed mesh."
     }
   ],
   "failed": []
