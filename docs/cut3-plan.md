@@ -175,6 +175,10 @@ After the MVP: 4D and 4DCodeBench (§3.6), sisters and hybrid scenes (§3.8–3.
    - **Build shared plumbing once.** B's Gemini runner job (secret on the runner only, artifact hand-off, `vlm_calls`, redaction) is reused by C's vote and audit, so B goes before C.
    - **One change per experiment.** Within A, κ=2, then the container split, then the pose rescale, each scored on its own against the 0.079 baseline.
 2. **VLM: settled (2026-11-10).** The Gemini API, `gemini-3.8-flash`, with the key only from the GitHub secret `GEMINI_API_KEY` (KAN-15 approval). The GPU workflow forwards no secrets to the box, so the VLM calls run on the GitHub runner, on the review sheets and renders the box publishes. Every run records `vlm_calls`, and no key string appears in logs or artifacts.
+
+   **Agents: same API (Sandeep, 2026-11-11).** The agents use the same Gemini API as the VLM: the same client (`harness.GeminiHarness`), the same model (`gemini-3.8-flash`), the same key, and the same runner-only workflow pattern. That covers the orchestrator plan (SF-24 part 2, `harness.request_plan`), the step-runner visual QA (SF-18) and the reviewer (SF-19). One adapter means one place for key handling, redaction and `vlm_calls` counting.
+
+   Figure 5's six harness products stay recorded and uncalled (`harness_status`). The paper's best bin number, 60.75%, is with Codex as the harness, so our agent results are labelled as Gemini's and not presented as the same agent's.
 3. **MLP prior: settled (2026-11-10).** Sandeep's prior is already trained the paper's way (GSO and ABO, `gemini-3.8-flash` labels), so it is used as it is from `physics-prior-mlp` at a pinned commit, with no retraining.
 4. **MessyKitchens data (Cut 5).** Is the shared capture and its GT available to us?
 5. **Box time.** Phase A alone is about six GPU runs of 5–15 minutes each, and 58301075 has to be running.
