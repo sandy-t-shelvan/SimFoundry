@@ -1,0 +1,27 @@
+{
+  "mode": "accept",
+  "candidates_hash": "e03b08b885c5cc5c4d8e9788ac2b8152af728929d53bb391633491209a4df2ab",
+  "source_run": "42963190714",
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "b3c45aa98860ef97909c901c8241052a3853620735cdc8bd4a551c428b721337",
+  "prompt_source": "ours",
+  "vlm_calls": 3,
+  "objects": [
+    {
+      "object": 0,
+      "better": "B",
+      "reason": "The reconstructed blue points conform closely to the mesh surface in B, whereas the mesh in A has an extraneous handle with no supporting points and misaligns with the mask."
+    },
+    {
+      "object": 4,
+      "better": "A",
+      "reason": "In fit A, the projected silhouette in the registration overlay properly covers the green mask, whereas in fit B it is severely shifted to the left."
+    },
+    {
+      "object": 8,
+      "better": "B",
+      "reason": "Fit B correctly reconstructs a single fruit rather than an erroneous double-lobed mesh, matching the segmentation outline tightly in the registration overlay."
+    }
+  ],
+  "failed": []
+}
