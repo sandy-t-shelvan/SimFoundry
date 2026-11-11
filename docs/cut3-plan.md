@@ -190,11 +190,16 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 **Reading, against the measure set in advance.**
 
 - **Agreement with the oracle:** Gemini 1 of 3, the test 1 of 3. With n = 3 this says nothing about which judge is better. It does show Gemini does not yet beat the test.
-- **The bottle is the informative case.** Gemini judged the regenerated bottle better because it is one clean bottle where the old mesh had a stray handle, and by eye that is right. Against GT it is worse: the cleaner mesh is placed or sized worse in the scene. The sheets show shape plausibility well, and placement accuracy at the centimetre level that F1@1cm scores, much less well.
+- **The pairs were not matched (a flaw in this round's design).** For a regeneration, the after sheet's registration overlay is drawn on the view the new mesh came from, so A and B show different photos and masks. The pair prompt told Gemini the two "differ only in the object's mesh and its placement". That was false for all three judged pairs, and each mesh appears on its own source view, where it tends to look like a good fit.
+- **The bottle is one data point with two explanations, neither established.** Gemini preferred the regenerated bottle (one clean bottle, where the old mesh had a stray handle). Against GT it is worse (−0.0016).
+  - Explanation 1: the cleaner mesh is placed or sized worse. The check is inconclusive: the regenerated bottle is 27% smaller, but the fused fruits shrank 35% and improved.
+  - Explanation 2: the unmatched overlay above made the retry look better than it is.
+  - No general claim about what the sheets show is made from this.
 - **What the oracle bound says:** the most any judge could add on these candidates is 0.3268 → 0.3291. Better acceptance alone cannot move the bin much. The retries themselves, especially regeneration from a weaker view, are now the limit.
-- **Next:**
-  - more decisions per run: candidates for all 14 objects, with Gemini choosing among before, flip and regenerate (the advisor's option);
-  - a placement-focused view in the sheets (mesh against points at true scale, side by side), so a cleaner-looking but misplaced mesh shows as misplaced.
+- **Next (round 3), in order:**
+  1. Matched pairs: draw both sheets' overlays on the same views (the original view, and the regeneration's view, on both sheets), and correct the pair prompt.
+  2. More decisions per run: candidates for all 14 objects, with Gemini choosing among before, flip and regenerate.
+  3. A placement-focused view in the sheets (mesh against points at true scale, side by side).
 
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 
