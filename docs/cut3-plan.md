@@ -201,6 +201,8 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
   2. More decisions per run: candidates for all 14 objects, with Gemini choosing among before, flip and regenerate.
   3. A placement-focused view in the sheets (mesh against points at true scale, side by side).
 
+**Round 3, step 1: matched pairs (2026-11-11).** `review_object` takes the views the registration overlay is drawn on. The pair builder passes the same ones to both sheets: the original view and, for a regeneration, its own view, which appears as `registration_overlay_2` in the sheet's empty slot. Both sheets now show the same photos and masks, so the pair prompt's "differ only in the mesh and its placement" is true, and the prompt names the second overlay. Normal review is unchanged (one overlay on the record's own view, same IoU). Next: rebuild the candidates, re-judge, apply, and score against the oracle as in round 2.
+
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 
 Why this shape: the GPU workflow pins `secrets.VAST_API_KEY` to one reference and allows only the pipeline choice as input, so a second box step or a run-id input there would loosen two security pins. The commit step costs one hop and makes the model's output auditable. SF-19 is measured against both 0.327 (no review) and 0.323 (the rule).

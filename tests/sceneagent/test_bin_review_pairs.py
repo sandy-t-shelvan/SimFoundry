@@ -192,3 +192,19 @@ def test_the_verdict_workflow_mode_is_a_fixed_choice_in_one_step():
     assert "--mode accept --pairs review-input/review_pairs.zip" in text
     for block in re.findall(r"run: \|\n((?:          .*\n)+)", text):
         assert "${{" not in block
+
+
+def test_both_pair_sheets_draw_the_overlay_on_the_same_views():
+    # Round 2 drew a regeneration's after sheet on the view its mesh came
+    # from, so A and B showed different photos while the prompt said they
+    # differ only in the mesh. Both sheets now get the same overlay views.
+    import inspect
+
+    source = inspect.getsource(rp.build_candidates)
+    assert source.count("overlay_views=shown") == 2
+    assert 'shown = list(dict.fromkeys([records[n]["view"], item["view"]]))' in source
+
+
+def test_the_pair_prompt_says_the_photos_are_shared():
+    assert "same photos and the same segmentation masks" in vr.PAIR_PROMPT
+    assert "registration_overlay_2" in vr.PAIR_PROMPT
