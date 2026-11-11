@@ -160,6 +160,16 @@ PIPELINES = {
         ),
         "GraspClutter6D 000091",
     ),
+    "review_vlm": (
+        (
+            "benchmark scene",
+            "SAM 3D meshes",
+            "reviewer views",
+            "reviewer retries (VLM)",
+            "bin score (VLM reviewed)",
+        ),
+        "GraspClutter6D 000091",
+    ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
 }
@@ -167,8 +177,22 @@ PIPELINES = {
 # judged on its own items only (a masks run must not fail on an earlier splat
 # entry), and they are the only ones that may fetch the dataset with py7zr.
 BIN_PIPELINES = frozenset(
-    {"bin", "splat", "masks", "association", "sam3d", "place", "review", "mapper"}
+    {
+        "bin",
+        "splat",
+        "masks",
+        "association",
+        "sam3d",
+        "place",
+        "review",
+        "review_vlm",
+        "mapper",
+    }
 )
+# The VLM verdicts reach the box as a committed file in the shipped checkout:
+# sceneagent.vlm_review writes it on a runner that holds GEMINI_API_KEY, and the
+# box never sees that key.
+VLM_VERDICTS_RELATIVE = "ci/vlm_verdicts.json"
 
 
 def remote_out(pipeline: str) -> str:
@@ -236,6 +260,7 @@ FETCH_NAMES = (
     "sam3d_evidence.json",
     "bin_score.json",
     "bin_review.json",
+    "bin_review_vlm.json",
     "review_sheets.zip",
     "mapper_compare.json",
     "inventory.txt",
@@ -679,6 +704,17 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_place", "--out", out]
     if pipeline == "review":
         return [REMOTE_PYTHON, "-m", "sceneagent.bin_review", "--out", out]
+    if pipeline == "review_vlm":
+        verdicts = f"{repo}/{VLM_VERDICTS_RELATIVE}"
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.bin_review",
+            "--out",
+            out,
+            "--verdicts",
+            verdicts,
+        ]
     if pipeline == "mapper":
         return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
     if pipeline == "probe":

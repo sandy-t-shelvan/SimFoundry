@@ -1,0 +1,67 @@
+# SF-19 VLM verdict: Gemini picks each bin object's retry from its contact sheet.
+#
+# Runner only. It never connects to the GPU box and holds no Vast or SSH
+# secret; the one secret it reads is GEMINI_API_KEY, in the one step that
+# calls Gemini. It reads review_sheets.zip from a finished sceneagent-gpu-smoke
+# run (the review_run input) and uploads vlm_verdicts.json. That file is then
+# committed to the branch as ci/vlm_verdicts.json, so the model's output is
+# reviewed before the gpu-smoke "review_vlm" choice applies it on the box.
+name: sceneagent-vlm-verdict
+
+on:
+  workflow_dispatch:
+    inputs:
+      review_run:
+        description: sceneagent-gpu-smoke run id whose review_sheets.zip is judged
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  vlm_verdict:
+    name: vlm-verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check the run id is a number
+        env:
+          REVIEW_RUN: ${{ inputs.review_run }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REVIEW_RUN" | grep -Eq '^[0-9]{1,20}$'
+          echo "judging review sheets from run ${REVIEW_RUN}"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download the review sheets
+        uses: actions/download-artifact@v4
+        with:
+          name: sceneagent-fruits-smoke
+          run-id: ${{ inputs.review_run }}
+          github-token: ${{ github.token }}
+          path: review-input
+
+      - name: Gemini verdict per object
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json
+
+      - name: Upload the verdicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sceneagent-vlm-verdicts
+          retention-days: 14
+          if-no-files-found: error
+          path: vlm-out/vlm_verdicts.json

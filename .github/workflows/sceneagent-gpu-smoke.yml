@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, mapper, probe]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, mapper, probe]
         default: run4
   pull_request_target:
     types: [labeled]
@@ -198,6 +198,7 @@ jobs:
             sf4-artifacts/sam3d_evidence.json
             sf4-artifacts/bin_score.json
             sf4-artifacts/bin_review.json
+            sf4-artifacts/bin_review_vlm.json
             sf4-artifacts/review_sheets.zip
             sf4-artifacts/mapper_compare.json
             sf4-artifacts/inventory.txt
