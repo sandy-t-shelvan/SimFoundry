@@ -92,6 +92,17 @@ REMOTE_OUT = "/workspace/sf4-smoke/run"
 # the bin's COLMAP pose run4's 300 Fruits frames beside its 13 views (bin
 # evidence of the 59601312 splat run 42741443604: 313 inputs, 300 registered).
 REMOTE_BIN_OUT = "/workspace/sf4-smoke/bin"
+REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
+# The setup stages run detached on the box (setsid nohup), so a dropped
+# runner does not stop them; each run waits this long, then reports what is
+# done. A COLMAP CUDA build plus four envs can take longer than one run, and
+# the next dispatch resumes (each stage is skipped once it has succeeded).
+SETUP_WAIT_S = 6000
+# Where the runner writes the Hugging Face token for the `setup` pipeline only
+# (Sandeep, 2026-11-11: send it so SAM 3D's gated weights can be fetched).
+# It travels on ssh stdin, never in an argv, an environment or a log.
+REMOTE_HF_TOKEN = "/root/.cache/huggingface/token"
+HF_TOKEN_ENV = "HF_TOKEN"
 BOOT_TIMEOUT_S = 600.0
 # Room for run4.STEP_TIMEOUT_S["mapper"] (5400 s) inside the 120 min job.
 REMOTE_TIMEOUT_S = 6600.0
@@ -185,6 +196,7 @@ PIPELINES = {
     ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
+    "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
@@ -216,6 +228,8 @@ ACCEPT_VERDICTS_RELATIVE = "sceneagent/verdicts/accept_verdicts.json"
 
 def remote_out(pipeline: str) -> str:
     """The run dir on the box: the bin pipelines' own, else run4's."""
+    if pipeline == "setup":
+        return REMOTE_SETUP_OUT
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
 
 
@@ -286,6 +300,7 @@ FETCH_NAMES = (
     "bin_review_accept.json",
     "mapper_compare.json",
     "inventory.txt",
+    "setup_evidence.json",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -312,6 +327,7 @@ PUBLISHED_NAMES = frozenset(
         "bin_review_accept.json",
         "mapper_compare.json",
         "inventory.txt",
+        "setup_evidence.json",
     }
 )
 PUBLIC_FIELDS = (
@@ -790,6 +806,8 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
     if pipeline == "probe":
         return ["/bin/sh", "-c", "host inventory", "--out", out]
+    if pipeline == "setup":
+        return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
     if pipeline != "run4":
         raise InstanceNotApproved("refusing pipeline")
     argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]
@@ -853,6 +871,32 @@ def build_remote_shell(
             f"mkdir -p {shlex.quote(out)}\n{{\n{PROBE_SCRIPT}\n}} > "
             f"{shlex.quote(out + '/inventory.txt')} 2>&1\necho inventory written\n"
         )
+        _reject_secret_text(script)
+        return script
+    if pipeline == "setup":
+        # Plain shell: no pinned interpreter exists until setup makes one.
+        setup = shlex.quote(repo + "/sceneagent/box_setup.sh")
+        q_out = shlex.quote(out)
+        script = "\n".join(
+            [
+                "set -u",
+                f"mkdir -p {q_out} /workspace/setup/state",
+                # A finished earlier run must not end this wait at once.
+                "rm -f /workspace/setup/state/done",
+                (
+                    f"setsid nohup bash {setup} run {q_out} "
+                    "> /workspace/setup/run.log 2>&1 < /dev/null &"
+                ),
+                "waited=0",
+                (
+                    "while [ ! -f /workspace/setup/state/done ] && "
+                    f"[ $waited -lt {SETUP_WAIT_S} ]; do sleep 30; "
+                    "waited=$((waited + 30)); done"
+                ),
+                f"bash {setup} report {q_out}",
+            ]
+        )
+        script += "\n"
         _reject_secret_text(script)
         return script
     argv = build_remote_command(repo, out, pipeline=pipeline, commit_sha=commit_sha)
@@ -2024,6 +2068,8 @@ def publish_artifacts(
     run_dir = Path(run_dir)
     artifact_dir = Path(artifact_dir)
     secret = api_key.encode("utf-8") if api_key else b""
+    # The setup pipeline's Hugging Face token: no published file may hold it.
+    hf_token = os.environ.get(HF_TOKEN_ENV, "").encode("utf-8")
     prepared: list[tuple[str, bytes]] = []
     hits: list[str] = []
     for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
@@ -2038,7 +2084,7 @@ def publish_artifacts(
                 hits.append(rel)
             prepared.append((rel, data))
             continue
-        if secret and secret in data:
+        if (secret and secret in data) or (hf_token and hf_token in data):
             hits.append(rel)
             continue
         prepared.append((rel, data))
@@ -2271,6 +2317,8 @@ class SshRemote:
             pipeline = "sceneagent"
         if not isinstance(commit_sha, str):
             commit_sha = ""
+        if pipeline == "setup":
+            self.hf_token_sent = self._send_hf_token(os.environ.get(HF_TOKEN_ENV, ""))
         code = self._bash(
             build_remote_shell(
                 REMOTE_REPO,
@@ -2342,6 +2390,34 @@ class SshRemote:
                 ]
                 tail = redact(redact(tail, self.api_key), self._private_material)
                 raise SmokeError(f"rsync failed ({completed.returncode}): {tail}")
+
+    def _send_hf_token(self, token: str) -> bool:
+        """Write the Hugging Face token to the box for the setup pipeline.
+
+        Sandeep's call (2026-11-11): SAM 3D's weights are gated, so the setup
+        step needs the token on the box. It goes on ssh stdin into a mode-0600
+        file; the argv names only the path, and nothing echoes it back.
+        """
+        if not token or any(ch.isspace() for ch in token):
+            return False
+        mask_secret(token)
+        target = shlex.quote(REMOTE_HF_TOKEN)
+        folder = shlex.quote(str(Path(REMOTE_HF_TOKEN).parent))
+        argv = [
+            *ssh_base_argv(str(self.private), self.known_hosts, self.port),
+            f"root@{self.host}",
+            f"umask 077 && mkdir -p {folder} && cat > {target}.tmp && mv {target}.tmp {target}",
+        ]
+        _reject_secret_text(" ".join(argv))
+        completed = subprocess.run(
+            argv,
+            check=False,
+            input=token.encode("utf-8"),
+            capture_output=True,
+            env=child_env(),
+            timeout=60,
+        )
+        return completed.returncode == 0
 
     def _bash(self, script: str, timeout_s: float) -> int:
         argv = [

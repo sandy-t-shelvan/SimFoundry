@@ -30,9 +30,13 @@ DISPATCH_INPUTS = """    inputs:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup]
         default: run4
 """
+HF_TOKEN_LINE = (
+    "HF_TOKEN: ${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.pipeline == 'setup' && secrets.HF_TOKEN || '' }}"
+)
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _TICKET_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 _REASON_RE = re.compile(r"(?=.*\S)[^\n\r]+")
@@ -601,7 +605,7 @@ def workflow_safety_findings(text: str) -> list[str]:
     rest = text.replace(DISPATCH_INPUTS, "", 1).replace("inputs.pipeline", "")
     if dispatch != DISPATCH_INPUTS or "inputs:" in rest or "inputs." in rest:
         findings.append(
-            "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe pipeline choice"
+            "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup pipeline choice"
         )
     if "- Main_duplicate" not in on_block:
         findings.append("request-file push must be limited to Main_duplicate")
@@ -626,6 +630,10 @@ def workflow_safety_findings(text: str) -> list[str]:
         )
     if text.count("secrets.VAST_API_KEY") != 1:
         findings.append("VAST_API_KEY must appear in exactly one step")
+    # The Hugging Face token (Sandeep, 2026-11-11) reaches only a manual
+    # `setup` run, and only through this one line; every other run gets ''.
+    if text.count("secrets.HF_TOKEN") != 1 or HF_TOKEN_LINE not in text:
+        findings.append("HF_TOKEN must appear once, gated to the setup pipeline")
     if text.count("secrets.VAST_SSH_PRIVATE_KEY") != 1:
         findings.append(
             "VAST_SSH_PRIVATE_KEY must be passed from the Actions secret in exactly one step"
