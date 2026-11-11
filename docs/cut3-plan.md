@@ -75,6 +75,7 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 | **κ=2 + SAM 3D pose rescale (PR #48, SF-32)** | association 42929907431, sam3d 42930467798, place 42932270322 | **0.327** | **0.021 m** |
 | … then the rule-based reviewer (SF-19) | review 42934419274 | 0.323 | 0.024 m |
 | … then Gemini's verdicts (SF-19 VLM, PR #54) | verdict 42941121692, review_vlm 42943461864 | 0.327 | 0.021 m |
+| … Gemini picks and accepts retries (round 2, PR #55) | verdicts 42947401149 and 42964570514, candidates 42963190714, apply 42965157633 | 0.327 | 0.021 m |
 
 κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene.
 
@@ -114,7 +115,7 @@ The VLM is the Gemini API (`gemini-3.8-flash`), with the key from the GitHub sec
 1. **Box draws.** gpu-smoke `review` draws each object's eleven views into `review_sheets.zip` (Vast and SSH keys only).
 2. **Runner judges.** The new runner-only workflow `sceneagent-vlm-verdict` takes that run's id, downloads the sheets, and runs `sceneagent.vlm_review`: one Gemini call per sheet, a fixed prompt (ours, hashed into the output), JSON constrained to the three retries. It uploads `vlm_verdicts.json`. It holds `GEMINI_API_KEY` in the Gemini step only, has read-only permissions, and never connects to the box. A failed call is recorded per object, never guessed.
 3. **The verdicts are committed** as `sceneagent/verdicts/vlm_verdicts.json` (the box receives only `sceneagent/` and the Fruits video), so the model's output is visible in review before anything acts on it.
-4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
+4. **Box applies.** gpu-smoke `review_vlm` copies the checkout as usual and runs `bin_review --verdicts`: the box first checks that the scene is still placed as in the judged run (same objects, same fit distances, recorded in the verdicts as `judged_placement`) and refuses otherwise, then validates every field, runs the VLM's retry per object (an object with no verdict is not retried, and the rule is not substituted), logs the rule's choice beside it, and writes `bin_review_vlm.json` and the `_vlm_reviewed` score.
 
 **Legible sheets first.** Run 42934419274's sheets were checked by eye before any Gemini call.
 
@@ -136,7 +137,7 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 |---|---|---|
 | None | 0.3268 | 0.0211 m |
 | Rule (12 `icp_flip`, 2 `keep`) | 0.3235 | 0.0237 m |
-| Gemini (8 `keep`, 2 `icp_flip`, 4 `sam3d_next_view`) | 0.3267 | 0.0211 m |
+| Gemini (chose 7 `keep`, 2 `icp_flip`, 5 `sam3d_next_view`; object 13 has no other view, so 8 keep, 2 flip and 4 regenerations ran) | 0.3267 | 0.0211 m |
 
 - **They agree on 3 of 14.**
 - **Gemini avoids the rule's harm.** The rule's flips cost GT 24 (crate, 0.083 → 0.005) and GT 38 (0.395 → 0.372), against small gains on three others. Under Gemini all five stayed as placed: four keeps, and one rejected regeneration (object 5, GT 38: silhouette 0.569 → 0.528).
@@ -149,6 +150,56 @@ The rule's choices cannot change, so the first round needs a fresh `review` run 
 - **Run-to-run spread: one retry outcome flipped.** The first `review_vlm` (run 42942342408) kept 2 retries and scored 0.3270 and 0.0208 m; the rerun kept 3 and scored 0.3267 and 0.0211 m. SAM 3D regeneration is not bit-identical, so one regeneration crossed the silhouette bar in one run and not the other. The first run's per-object file was not published, so which one is unknown, and **the per-object regeneration effects above are not stable from run to run.** The next round needs deterministic regenerations or more than one run per verdict set.
 - **Reading, as set in advance:** Gemini ties no review and beats the rule by retrying less. That is not yet evidence that it judges fits better. It does pick the right retry on two errors the rule cannot see (merged objects, wrong shape), and its retries are then accepted by a test that does not track GT.
 - **Next:** Gemini judges each retry's before and after views, so acceptance is the VLM's, not the silhouette's or the fit distance's.
+
+**Round 2: the VLM accepts retries (set before any number).** Round 1 left acceptance with the old tests, which do not track GT. In round 2 Gemini also accepts:
+
+1. **Retry verdicts:** a fresh Gemini run on review run 42939458339's sheets, with `judged_placement`. The round 1 file is refused by the guard.
+2. **Box builds candidates** (gpu-smoke `review_candidates`, `bin_review_pairs build`):
+   - runs each chosen retry once and saves the result under `reviewer/pairs/<hash>/`, where the hash covers every saved cloud;
+   - draws each changed object's before and after sheets as a blind pair, A and B in an order from a recorded seed (`PAIR_SEED`);
+   - writes `candidates.json`, which maps A and B back and stays out of the model's input.
+   - A flip that moved nothing is not drawn or judged. A flip candidate is still the best of three half-turns by fit distance, so Gemini sees only the fit-distance winner.
+3. **Gemini judges pairs** (`sceneagent-vlm-verdict`, mode `accept`): one call per pair, A then B, with its own prompt (hashed into the output). The prompt never says which side is the retry. The output names the candidate hash.
+4. **Box applies** (gpu-smoke `review_accept`, `bin_review_pairs apply`): loads the saved candidates by hash, refuses on any hash, cloud or placement mismatch, never regenerates, and keeps the side Gemini judged better.
+
+**Metric, set in advance.** With about five retried objects, scene F1 barely moves, so the measure is per decision:
+
+- **Oracle (evaluation only, ours):** keeping a retry is better when keeping it alone raises scene F1@1cm. It is computed in the apply step, after Gemini has judged, and nowhere earlier.
+- **Report:** how often Gemini's acceptance agrees with the oracle, and how often the old test does, on the same candidates (ties excluded). Also scene F1 for no review, test-accepted, Gemini-accepted and oracle (an upper bound).
+- **Caveat:** n is about five, so the result is indicative only.
+
+**Round 2 result (2026-11-11).**
+
+- **Retry verdicts** (run 42947401149, judged on review run 42939458339's placement): keep 9, `icp_flip` 1, `sam3d_next_view` 4. Object 13 has no other view, so 3 regenerations and 1 flip ran (candidates run 42963190714, hash `e03b08b8…`). The flip moved nothing and was not judged, leaving 3 blind pairs.
+- **Pair verdicts** (run 42964570514): Gemini picked A once and B twice, which maps to the retry each time. Its reasons name visible flaws: an extra handle with no points on the bottle, a silhouette shifted left on object 4, a double-lobed mesh on the fused fruits. The silhouette test also keeps all three, so the two accepted scenes are the same.
+- **Applied and scored** (run 42965157633):
+
+| Acceptance | F1@1cm | Matched Chamfer |
+|---|---|---|
+| None | 0.3268 | 0.0211 m |
+| Silhouette/fit test | 0.3272 | 0.0211 m |
+| Gemini | 0.3272 | 0.0211 m |
+| Oracle (upper bound, evaluation only) | 0.3291 | 0.0208 m |
+
+| Object | Retry | Gemini | Test | Oracle | F1 change if kept alone |
+|---|---|---|---|---|---|
+| 8 (two fused fruits) | regenerate | keep | keep | keep | +0.0023 |
+| 0 (bottle) | regenerate | keep | keep | reject | −0.0016 |
+| 4 | regenerate | keep | keep | reject | −0.0003 |
+
+**Reading, against the measure set in advance.**
+
+- **Agreement with the oracle:** Gemini 1 of 3, the test 1 of 3. With n = 3 this says nothing about which judge is better. It does show Gemini does not yet beat the test.
+- **The pairs were not matched (a flaw in this round's design).** For a regeneration, the after sheet's registration overlay is drawn on the view the new mesh came from, so A and B show different photos and masks. The pair prompt told Gemini the two "differ only in the object's mesh and its placement". That was false for all three judged pairs, and each mesh appears on its own source view, where it tends to look like a good fit.
+- **The bottle is one data point with two explanations, neither established.** Gemini preferred the regenerated bottle (one clean bottle, where the old mesh had a stray handle). Against GT it is worse (−0.0016).
+  - Explanation 1: the cleaner mesh is placed or sized worse. The check is inconclusive: the regenerated bottle is 27% smaller, but the fused fruits shrank 35% and improved.
+  - Explanation 2: the unmatched overlay above made the retry look better than it is.
+  - No general claim about what the sheets show is made from this.
+- **What the oracle bound says:** the most any judge could add on these candidates is 0.3268 → 0.3291. Better acceptance alone cannot move the bin much. The retries themselves, especially regeneration from a weaker view, are now the limit.
+- **Next (round 3), in order:**
+  1. Matched pairs: draw both sheets' overlays on the same views (the original view, and the regeneration's view, on both sheets), and correct the pair prompt.
+  2. More decisions per run: candidates for all 14 objects, with Gemini choosing among before, flip and regenerate.
+  3. A placement-focused view in the sheets (mesh against points at true scale, side by side).
 
 **Redaction check (dc4).** The literal key is not available to us, so the check is a search of the job log, the verdict artifact and the uploaded `sf4-artifacts` for the Gemini key shape (`AIza` followed by 35 key characters), and for the string `GEMINI_API_KEY=`.
 

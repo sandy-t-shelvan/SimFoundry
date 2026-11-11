@@ -65,6 +65,10 @@ VLM_RETRY_ITEM = "reviewer retries (VLM)"
 VLM_SCORE_ITEM = "bin score (VLM reviewed)"
 VLM_REQUIRED = (VIEWS_ITEM, VLM_RETRY_ITEM, VLM_SCORE_ITEM)
 VLM_DECISIONS = ("keep", "icp_flip", "sam3d_next_view")
+# Fit distances are rounded to 5 decimals and placement is deterministic
+# (runs 42934419274 and 42939458339 matched exactly), so any real difference
+# means a different scene.
+PLACEMENT_TOL = 1e-6
 # Ours. The silhouette cut reuses the ours_iteration_1 gate's minimum.
 OVERLAY_OK = 0.5
 ISOLATED_OK = 0.5
@@ -336,7 +340,54 @@ def load_verdicts(path: Path) -> tuple[dict[str, Any], dict[int, dict[str, str]]
     meta["failed_objects"] = [
         f.get("object") for f in payload.get("failed") or [] if isinstance(f, dict)
     ]
+    judged = payload.get("judged_placement")
+    if judged is None:
+        meta["judged_placement"] = None
+    else:
+        if not isinstance(judged, list):
+            raise ValueError("judged_placement is not a list")
+        placement: dict[int, float] = {}
+        for item in judged:
+            number = item.get("object") if isinstance(item, dict) else None
+            fit = item.get("fit_total") if isinstance(item, dict) else None
+            if not isinstance(number, int) or isinstance(number, bool):
+                raise ValueError(f"judged object {number!r} is not an integer")
+            if not isinstance(fit, (int, float)) or isinstance(fit, bool):
+                raise ValueError(f"judged fit_total {fit!r} is not a number")
+            placement[number] = float(fit)
+        meta["judged_placement"] = placement
     return meta, verdicts
+
+
+def check_placement(
+    judged: dict[int, float] | None, records: dict[int, dict[str, Any]]
+) -> None:
+    """Refuse verdicts judged on a different scene than the one placed now.
+
+    The verdict file carries the fit distance of every object in the run
+    whose sheets the VLM saw. Object numbers are only meaningful for that
+    placement: after a new grouping, "object 8" can be another object, and
+    the review would still finish with a plausible score.
+    """
+    if judged is None:
+        raise ValueError(
+            "the verdict file records no judged placement, so it cannot be "
+            "checked against this scene; judge this run's sheets again"
+        )
+    if set(judged) != set(records):
+        raise ValueError(
+            f"verdicts were judged on objects {sorted(judged)}, "
+            f"this placement has {sorted(records)}"
+        )
+    moved = [
+        n
+        for n, record in records.items()
+        if abs(float(record["fit_total"]) - judged[n]) > PLACEMENT_TOL
+    ]
+    if moved:
+        raise ValueError(
+            f"objects {sorted(moved)} are placed differently from the judged run"
+        )
 
 
 def vlm_decision(
@@ -371,10 +422,10 @@ def flip_starts(
     return starts
 
 
-def retry_icp_flip(
-    out: Path, inputs: dict[str, Any], record: dict[str, Any]
-) -> tuple[np.ndarray | None, dict[str, Any]]:
-    """ICP from the three half turns; return a new cloud only when the fit improves."""
+def _flip_icp(
+    inputs: dict[str, Any], record: dict[str, Any]
+) -> tuple[str, dict[str, Any], dict[str, Any], Path, np.ndarray]:
+    """ICP from the fit turned half a turn about each axis; the best of the three."""
     number = record["object"]
     glb = Path(record["glb"])
     target = inputs["positions"][inputs["sets"][f"object_{number}"]]
@@ -382,6 +433,52 @@ def retry_icp_flip(
     name, result, tried = bin_place.best_icp(
         source, target, flip_starts(record["similarity"], source), record["pose_scale"]
     )
+    return name, result, tried, glb, target
+
+
+def _similarity_json(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "scale": float(result["scale"]),
+        "rotation": np.asarray(result["rotation"]).tolist(),
+        "translation": np.asarray(result["translation"]).tolist(),
+    }
+
+
+def icp_flip_candidate(
+    out: Path, inputs: dict[str, Any], record: dict[str, Any]
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """The flip retry's result, returned whether or not the fit test would keep it.
+
+    ``test_accepts`` is what the fit-distance test would decide; the caller
+    decides what to keep.
+    """
+    name, result, tried, glb, target = _flip_icp(inputs, record)
+    dense = bin_place.sample_mesh(glb, bin_place.POINTS_PER_OBJECT, seed=1)
+    cloud = apply_similarity(
+        dense, result["scale"], result["rotation"], result["translation"]
+    )
+    outcome: dict[str, Any] = {
+        "kind": "icp_flip",
+        "before_fit": record["fit_total"],
+        "after_fit": tried["best_total"],
+        "start": name,
+        "test": "fit distance falls",
+        "test_accepts": bool(tried["best_total"] < record["fit_total"]),
+        "unchanged": bool(tried["best_total"] == record["fit_total"]),
+        "glb": str(glb),
+        "view": record["view"],
+        "similarity": _similarity_json(result),
+        **bin_place.measure_fit(out, inputs, record["object"], glb, target, result),
+    }
+    return cloud, outcome
+
+
+def retry_icp_flip(
+    out: Path, inputs: dict[str, Any], record: dict[str, Any]
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """ICP from the three half turns; return a new cloud only when the fit improves."""
+    number = record["object"]
+    name, result, tried, glb, target = _flip_icp(inputs, record)
     outcome: dict[str, Any] = {
         "before_fit": record["fit_total"],
         "after_fit": tried["best_total"],
@@ -397,12 +494,69 @@ def retry_icp_flip(
     outcome.update(
         kept=True, **bin_place.measure_fit(out, inputs, number, glb, target, result)
     )
-    outcome["similarity"] = {
-        "scale": float(result["scale"]),
-        "rotation": np.asarray(result["rotation"]).tolist(),
-        "translation": np.asarray(result["translation"]).tolist(),
-    }
+    outcome["similarity"] = _similarity_json(result)
     return cloud, outcome
+
+
+def regenerate(
+    out: Path,
+    inputs: dict[str, Any],
+    numbers: list[int],
+    following: dict[int, dict[str, Any]],
+    retry_dir: Path,
+    runner: Runner = subprocess.run,
+    sam3d_config: Callable[[], Path] | None = None,
+) -> dict[int, tuple[np.ndarray | None, dict[str, Any] | None, dict[str, Any]]]:
+    """SAM 3D on each object's next view, in one worker batch, then ICP.
+
+    Returns, per object, the placed cloud and its placement record (both None
+    when SAM 3D failed) and the worker's result entry. Nothing is kept here.
+    """
+    from sceneagent import bin_sam3d
+
+    retry_dir.mkdir(parents=True, exist_ok=True)
+    jobs = [
+        {
+            "object": n,
+            "image": str(out / "images" / following[n]["view"]),
+            "masks": str(out / "masks" / f"{Path(following[n]['view']).stem}.npz"),
+            "mask_index": following[n]["mask_index"],
+        }
+        for n in numbers
+    ]
+    jobs_path = retry_dir / "jobs.json"
+    jobs_path.write_text(json.dumps(jobs, indent=2) + "\n", encoding="utf-8")
+    config = (sam3d_config or bin_sam3d.find_config)()
+    runner(
+        bin_sam3d.worker_command(jobs_path, retry_dir, config),
+        env=bin_sam3d.worker_environment(),
+        cwd=bin_sam3d.SAM3D_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=bin_sam3d.WORKER_TIMEOUT_S,
+    )
+    results_path = retry_dir / "results.json"
+    results = (
+        json.loads(results_path.read_text(encoding="utf-8"))["objects"]
+        if results_path.is_file()
+        else []
+    )
+    by_object = {r["object"]: r for r in results}
+    placed: dict[
+        int, tuple[np.ndarray | None, dict[str, Any] | None, dict[str, Any]]
+    ] = {}
+    for n in numbers:
+        result = by_object.get(n) or {"ok": False, "error": "no result"}
+        if not result.get("ok"):
+            placed[n] = (None, None, result)
+            continue
+        glb = retry_dir / f"object_{n}.glb"
+        cloud, record = bin_place.place_one(
+            out, inputs, n, result["pose"], following[n]["view"], glb
+        )
+        placed[n] = (cloud, record, result)
+    return placed
 
 
 def next_views(
@@ -432,8 +586,13 @@ def review_object(
     record: dict[str, Any],
     clouds: dict[str, np.ndarray],
     assembled_views: list[str],
+    folder: Path | None = None,
 ) -> dict[str, Any]:
-    """Draw the eleven views of one placed object and measure them."""
+    """Draw the eleven views of one placed object and measure them.
+
+    ``folder`` defaults to ``reviewer/object_<n>``; the pair builder draws a
+    retry's result elsewhere so it does not overwrite the before views.
+    """
     import trimesh
     from PIL import Image
 
@@ -492,7 +651,7 @@ def review_object(
         )
     if "assembled_2" not in views:  # an object seen in one view repeats it
         views["assembled_2"] = views["assembled_1"]
-    folder = out / "reviewer" / name
+    folder = folder or out / "reviewer" / name
     sheet = save_views(views, folder, name)
     manifest = write_view_manifest(folder, object_name=name)
     scores = [v for v in isolated.values() if v is not None]
@@ -519,8 +678,6 @@ def run_bin_review(
     replaces the rule's for each object, the rule's is logged beside it, and
     the evidence, ledger items and score file are the ``_vlm`` ones.
     """
-    from sceneagent import bin_sam3d
-
     out, data = Path(out), Path(data)
     use_vlm = verdicts is not None
     required = VLM_REQUIRED if use_vlm else REQUIRED
@@ -557,6 +714,9 @@ def run_bin_review(
             k: unreviewed[k] for k in ("f1_mean", "chamfer_mean_matched_m", "matches")
         }
         records = {r["object"]: r for r in placement["objects"] if r.get("placed")}
+        if use_vlm:
+            check_placement(evidence["vlm"]["judged_placement"], records)
+            evidence["vlm"]["placement_check"] = "matches the judged run"
         detections = inputs["detections"]
         area = {
             (view, d["mask_index"]): int(d.get("mask_area_px", 0))
@@ -611,55 +771,28 @@ def run_bin_review(
                 review["retry"] = outcome
                 if cloud is not None:
                     clouds[f"object_{number}"] = cloud
-        regenerate = [
+        regenerate_numbers = [
             n for n, r in reviews.items() if r["decision"] == "sam3d_next_view"
         ]
-        if regenerate:
-            retry_dir = out / "sam3d" / "retry"
-            retry_dir.mkdir(parents=True, exist_ok=True)
-            jobs = [
-                {
-                    "object": n,
-                    "image": str(out / "images" / following[n]["view"]),
-                    "masks": str(
-                        out / "masks" / f"{Path(following[n]['view']).stem}.npz"
-                    ),
-                    "mask_index": following[n]["mask_index"],
-                }
-                for n in regenerate
-            ]
-            jobs_path = retry_dir / "jobs.json"
-            jobs_path.write_text(json.dumps(jobs, indent=2) + "\n", encoding="utf-8")
-            config = (sam3d_config or bin_sam3d.find_config)()
-            runner(
-                bin_sam3d.worker_command(jobs_path, retry_dir, config),
-                env=bin_sam3d.worker_environment(),
-                cwd=bin_sam3d.SAM3D_ROOT,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=bin_sam3d.WORKER_TIMEOUT_S,
+        if regenerate_numbers:
+            regenerated = regenerate(
+                out,
+                inputs,
+                regenerate_numbers,
+                following,
+                out / "sam3d" / "retry",
+                runner,
+                sam3d_config,
             )
-            results_path = retry_dir / "results.json"
-            results = (
-                json.loads(results_path.read_text(encoding="utf-8"))["objects"]
-                if results_path.is_file()
-                else []
-            )
-            by_object = {r["object"]: r for r in results}
-            for n in regenerate:
-                result = by_object.get(n)
+            for n in regenerate_numbers:
+                cloud, new, result = regenerated[n]
                 review = reviews[n]
-                if not result or not result.get("ok"):
+                if cloud is None or new is None:
                     review["retry"] = {
                         "kept": False,
-                        "error": (result or {}).get("error", "no result"),
+                        "error": result.get("error", "no result"),
                     }
                     continue
-                glb = retry_dir / f"object_{n}.glb"
-                cloud, new = bin_place.place_one(
-                    out, inputs, n, result["pose"], following[n]["view"], glb
-                )
                 before = records[n]["residuals"]["silhouette"] or 0.0
                 after = new["residuals"]["silhouette"] or 0.0
                 kept = after > before
@@ -676,7 +809,7 @@ def run_bin_review(
         kept = sum(bool(r.get("retry", {}).get("kept")) for r in reviews.values())
         retry_entry.update(
             decision="accept",
-            use_gpu=bool(regenerate),
+            use_gpu=bool(regenerate_numbers),
             keep=decisions.count("keep"),
             icp_flip=decisions.count("icp_flip"),
             sam3d_next_view=decisions.count("sam3d_next_view"),

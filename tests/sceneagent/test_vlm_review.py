@@ -286,3 +286,88 @@ def test_every_published_file_is_fetched_and_uploaded():
     assert PUBLISHED_NAMES <= set(FETCH_NAMES)
     assert PUBLISHED_NAMES <= uploaded, PUBLISHED_NAMES - uploaded
     assert "bin_review_vlm.json" in PUBLISHED_NAMES
+
+
+def _records(fits):
+    return {n: {"object": n, "fit_total": f} for n, f in fits.items()}
+
+
+def test_verdicts_apply_only_to_the_placement_they_were_judged_on():
+    # Object numbers mean nothing across placements: after a new grouping,
+    # "object 8" can be another object and the score still looks plausible.
+    judged = {0: 0.09243, 1: 0.03339}
+    br.check_placement(judged, _records({0: 0.09243, 1: 0.03339}))
+    for records, why in (
+        (_records({0: 0.09243}), "objects"),
+        (_records({0: 0.09243, 1: 0.03339, 2: 0.1}), "objects"),
+        (_records({0: 0.09243, 1: 0.04}), "placed differently"),
+    ):
+        with pytest.raises(ValueError, match=why):
+            br.check_placement(judged, records)
+    with pytest.raises(ValueError, match="no judged placement"):
+        br.check_placement(None, _records({0: 0.09243}))
+
+
+def test_verdicts_without_a_judged_placement_are_refused(tmp_path):
+    # Round 1's file (merged in #54) predates judged_placement. A file like it
+    # must be refused; the test builds one rather than reading whatever
+    # verdict file is committed, which changes every round.
+    path = tmp_path / "round1.json"
+    path.write_text(
+        json.dumps({"objects": [{"object": 0, "decision": "keep", "reason": ""}]}),
+        encoding="utf-8",
+    )
+    meta, _ = br.load_verdicts(path)
+    assert meta["judged_placement"] is None
+    with pytest.raises(ValueError, match="no judged placement"):
+        br.check_placement(meta["judged_placement"], _records({0: 0.09243}))
+
+
+def test_the_judged_placement_is_read_and_checked(tmp_path):
+    path = tmp_path / "v.json"
+    good = {
+        "objects": [{"object": 0, "decision": "keep", "reason": ""}],
+        "judged_placement": [{"object": 0, "fit_total": 0.09243}],
+    }
+    path.write_text(json.dumps(good), encoding="utf-8")
+    meta, _ = br.load_verdicts(path)
+    assert meta["judged_placement"] == {0: 0.09243}
+    for bad in ({"object": "0", "fit_total": 0.1}, {"object": 0, "fit_total": "x"}):
+        path.write_text(json.dumps({**good, "judged_placement": [bad]}), "utf-8")
+        with pytest.raises(ValueError):
+            br.load_verdicts(path)
+
+
+def test_the_runner_copies_the_judged_runs_fit_distances(tmp_path):
+    review = tmp_path / "bin_review.json"
+    review.write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 1, "fit_total": 0.03339},
+                    {"object": 0, "fit_total": 0.09243},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    sheets = _zip(tmp_path, {"object_0.png": b"a", "object_1.png": b"b"})
+    out = tmp_path / "v.json"
+    reply = '{"decision": "keep", "reason": "fits"}'
+    code = vr.main(
+        ["--sheets", str(sheets), "--out", str(out), "--review-json", str(review)],
+        harness=FakeHarness([reply, reply]),
+    )
+    assert code == 0
+    written = json.loads(out.read_text(encoding="utf-8"))
+    assert written["judged_placement"] == [
+        {"object": 0, "fit_total": 0.09243},
+        {"object": 1, "fit_total": 0.03339},
+    ]
+    meta, _ = br.load_verdicts(out)
+    br.check_placement(meta["judged_placement"], _records({0: 0.09243, 1: 0.03339}))
+
+
+def test_the_verdict_workflow_binds_verdicts_to_the_judged_run():
+    text = VERDICT_WORKFLOW.read_text(encoding="utf-8")
+    assert "--review-json review-input/bin_review.json" in text
