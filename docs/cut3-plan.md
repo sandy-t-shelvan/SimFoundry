@@ -65,6 +65,16 @@ Same unit as Cut 2: one point is roughly one PR with its tests and, where marked
 
 ## Phase A: bin data quality (6 points)
 
+**Result so far (2026-11-10, box 58301075).** These are F1@1cm and matched Chamfer, delivered against GT:
+
+| Change | Runs | F1@1cm | Chamfer |
+|---|---|---|---|
+| Baseline, κ=1 (main) | place 42916527232 | 0.079 | 0.070 m |
+| **κ=2 (PR #45, SF-30)** | association 42924495643, place 42925055261 | **0.125** | **0.046 m** |
+| κ=2 + container split (PR #47, SF-31): **not kept** | association 42927798966, place 42929004562 | 0.109 | 0.032 m |
+
+κ=2 keeps 65,972 of 78,121 Gaussians, and only κ differs from the baseline. **M1 (bin above 6.9%) is met by a change of ours.** κ=2 is ours; the paper uses κ=1. The container split (#47) set aside four groups that held real objects (GT 8, 24, 29 and 37). Their matches were lost, so F1 fell, and the split is not kept; the 0.35 m limit is not tuned to this scene. The pose rescale (#48) is measured next against 0.125.
+
 | Item | Done when | GPU |
 |---|---|---|
 | Camera consensus κ=2 (PR #45) | Association + review rerun; score against κ=1 recorded; kept only if it helps | yes |
@@ -138,7 +148,10 @@ After the MVP: 4D and 4DCodeBench (§3.6), sisters and hybrid scenes (§3.8–3.
 
 ## Decisions for Sandeep
 
-1. **Order inside Cut 3.** A → B → C as proposed, or physics (C) before the VLM loop (B)?
+1. **Order inside Cut 3: settled (2026-11-10), A → B → C.** Sandeep left it to software and system-design principles:
+   - **Fix the input first.** B and C both consume the grouped objects and their meshes, so A goes first.
+   - **Build shared plumbing once.** B's Gemini runner job (secret on the runner only, artifact hand-off, `vlm_calls`, redaction) is reused by C's vote and audit, so B goes before C.
+   - **One change per experiment.** Within A, κ=2, then the container split, then the pose rescale, each scored on its own against the 0.079 baseline.
 2. **VLM: settled (2026-11-10).** The Gemini API, `gemini-3.8-flash`, with the key only from the GitHub secret `GEMINI_API_KEY` (KAN-15 approval). The GPU workflow forwards no secrets to the box, so the VLM calls run on the GitHub runner, on the review sheets and renders the box publishes. Every run records `vlm_calls`, and no key string appears in logs or artifacts.
 3. **MLP prior: settled (2026-11-10).** Sandeep's prior is already trained the paper's way (GSO and ABO, `gemini-3.8-flash` labels), so it is used as it is from `physics-prior-mlp` at a pinned commit, with no retraining.
 4. **MessyKitchens data (Cut 5).** Is the shared capture and its GT available to us?

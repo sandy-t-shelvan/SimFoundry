@@ -1,0 +1,1597 @@
+{
+  "scene": "000091",
+  "icp": {
+    "trim_keep": 0.7,
+    "source_points": 5000,
+    "frame_fixes": [
+      "none",
+      "x+90",
+      "x-90"
+    ],
+    "silhouette_rule": "ours: object masks against the placed mesh's surface samples projected into the same view and dilated by 3 px",
+    "gate": "ours_iteration_1",
+    "objects": [
+      {
+        "object": 0,
+        "view": "000009.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_0.glb",
+        "placed": true,
+        "start": "seed/6",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 5.6308,
+            "after": 0.54479
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 4.11082,
+            "after": 1.98616
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 3.95188,
+            "after": 1.20615
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 6.65984,
+            "after": 1.44684
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 6.39514,
+            "after": 0.58495
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 6.15795,
+            "after": 0.67715
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.28168,
+            "after": 0.24001
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.26735,
+            "after": 0.18578
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.32769,
+            "after": 0.2841
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.3035,
+            "after": 0.22548
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.25456,
+            "after": 0.2013
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.24389,
+            "after": 0.20349
+          },
+          "best_total": 0.17942
+        },
+        "pose_scale": 3.54515,
+        "scale": 3.0335157137162936,
+        "similarity": {
+          "scale": 3.0335157137162936,
+          "rotation": [
+            [
+              -0.10653517785646094,
+              -0.014621304755817108,
+              -0.9942014249267239
+            ],
+            [
+              -0.09326870351494353,
+              0.9956301247776388,
+              -0.004647965135818156
+            ],
+            [
+              0.9899248480686464,
+              0.09223270614321,
+              -0.10743334256070827
+            ]
+          ],
+          "translation": [
+            -0.9362269599072037,
+            2.7986146398036564,
+            0.6102566311646911
+          ]
+        },
+        "fit_total": 0.17942,
+        "residuals": {
+          "normalized_median": 0.2877191822973915,
+          "p90": 0.6887026593012612,
+          "median": 0.23858665075677019,
+          "coverage": 0.2107800175284838,
+          "silhouette": 0.11291787068784268
+        },
+        "silhouette_views": 14,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 1,
+        "view": "000025.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_1.glb",
+        "placed": true,
+        "start": "sam3d_centred/opencv/x+90",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 3.39705,
+            "after": 0.34218
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 4.30812,
+            "after": 0.27053
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 4.32623,
+            "after": 0.34481
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 5.52419,
+            "after": 0.7268
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 6.35486,
+            "after": 0.79973
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 6.37903,
+            "after": 0.83553
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.50536,
+            "after": 0.30433
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.68668,
+            "after": 0.27889
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.67532,
+            "after": 0.29232
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.4657,
+            "after": 0.27768
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.56757,
+            "after": 0.18055
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.574,
+            "after": 0.20536
+          },
+          "best_total": 0.18055
+        },
+        "pose_scale": 3.14983,
+        "scale": 2.183130461977003,
+        "similarity": {
+          "scale": 2.183130461977003,
+          "rotation": [
+            [
+              -0.8974166070641717,
+              -0.4332159967273224,
+              0.08347055495790998
+            ],
+            [
+              0.41671850342934236,
+              -0.8944701003109494,
+              -0.1620769217048772
+            ],
+            [
+              0.144876230849087,
+              -0.11066679641731941,
+              0.9832414443592625
+            ]
+          ],
+          "translation": [
+            -0.7828940418201307,
+            2.326740690236213,
+            -0.3358835225090614
+          ]
+        },
+        "fit_total": 0.18055,
+        "residuals": {
+          "normalized_median": 0.4104052020390779,
+          "p90": 0.6186471270530987,
+          "median": 0.2370657269220408,
+          "coverage": 0.044166117336849046,
+          "silhouette": 0.21988340774134954
+        },
+        "silhouette_views": 13,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 2,
+        "view": "000049.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_2.glb",
+        "placed": true,
+        "start": "seed/7",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 4.83974,
+            "after": 0.57924
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 4.83421,
+            "after": 0.47288
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 4.82353,
+            "after": 0.55593
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 8.12416,
+            "after": 1.3261
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 7.80571,
+            "after": 1.07113
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 7.83784,
+            "after": 0.74738
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.97872,
+            "after": 0.08998
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.87875,
+            "after": 0.11815
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.86646,
+            "after": 0.12007
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.998,
+            "after": 0.08666
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.85742,
+            "after": 0.12261
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.86248,
+            "after": 0.12119
+          },
+          "best_total": 0.08222
+        },
+        "pose_scale": 2.22497,
+        "scale": 1.112485948812476,
+        "similarity": {
+          "scale": 1.112485948812476,
+          "rotation": [
+            [
+              -0.16834761632847026,
+              -0.9733043491185125,
+              0.15600552574671953
+            ],
+            [
+              0.9285680339521851,
+              -0.209696797232502,
+              -0.3062493421259941
+            ],
+            [
+              0.33078767570557316,
+              0.0933053975792352,
+              0.939081261863895
+            ]
+          ],
+          "translation": [
+            0.04760119079040914,
+            2.551719134397475,
+            -0.5505648697249547
+          ]
+        },
+        "fit_total": 0.08222,
+        "residuals": {
+          "normalized_median": 0.18586213202250954,
+          "p90": 0.17684592383945608,
+          "median": 0.08069567106303879,
+          "coverage": 0.0839130051950339,
+          "silhouette": 0.39273144593699194
+        },
+        "silhouette_views": 12,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 3,
+        "view": "000033.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_3.glb",
+        "placed": true,
+        "start": "seed/3",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 4.83549,
+            "after": 0.59261
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 5.34461,
+            "after": 0.58367
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 5.2001,
+            "after": 0.58235
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 9.26126,
+            "after": 0.68058
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 9.37758,
+            "after": 0.76481
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 9.15922,
+            "after": 0.70432
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.47128,
+            "after": 0.07491
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.43586,
+            "after": 0.07953
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.46051,
+            "after": 0.07351
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.4738,
+            "after": 0.08238
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.47252,
+            "after": 0.07691
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.41849,
+            "after": 0.08514
+          },
+          "best_total": 0.06809
+        },
+        "pose_scale": 1.84392,
+        "scale": 0.9219612564709777,
+        "similarity": {
+          "scale": 0.9219612564709777,
+          "rotation": [
+            [
+              0.9803451250649694,
+              -0.0603238129703988,
+              0.18784161772637645
+            ],
+            [
+              -0.19375267221669285,
+              -0.1148854309378412,
+              0.9743003847721282
+            ],
+            [
+              -0.03719324898742553,
+              -0.9915454479482718,
+              -0.12431527212221552
+            ]
+          ],
+          "translation": [
+            -1.3127170523344753,
+            2.4723559345823234,
+            0.22235654685235745
+          ]
+        },
+        "fit_total": 0.06809,
+        "residuals": {
+          "normalized_median": 0.10705424900228273,
+          "p90": 0.1258450273003627,
+          "median": 0.05066681816895699,
+          "coverage": 0.37606177606177604,
+          "silhouette": 0.46892483246974415
+        },
+        "silhouette_views": 11,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 4,
+        "view": "000041.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_4.glb",
+        "placed": true,
+        "start": "sam3d_centred/p3d/x+90",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 5.83916,
+            "after": 1.31192
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 5.94056,
+            "after": 0.57504
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 5.97188,
+            "after": 0.58862
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 13.35614,
+            "after": 0.58221
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 13.32643,
+            "after": 1.10275
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 13.34048,
+            "after": 1.11982
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.3151,
+            "after": 0.18841
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.21248,
+            "after": 0.12612
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.21129,
+            "after": 0.12928
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.24899,
+            "after": 0.16909
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.60955,
+            "after": 0.20304
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.59947,
+            "after": 0.14005
+          },
+          "best_total": 0.12612
+        },
+        "pose_scale": 1.72999,
+        "scale": 1.6157465721518842,
+        "similarity": {
+          "scale": 1.6157465721518842,
+          "rotation": [
+            [
+              -0.6767474216070328,
+              -0.4069678045636581,
+              0.6135064249026813
+            ],
+            [
+              -0.7359895188896144,
+              0.39461553659209175,
+              -0.5500890894798495
+            ],
+            [
+              -0.018230618005631423,
+              -0.8238056714594596,
+              -0.5665790855991432
+            ]
+          ],
+          "translation": [
+            0.7617234464444878,
+            3.4509615884482336,
+            0.8599769825111743
+          ]
+        },
+        "fit_total": 0.12612,
+        "residuals": {
+          "normalized_median": 0.10661455795635003,
+          "p90": 0.40540241816845257,
+          "median": 0.11645924497536583,
+          "coverage": 0.37258509659613614,
+          "silhouette": 0.29426679658203275
+        },
+        "silhouette_views": 7,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 5,
+        "view": "000045.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_5.glb",
+        "placed": true,
+        "start": "seed/6",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 5.83155,
+            "after": 2.15859
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 6.80861,
+            "after": 1.22678
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 6.76353,
+            "after": 1.0999
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 6.70188,
+            "after": 1.52312
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 6.81325,
+            "after": 2.12871
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 6.7831,
+            "after": 2.41159
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.55114,
+            "after": 0.2555
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.5316,
+            "after": 0.22468
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.55568,
+            "after": 0.2838
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.4297,
+            "after": 0.39564
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.51172,
+            "after": 0.26425
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.53383,
+            "after": 0.24768
+          },
+          "best_total": 0.16649
+        },
+        "pose_scale": 3.98017,
+        "scale": 2.8704744126665,
+        "similarity": {
+          "scale": 2.8704744126665,
+          "rotation": [
+            [
+              -0.012269703603929295,
+              0.12777222257603443,
+              -0.9917276407922955
+            ],
+            [
+              0.06480131381432147,
+              0.9898190073283913,
+              0.12672459295407196
+            ],
+            [
+              0.9978227518459423,
+              -0.06271038087444364,
+              -0.020424593733358174
+            ]
+          ],
+          "translation": [
+            0.16714179637078225,
+            2.599856879859828,
+            -0.23456333120092798
+          ]
+        },
+        "fit_total": 0.16649,
+        "residuals": {
+          "normalized_median": 0.7160447387424125,
+          "p90": 0.747201256144838,
+          "median": 0.2491325794761893,
+          "coverage": 0.16306563391765186,
+          "silhouette": 0.1268709895432483
+        },
+        "silhouette_views": 6,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 6,
+        "view": "000041.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_6.glb",
+        "placed": true,
+        "start": "seed/8",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 6.57082,
+            "after": 1.09126
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 5.7726,
+            "after": 0.98386
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 6.03128,
+            "after": 1.22566
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 9.5804,
+            "after": 1.31469
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 9.14328,
+            "after": 1.28539
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 9.34789,
+            "after": 1.54563
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.98641,
+            "after": 0.13569
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.99544,
+            "after": 0.12387
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.98067,
+            "after": 0.17179
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 1.05028,
+            "after": 0.16753
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.99541,
+            "after": 0.1308
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.99363,
+            "after": 0.13937
+          },
+          "best_total": 0.12062
+        },
+        "pose_scale": 2.69903,
+        "scale": 1.349516144330505,
+        "similarity": {
+          "scale": 1.349516144330505,
+          "rotation": [
+            [
+              -0.9954300838057166,
+              -0.0953467236832736,
+              0.005286826780694381
+            ],
+            [
+              0.08955679438428313,
+              -0.9513324703444408,
+              -0.29486626027396656
+            ],
+            [
+              0.03314406182342326,
+              -0.29304527491704896,
+              0.9555239076101841
+            ]
+          ],
+          "translation": [
+            0.19114808907181274,
+            3.0065213082265076,
+            0.09732584656713453
+          ]
+        },
+        "fit_total": 0.12062,
+        "residuals": {
+          "normalized_median": 0.229879698798058,
+          "p90": 0.23005269158777641,
+          "median": 0.11893405892757561,
+          "coverage": 0.2558139534883721,
+          "silhouette": 0.3003075887949063
+        },
+        "silhouette_views": 6,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 7,
+        "view": "000045.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_7.glb",
+        "placed": true,
+        "start": "seed/5",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 6.26442,
+            "after": 0.69397
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 6.2877,
+            "after": 0.70236
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 6.27556,
+            "after": 0.26098
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 11.76358,
+            "after": 0.60107
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 11.75814,
+            "after": 0.74815
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 11.7237,
+            "after": 0.80537
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.4729,
+            "after": 0.10558
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.50103,
+            "after": 0.08218
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.4234,
+            "after": 0.08317
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.49794,
+            "after": 0.07419
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.47363,
+            "after": 0.0892
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.47211,
+            "after": 0.07948
+          },
+          "best_total": 0.07304
+        },
+        "pose_scale": 0.90169,
+        "scale": 0.4508441324872313,
+        "similarity": {
+          "scale": 0.4508441324872313,
+          "rotation": [
+            [
+              -0.9541404490984576,
+              -0.22319223603495641,
+              0.19950245403981978
+            ],
+            [
+              -0.25738440069171714,
+              0.9519472404072561,
+              -0.16598108856606572
+            ],
+            [
+              -0.15287012028110555,
+              -0.2097180899558426,
+              -0.965737567391118
+            ]
+          ],
+          "translation": [
+            0.668751834219349,
+            2.9374937409129824,
+            0.07091301075902604
+          ]
+        },
+        "fit_total": 0.07304,
+        "residuals": {
+          "normalized_median": 0.1531738192873483,
+          "p90": 0.15229201952511362,
+          "median": 0.07428417161932119,
+          "coverage": 0.4732394366197183,
+          "silhouette": 0.3192695216932419
+        },
+        "silhouette_views": 5,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 8,
+        "view": "000045.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_8.glb",
+        "placed": true,
+        "start": "seed/1",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 7.30141,
+            "after": 0.8568
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 7.8037,
+            "after": 0.40887
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 7.75089,
+            "after": 0.70926
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 11.41475,
+            "after": 0.75923
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 11.87006,
+            "after": 0.66141
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 11.8508,
+            "after": 0.99127
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.36505,
+            "after": 0.1363
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.32706,
+            "after": 0.19979
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.3126,
+            "after": 0.26769
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.33524,
+            "after": 0.24204
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.32472,
+            "after": 0.22999
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.3199,
+            "after": 0.27468
+          },
+          "best_total": 0.08771
+        },
+        "pose_scale": 1.69265,
+        "scale": 0.8921759395636281,
+        "similarity": {
+          "scale": 0.8921759395636281,
+          "rotation": [
+            [
+              0.9477724455328582,
+              0.05643991138611228,
+              0.3139138861079479
+            ],
+            [
+              0.3189471533730824,
+              -0.16671555530589338,
+              -0.9329944463791067
+            ],
+            [
+              -0.00032379603665416126,
+              0.9843883684917127,
+              -0.1760097586338644
+            ]
+          ],
+          "translation": [
+            0.7062993855540047,
+            2.7520817240807287,
+            -0.17964725599445353
+          ]
+        },
+        "fit_total": 0.08771,
+        "residuals": {
+          "normalized_median": 0.3134386814590699,
+          "p90": 0.25986102175088693,
+          "median": 0.08494752842686709,
+          "coverage": 0.5262054507337526,
+          "silhouette": 0.2801472570617685
+        },
+        "silhouette_views": 5,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 9,
+        "view": "000013.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_9.glb",
+        "placed": true,
+        "start": "sam3d_pose/p3d/none",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 7.71477,
+            "after": 0.15473
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 6.77576,
+            "after": 0.96447
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 6.66746,
+            "after": 1.54098
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 9.5081,
+            "after": 1.20086
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 8.98841,
+            "after": 1.19689
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 8.94071,
+            "after": 0.68543
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.52516,
+            "after": 0.23406
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.5204,
+            "after": 0.22001
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.46264,
+            "after": 0.2254
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.48727,
+            "after": 0.2185
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.53685,
+            "after": 0.34614
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.47519,
+            "after": 0.26614
+          },
+          "best_total": 0.15473
+        },
+        "pose_scale": 2.56962,
+        "scale": 1.2848082233465912,
+        "similarity": {
+          "scale": 1.2848082233465912,
+          "rotation": [
+            [
+              0.027955395342555957,
+              -0.8426813181946148,
+              0.5376864251931851
+            ],
+            [
+              0.14335735053688342,
+              0.535716123551882,
+              0.8321399551839761
+            ],
+            [
+              -0.9892760817478028,
+              0.05381849990783758,
+              0.135780717148583
+            ]
+          ],
+          "translation": [
+            0.6139078504656258,
+            2.981002532386662,
+            0.6611271425650397
+          ]
+        },
+        "fit_total": 0.15473,
+        "residuals": {
+          "normalized_median": 1.0857575673599054,
+          "p90": 0.5387203551905131,
+          "median": 0.21724011613420163,
+          "coverage": 0.22030981067125646,
+          "silhouette": 0.10641072270283632
+        },
+        "silhouette_views": 5,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 10,
+        "view": "000033.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_10.glb",
+        "placed": true,
+        "start": "sam3d_centred/p3d/none",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 8.34367,
+            "after": 0.61669
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 7.98068,
+            "after": 0.81398
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 7.97749,
+            "after": 1.34061
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 8.80861,
+            "after": 0.38856
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 8.30559,
+            "after": 0.98254
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 8.29942,
+            "after": 1.29667
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.76896,
+            "after": 0.09483
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.72706,
+            "after": 0.11122
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.73972,
+            "after": 0.11319
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.77959,
+            "after": 0.10544
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.74791,
+            "after": 0.1211
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.75079,
+            "after": 0.12283
+          },
+          "best_total": 0.09483
+        },
+        "pose_scale": 1.79468,
+        "scale": 0.8973410870557235,
+        "similarity": {
+          "scale": 0.8973410870557235,
+          "rotation": [
+            [
+              0.4531810954934557,
+              -0.861773498732356,
+              0.22797660311958612
+            ],
+            [
+              0.6054197112022774,
+              0.4852627473654313,
+              0.6308621397001914
+            ],
+            [
+              -0.6542888261120638,
+              -0.14787326635314219,
+              0.7416465661775495
+            ]
+          ],
+          "translation": [
+            -0.23466826961133552,
+            2.4544076078023935,
+            0.30903876571343764
+          ]
+        },
+        "fit_total": 0.09483,
+        "residuals": {
+          "normalized_median": 0.5098318844023352,
+          "p90": 0.2893741900317404,
+          "median": 0.11110241455027356,
+          "coverage": 0.1320194956558593,
+          "silhouette": 0.29045003104370726
+        },
+        "silhouette_views": 4,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 11,
+        "view": "000045.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_11.glb",
+        "placed": true,
+        "start": "seed/5",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 5.81449,
+            "after": 0.30613
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 5.88991,
+            "after": 0.51754
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 5.9779,
+            "after": 0.45281
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 9.26603,
+            "after": 0.8644
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 9.19385,
+            "after": 0.50733
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 9.31133,
+            "after": 0.56887
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.78721,
+            "after": 0.12001
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.82667,
+            "after": 0.11661
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.83801,
+            "after": 0.11482
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.74705,
+            "after": 0.11725
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.8074,
+            "after": 0.12448
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.80469,
+            "after": 0.12054
+          },
+          "best_total": 0.10569
+        },
+        "pose_scale": 1.83275,
+        "scale": 0.9163752358976045,
+        "similarity": {
+          "scale": 0.9163752358976045,
+          "rotation": [
+            [
+              -0.9164496133014055,
+              0.10455502811199535,
+              0.3862490807448013
+            ],
+            [
+              -0.39221179328792,
+              -0.043393910912993855,
+              -0.9188508462756881
+            ],
+            [
+              -0.07930961786301931,
+              -0.9935719473657533,
+              0.08077604794892373
+            ]
+          ],
+          "translation": [
+            0.06389024123345165,
+            2.7215233184519887,
+            0.5151292163807626
+          ]
+        },
+        "fit_total": 0.10569,
+        "residuals": {
+          "normalized_median": 0.49681268273762247,
+          "p90": 0.28938277787917843,
+          "median": 0.1344462215688655,
+          "coverage": 0.11430720060161685,
+          "silhouette": 0.31812318596242406
+        },
+        "silhouette_views": 4,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 12,
+        "view": "000001.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_12.glb",
+        "placed": true,
+        "start": "sam3d_pose/p3d/x+90",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 3.2213,
+            "after": 0.85211
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 4.51258,
+            "after": 0.2712
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 4.06159,
+            "after": 1.00237
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 3.03757,
+            "after": 0.73718
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 4.71507,
+            "after": 0.28545
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 4.13688,
+            "after": 1.15556
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 1.48142,
+            "after": 1.50258
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 1.78248,
+            "after": 1.39603
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 1.56286,
+            "after": 0.9895
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 1.24844,
+            "after": 0.91895
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 1.74743,
+            "after": 1.32711
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 1.63941,
+            "after": 1.1643
+          },
+          "best_total": 0.2712
+        },
+        "pose_scale": 6.5498,
+        "scale": 3.2748998382607786,
+        "similarity": {
+          "scale": 3.2748998382607786,
+          "rotation": [
+            [
+              0.9919416799042272,
+              0.11402638064098494,
+              0.05522398198878204
+            ],
+            [
+              0.11550387957419006,
+              -0.9930088805086541,
+              -0.02433550973909473
+            ],
+            [
+              0.05206301443530835,
+              0.030517990577163555,
+              -0.9981773864294073
+            ]
+          ],
+          "translation": [
+            -0.6707378470394184,
+            2.766632039979907,
+            -0.21336363250521057
+          ]
+        },
+        "fit_total": 0.2712,
+        "residuals": {
+          "normalized_median": 0.25848368762573165,
+          "p90": 0.5928625195124398,
+          "median": 0.3210798989524243,
+          "coverage": 0.0639027663858027,
+          "silhouette": 0.12356494906684512
+        },
+        "silhouette_views": 1,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      },
+      {
+        "object": 13,
+        "view": "000049.png",
+        "glb": "/workspace/sf4-smoke/bin/sam3d/object_13.glb",
+        "placed": true,
+        "start": "sam3d_centred/opencv/x-90",
+        "starts_tried": {
+          "sam3d_pose/p3d/none": {
+            "before": 5.38416,
+            "after": 0.52783
+          },
+          "sam3d_pose/p3d/x+90": {
+            "before": 5.31189,
+            "after": 0.54726
+          },
+          "sam3d_pose/p3d/x-90": {
+            "before": 5.3806,
+            "after": 0.58481
+          },
+          "sam3d_pose/opencv/none": {
+            "before": 14.16397,
+            "after": 0.73913
+          },
+          "sam3d_pose/opencv/x+90": {
+            "before": 14.14459,
+            "after": 0.72892
+          },
+          "sam3d_pose/opencv/x-90": {
+            "before": 14.19084,
+            "after": 0.68021
+          },
+          "sam3d_centred/p3d/none": {
+            "before": 0.92533,
+            "after": 0.58051
+          },
+          "sam3d_centred/p3d/x+90": {
+            "before": 0.8228,
+            "after": 0.53655
+          },
+          "sam3d_centred/p3d/x-90": {
+            "before": 0.87113,
+            "after": 0.57228
+          },
+          "sam3d_centred/opencv/none": {
+            "before": 0.9256,
+            "after": 0.59127
+          },
+          "sam3d_centred/opencv/x+90": {
+            "before": 0.82941,
+            "after": 0.52863
+          },
+          "sam3d_centred/opencv/x-90": {
+            "before": 0.79009,
+            "after": 0.48415
+          },
+          "best_total": 0.48415
+        },
+        "pose_scale": 0.97528,
+        "scale": 1.7658086192796767,
+        "similarity": {
+          "scale": 1.7658086192796767,
+          "rotation": [
+            [
+              0.42339518981826274,
+              0.9021116061532652,
+              0.08325360822411922
+            ],
+            [
+              0.19407532320531426,
+              -0.0005541384658688628,
+              -0.9809864738381021
+            ],
+            [
+              -0.8849131495019786,
+              0.4315024252239352,
+              -0.17531222109240222
+            ]
+          ],
+          "translation": [
+            0.6206183847110652,
+            4.035562326754314,
+            -0.3653514284750675
+          ]
+        },
+        "fit_total": 0.48415,
+        "residuals": {
+          "normalized_median": 0.33237532521302443,
+          "p90": 0.7060606199990824,
+          "median": 0.5092754885838272,
+          "coverage": 0.3788546255506608,
+          "silhouette": 0.06249900276035932
+        },
+        "silhouette_views": 1,
+        "gate": "reject",
+        "gate_failed": [
+          "normalized_median",
+          "p90",
+          "coverage",
+          "silhouette"
+        ]
+      }
+    ]
+  },
+  "score": {
+    "f1_mean": 0.12447926300452225,
+    "chamfer_mean_matched_m": 0.04599438364739652,
+    "matches": [
+      {
+        "reference": "obj_000003",
+        "delivered": "object_3",
+        "chamfer_m": 0.023802656604335677,
+        "f1": 0.31686852248394004
+      },
+      {
+        "reference": "obj_000006",
+        "delivered": "object_8",
+        "chamfer_m": 0.021411514186254678,
+        "f1": 0.2551469107551487
+      },
+      {
+        "reference": "obj_000007",
+        "delivered": "object_7",
+        "chamfer_m": 0.02127843248344477,
+        "f1": 0.23628863350125948
+      },
+      {
+        "reference": "obj_000008",
+        "delivered": "object_13",
+        "chamfer_m": 0.0992332390928609,
+        "f1": 0.029420186598812553
+      },
+      {
+        "reference": "obj_000009",
+        "delivered": "object_2",
+        "chamfer_m": 0.02915174355828633,
+        "f1": 0.18185602328705777
+      },
+      {
+        "reference": "obj_000010",
+        "delivered": "object_1",
+        "chamfer_m": 0.04978563564296615,
+        "f1": 0.07700555355210963
+      },
+      {
+        "reference": "obj_000013",
+        "delivered": "object_10",
+        "chamfer_m": 0.026534868565538126,
+        "f1": 0.20983026246256825
+      },
+      {
+        "reference": "obj_000017",
+        "delivered": "object_11",
+        "chamfer_m": 0.026075782098612513,
+        "f1": 0.27187958852192745
+      },
+      {
+        "reference": "obj_000019",
+        "delivered": "object_4",
+        "chamfer_m": 0.07599214952856093,
+        "f1": 0.08580060823887199
+      },
+      {
+        "reference": "obj_000029",
+        "delivered": "object_0",
+        "chamfer_m": 0.04783950062235764,
+        "f1": 0.17784909839557006
+      },
+      {
+        "reference": "obj_000024",
+        "delivered": "object_12",
+        "chamfer_m": 0.09995327361398425,
+        "f1": 0.0035933333333333334
+      },
+      {
+        "reference": "obj_000037",
+        "delivered": "object_9",
+        "chamfer_m": 0.045091681072230584,
+        "f1": 0.1638548309178744
+      },
+      {
+        "reference": "obj_000028",
+        "delivered": "object_6",
+        "chamfer_m": 0.03548198040158419,
+        "f1": 0.292793082149475
+      },
+      {
+        "reference": "obj_000038",
+        "delivered": "object_5",
+        "chamfer_m": 0.04228891359253451,
+        "f1": 0.1873986258924963
+      }
+    ],
+    "f1_by_reference": {
+      "obj_000001": 0.0,
+      "obj_000003": 0.31686852248394004,
+      "obj_000006": 0.2551469107551487,
+      "obj_000007": 0.23628863350125948,
+      "obj_000008": 0.029420186598812553,
+      "obj_000009": 0.18185602328705777,
+      "obj_000010": 0.07700555355210963,
+      "obj_000013": 0.20983026246256825,
+      "obj_000017": 0.27187958852192745,
+      "obj_000019": 0.08580060823887199,
+      "obj_000029": 0.17784909839557006,
+      "obj_000030": 0.0,
+      "obj_000018": 0.0,
+      "obj_000024": 0.0035933333333333334,
+      "obj_000026": 0.0,
+      "obj_000037": 0.1638548309178744,
+      "obj_000028": 0.292793082149475,
+      "obj_000038": 0.1873986258924963,
+      "obj_000039": 0.0,
+      "obj_000040": 0.0
+    },
+    "tau_m": 0.01,
+    "protocol": {
+      "benchmark": "GraspClutter6D",
+      "similarity": {
+        "scale": 0.2068534897207129,
+        "rotation": [
+          [
+            0.9851961169002733,
+            0.17116086110313275,
+            0.009621375736185942
+          ],
+          [
+            0.010024410147719353,
+            -0.0014905763813325094,
+            -0.999948643372869
+          ],
+          [
+            -0.17113772946318145,
+            0.9852419691672121,
+            -0.0031842967357668646
+          ]
+        ],
+        "translation": [
+          0.0025316348352189847,
+          0.0012500350711640705,
+          0.18200234939180548
+        ]
+      },
+      "per_object_refit": false,
+      "reference_objects": 20,
+      "points_per_reference": [
+        10000
+      ]
+    },
+    "alignment": {
+      "rule": "one similarity for the scene: Umeyama from the 13 COLMAP camera centers (splat frame) to the same cameras' metric centers in image 1's camera frame",
+      "cameras": 13,
+      "camera_rms_m": 0.0035335393812174205,
+      "camera_max_m": 0.01041639731332956,
+      "scale": 0.2068534897207129
+    },
+    "matcher": "Hungarian on symmetric Chamfer",
+    "delivered_objects": 14,
+    "reference_objects": 20,
+    "points_per_delivered": 10000,
+    "file_name": "bin_000091_score_pts10000_align-cameras-umeyama_match-hungarian-chamfer.json"
+  },
+  "run": {
+    "box": "vast instance 58301075",
+    "commit": "1e16454269285417437a7598fd6302f3fe8ec723",
+    "association_run": 42924495643,
+    "place_run": 42925055261,
+    "kappa": 2,
+    "baseline": {
+      "kappa": 1,
+      "place_run": 42916527232,
+      "f1_mean": 0.0794,
+      "chamfer_mean_matched_m": 0.0705
+    },
+    "note": "ours: kappa=2 camera consensus (paper uses kappa=1); only kappa differs from the baseline: same splat, masks, groups (14) and SAM 3D meshes"
+  }
+}
