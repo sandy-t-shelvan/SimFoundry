@@ -157,3 +157,14 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "os._exit(0)" in check
     assert "cube_height_m" in text
     assert 'env["LIDRA_SKIP_INIT"] = "true"' in text
+
+
+def test_da3_api_installs_the_undeclared_dependency_and_checks_the_worker_import():
+    text = SCRIPT.read_text(encoding="utf-8")
+    stages = text.split('STAGES="', 1)[1].split('"', 1)[0].split()
+    assert stages.index("da3_api") == stages.index("da3") + 1
+    body = text.split("s_da3_api() {", 1)[1].split("\n}", 1)[0]
+    assert "install addict==2.4.0" in body
+    worker = (ROOT / "sceneagent" / "depth_worker.py").read_text(encoding="utf-8")
+    assert "from depth_anything_3.api import DepthAnything3" in worker
+    assert "from depth_anything_3.api import DepthAnything3" in body

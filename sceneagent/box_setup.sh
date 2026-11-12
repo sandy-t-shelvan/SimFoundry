@@ -70,7 +70,7 @@ ISAACLAB_TAG=v3.0.0
 ISAACLAB_COMMIT=e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4
 ISAACLAB_ROOT=/workspace/IsaacLab
 ISAACLAB_ENV="$ENVS/isaaclab"
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
+STAGES="apt colmap env_sa da3 da3_api env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -157,6 +157,17 @@ s_da3() {
   # The weights bin_scale loads, into the cache it reads (HF_HUB_CACHE).
   HF_HUB_CACHE=/workspace/sf4-smoke/hf-cache "$ENVS/sa/bin/python3" -c \
     "from huggingface_hub import snapshot_download; snapshot_download('depth-anything/DA3METRIC-LARGE')"
+}
+
+# DA3 (upstream 3d835ec) imports addict in its model code without declaring
+# it, and s_da3 only imported the top package, so the depth worker failed on
+# 60254439 (run 43177596561). A stage of its own, so a box whose da3 stage
+# already passed still gets it; the check imports what depth_worker imports.
+s_da3_api() {
+  "$ENVS/sa/bin/pip" install addict==2.4.0
+  cd /tmp
+  PYTHONPATH="$DA3_ROOT/src" "$ENVS/sa/bin/python3" -c \
+    "from depth_anything_3.api import DepthAnything3"
 }
 
 s_env_nerf() {
