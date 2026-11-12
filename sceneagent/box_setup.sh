@@ -46,9 +46,19 @@ GSAM_ROOT=/root/SceneagentX/third_party/Grounded-SAM-2
 GDINO_URL=https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth
 SAM_URL=https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth
 SAM_WEIGHTS=/workspace/models/sam/sam_vit_h_4b8939.pth
+# sam2_user.py reads SAM2_CHECKPOINT. The 2.1 file is the checkout's other large
+# checkpoint. Both hashes are the files fetched on 60254439.
+SAM2_URL=https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt
+SAM2_1_URL=https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
+SAM2_CHECKPOINT="$GSAM_ROOT/checkpoints/sam2_hiera_large.pt"
+SAM2_1_CHECKPOINT="$GSAM_ROOT/checkpoints/sam2.1_hiera_large.pt"
+SAM2_SHA256=7442e4e9b732a508f80e141e7c2913437a3610ee0c77381a66658c3a445df87b
+SAM2_1_SHA256=2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318
 DA3_ROOT=/workspace/src/depth-anything-3
 SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
+# HEAD of the checkout that finished s_sam3d on 60254439.
+SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
 STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
@@ -60,6 +70,25 @@ clone() {  # clone URL DIR [TAG]: shallow, once
     else
       git clone --depth 1 "$1" "$2"
     fi
+  fi
+}
+
+fetch_sha256() {  # URL DEST SHA256: keep a file that already matches
+  local url="$1" dest="$2" want="$3" got
+  mkdir -p "$(dirname "$dest")"
+  if [ -s "$dest" ]; then
+    got=$(sha256sum "$dest" | awk '{print $1}')
+    if [ "$got" = "$want" ]; then
+      return 0
+    fi
+    rm -f "$dest"
+  fi
+  wget -q -O "$dest.partial" "$url"
+  mv "$dest.partial" "$dest"
+  got=$(sha256sum "$dest" | awk '{print $1}')
+  if [ "$got" != "$want" ]; then
+    echo "checksum mismatch for $dest" >&2
+    return 1
   fi
 }
 
@@ -100,7 +129,9 @@ s_env_sa() {
   # The pins of requirements-sceneagent-ci.txt, so the box runs what CI tests.
   "$ENVS/sa/bin/pip" install numpy==2.4.6 scipy==1.16.3 trimesh==5.2.0 \
     pillow==13.0.0 py7zr==1.1.4 huggingface_hub
-  "$ENVS/sa/bin/python3" -c "import numpy, scipy, trimesh, PIL, py7zr, torch; assert torch.cuda.is_available()"
+  # 4.x requires torch>=2.6 and replaces the pin above (found on 60254439).
+  "$ENVS/sa/bin/pip" install open_clip_torch==3.3.0
+  "$ENVS/sa/bin/python3" -c "import numpy, scipy, trimesh, PIL, py7zr, torch, open_clip; assert torch.cuda.is_available() and torch.__version__.startswith('2.5.1')"
 }
 
 s_da3() {
@@ -145,6 +176,10 @@ s_env_gsam2() {
   mkdir -p gdino_checkpoints
   [ -s gdino_checkpoints/groundingdino_swint_ogc.pth ] || \
     wget -q -O gdino_checkpoints/groundingdino_swint_ogc.pth "$GDINO_URL"
+  fetch_sha256 "$SAM2_URL" "$SAM2_CHECKPOINT" "$SAM2_SHA256"
+  fetch_sha256 "$SAM2_1_URL" "$SAM2_1_CHECKPOINT" "$SAM2_1_SHA256"
+  # sam2_user.py does not search this checkout; later runs export this file.
+  printf 'export SAM2_CHECKPOINT=%q\n' "$SAM2_CHECKPOINT" > "$ROOT/sam2.env"
   cd /tmp
   PYTHONPATH="$GSAM_ROOT" "$ENVS/gsam2/bin/python3" -c \
     "from grounding_dino.groundingdino import _C"
@@ -160,6 +195,10 @@ s_sam_weights() {
 
 s_sam3d() {
   clone https://github.com/facebookresearch/sam-3d-objects "$SAM3D_ROOT"
+  if [ "$(git -C "$SAM3D_ROOT" rev-parse HEAD)" != "$SAM3D_COMMIT" ]; then
+    git -C "$SAM3D_ROOT" fetch --depth 1 origin "$SAM3D_COMMIT"
+    git -C "$SAM3D_ROOT" checkout --detach "$SAM3D_COMMIT"
+  fi
   cd "$SAM3D_ROOT"
   [ -x "$SAM3D_ENV/bin/python3" ] || \
     "$MAMBA" env create -y -f environments/default.yml -p "$SAM3D_ENV"
@@ -236,10 +275,15 @@ do_report() {
   STATE="$STATE" LOGS="$LOGS" OUT="$OUT" STAGES="$STAGES" ENVS="$ENVS" \
     GSAM_ROOT="$GSAM_ROOT" DA3_ROOT="$DA3_ROOT" SAM3D_ROOT="$SAM3D_ROOT" \
     SAM3D_ENV="$SAM3D_ENV" SAM_WEIGHTS="$SAM_WEIGHTS" COLMAP_TAG="$COLMAP_TAG" \
+    SAM2_CHECKPOINT="$SAM2_CHECKPOINT" SAM2_1_CHECKPOINT="$SAM2_1_CHECKPOINT" \
     "$py" - <<'PY'
 import hashlib, json, os, pathlib, re, subprocess
 
 env = os.environ
+# The notebook sets this before importing the package. Without it the import
+# looks for a submodule the checkout does not ship, and the report would
+# record a failure for an install the stage already accepted.
+env["LIDRA_SKIP_INIT"] = "true"
 state = pathlib.Path(env["STATE"])
 logs = pathlib.Path(env["LOGS"])
 out = pathlib.Path(env["OUT"])
@@ -331,7 +375,7 @@ versions = {
     "nvcc": run(["/usr/local/cuda-12.1/bin/nvcc", "--version"]).splitlines()[-1:],
     "colmap": run(["/opt/colmap-cuda/bin/colmap", "-h"]).splitlines()[:2],
     "ffmpeg": run(["ffmpeg", "-version"]).splitlines()[:1],
-    "sa": pyver(envs + "/sa/bin/python3", ["numpy", "scipy", "trimesh", "PIL", "py7zr", "torch", "torchvision"]),
+    "sa": pyver(envs + "/sa/bin/python3", ["numpy", "scipy", "trimesh", "PIL", "py7zr", "torch", "torchvision", "open_clip"]),
     "nerf": pyver(envs + "/nerf/bin/python3", ["torch", "torchvision", "nerfstudio", "gsplat"]),
     "gsam2": pyver(envs + "/gsam2/bin/python3", ["torch", "torchvision", "groundingdino", "sam2", "transformers"]),
     "sam3d10": pyver(sam3d_py, ["torch", "pytorch3d", "kaolin", "moge", "sam3d_objects", "gsplat"]),
@@ -353,6 +397,9 @@ document = {
     "checksums": {
         "sam_vit_h_4b8939.pth": sha256(env["SAM_WEIGHTS"]),
         "groundingdino_swint_ogc.pth": sha256(env["GSAM_ROOT"] + "/gdino_checkpoints/groundingdino_swint_ogc.pth"),
+        "sam2_hiera_large.pt": sha256(env["SAM2_CHECKPOINT"]),
+        "sam2.1_hiera_large.pt": sha256(env["SAM2_1_CHECKPOINT"]),
+        "pipeline.yaml": sha256(env["SAM3D_ROOT"] + "/checkpoints/hf/pipeline.yaml"),
     },
     "sam3d_pipeline_yaml": pathlib.Path(env["SAM3D_ROOT"], "checkpoints/hf/pipeline.yaml").is_file(),
     "hf_token_present": pathlib.Path("/root/.cache/huggingface/token").is_file(),

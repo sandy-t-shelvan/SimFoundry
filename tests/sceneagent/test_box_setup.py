@@ -129,3 +129,11 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "pipdeptree==2.28.0" in text and "PIP_CONSTRAINT" in text
     da3 = text.split("s_da3() {", 1)[1].split("\n}", 1)[0]
     assert da3.index('install -e "$DA3_ROOT"') < da3.index("install numpy==2.4.6")
+    # 4.x replaces torch 2.5.1, so the package pin follows the torch pin.
+    sa = text.split("s_env_sa() {", 1)[1].split("\n}", 1)[0]
+    assert sa.index("torch==2.5.1") < sa.index("open_clip_torch==3.3.0")
+    assert "SAM2_CHECKPOINT=" in text
+    assert "7442e4e9b732a508f80e141e7c2913437a3610ee0c77381a66658c3a445df87b" in text
+    assert "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318" in text
+    assert "f91db411c50efee93d8db7aeb323885650f6f722" in text
+    assert 'env["LIDRA_SKIP_INIT"] = "true"' in text
