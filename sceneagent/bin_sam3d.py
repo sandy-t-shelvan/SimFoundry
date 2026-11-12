@@ -123,6 +123,14 @@ def worker_command(jobs: Path, out: Path, config: Path) -> list[str]:
     ]
 
 
+def _readable_file(path: str) -> bool:
+    """A file we may use; a path we may not even stat (CI is not root) is not one."""
+    try:
+        return Path(path).is_file()
+    except OSError:
+        return False
+
+
 def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     """This repo on the path and the env named as conda would name it.
 
@@ -141,7 +149,7 @@ def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     # the env's conda CA bundle from the base image; on 60254439 that failed
     # with "certificate has expired" (run 43179492561). pip's certifi in the
     # same env is current, so point TLS at the first bundle that exists.
-    bundle = next((b for b in CERT_BUNDLES if Path(b).is_file()), None)
+    bundle = next((b for b in CERT_BUNDLES if _readable_file(b)), None)
     if bundle is not None:
         env["SSL_CERT_FILE"] = bundle
     return env

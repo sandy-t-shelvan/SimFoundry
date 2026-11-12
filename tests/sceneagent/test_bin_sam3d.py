@@ -192,3 +192,19 @@ def test_the_worker_uses_the_first_ca_bundle_that_exists(tmp_path, monkeypatch):
     assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(second)
     first.write_text("certs")
     assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(first)
+
+
+def test_an_unreadable_bundle_path_counts_as_missing(tmp_path, monkeypatch):
+    from sceneagent import bin_sam3d
+
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "a.pem").write_text("certs")
+    locked.chmod(0)
+    try:
+        monkeypatch.setattr(bin_sam3d, "CERT_BUNDLES", (str(locked / "a.pem"),))
+        if bin_sam3d._readable_file(str(locked / "a.pem")):
+            return  # root can stat it anyway; nothing to check here
+        assert "SSL_CERT_FILE" not in bin_sam3d.worker_environment({})
+    finally:
+        locked.chmod(0o755)
