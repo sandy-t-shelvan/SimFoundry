@@ -190,8 +190,10 @@ def _install_stub(
     _install_media_stubs(directory)
     stub = directory / "colmap"
     needle = 'sys.stdout.write("COLMAP 3.11.1 -- Structure-from-Motion\\n")'
-    text = _STUB if banner == "COLMAP 3.11.1 -- Structure-from-Motion\n" else _STUB.replace(
-        needle, "sys.stdout.write(%r)" % banner, 1
+    text = (
+        _STUB
+        if banner == "COLMAP 3.11.1 -- Structure-from-Motion\n"
+        else _STUB.replace(needle, "sys.stdout.write(%r)" % banner, 1)
     )
     stub.write_text(text, encoding="utf-8")
     stub.chmod(0o755)
@@ -219,7 +221,9 @@ def test_repo_gate_thresholds_stay_the_published_bar():
     assert REG_FRACTION == 0.8
     assert MIN_OBS_PER_IMAGE == 30.0
     assert MAX_REPROJ_PX == 4.0
-    source = (ROOT / "sceneagent" / "sf5_colmap_evidence.py").read_text(encoding="utf-8")
+    source = (ROOT / "sceneagent" / "sf5_colmap_evidence.py").read_text(
+        encoding="utf-8"
+    )
     assert "MIN_REG_FLOOR" not in source
     assert "MAX_REPROJ_PX" not in source
 
@@ -308,7 +312,13 @@ def test_run_poses_forwards_native_frames_and_rejects_a_filter(tmp_path, monkeyp
     assert result["color_calibrate"] is True
     assert_native_argv(seen[0])
     with pytest.raises(ValueError):
-        run_poses(tmp_path / "clip.mp4", tmp_path / "work", fps=1, max_frames=0, native_frames=True)
+        run_poses(
+            tmp_path / "clip.mp4",
+            tmp_path / "work",
+            fps=1,
+            max_frames=0,
+            native_frames=True,
+        )
 
 
 def test_forbidden_paths_are_rejected_before_stat(monkeypatch):
@@ -467,21 +477,25 @@ def test_real_run_rejects_a_wrong_target_without_creating_the_prefix():
     )
     assert code == 2
     assert not (ROOT / "cut1-gpu").exists()
-    assert not Path("/workspace/cut1-gpu").exists() or os.path.islink(
-        "/workspace"
-    )
+    assert not Path("/workspace/cut1-gpu").exists() or os.path.islink("/workspace")
 
 
 def test_missing_hash_and_other_paths_are_rejected(tmp_path):
     video, digest = _synthetic_video(tmp_path)
     wrong = _dry_request(tmp_path, video, "0" * 64)
     assert execute(wrong) == 2
-    ledger = json.loads((tmp_path / "out" / "run" / "ledger.json").read_text(encoding="utf-8"))
+    ledger = json.loads(
+        (tmp_path / "out" / "run" / "ledger.json").read_text(encoding="utf-8")
+    )
     assert ledger["input"]["hash_match"] is False
     assert ledger["decision"] == "reject"
     assert ledger["counts_as_fruits_evidence"] is False
     assert not (tmp_path / "out" / "run" / "colmap").exists()
-    recorded = (tmp_path / "out" / "run" / "ledger.sha256").read_text(encoding="utf-8").split()[0]
+    recorded = (
+        (tmp_path / "out" / "run" / "ledger.sha256")
+        .read_text(encoding="utf-8")
+        .split()[0]
+    )
     body = (tmp_path / "out" / "run" / "ledger.json").read_bytes()
     assert recorded == hashlib.sha256(body).hexdigest()
     refused = tmp_path / "foreign"
@@ -522,11 +536,12 @@ def test_reuse_and_version_and_gate_failure(tmp_path, monkeypatch):
     assert execute(_dry_request(tmp_path, video, digest, output_prefix=str(stale))) == 2
     assert planted.read_text(encoding="utf-8") == "old-host-model\n"
     _install_stub(tmp_path / "bin", banner="COLMAP 4.2.1 -- Structure-from-Motion\n")
-    monkeypatch.setenv(
-        "PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"]
-    )
+    monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
     wrong_version = tmp_path / "version-out"
-    assert execute(_dry_request(tmp_path, video, digest, output_prefix=str(wrong_version))) == 2
+    assert (
+        execute(_dry_request(tmp_path, video, digest, output_prefix=str(wrong_version)))
+        == 2
+    )
     assert not (wrong_version / "colmap").exists()
     ledger = json.loads((wrong_version / "ledger.json").read_text(encoding="utf-8"))
     assert ledger["colmap_version"] == "4.2.1"
@@ -579,9 +594,12 @@ def test_offline_dry_run_registers_every_native_frame(tmp_path, monkeypatch):
     assert all(row["source"] == "offline_fixture" for row in before)
     assert all(row["min_free_mib"] >= 6144 for row in before)
     assert all(row["exact_true_peak"] is False for row in before)
-    assert ledger["code_sha"] == subprocess.check_output(
-        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
-    ).strip()
+    assert (
+        ledger["code_sha"]
+        == subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+        ).strip()
+    )
     assert ledger["base_sha"] == PINNED_BASE_SHA
     evidence = ledger["reconstruction_evidence"]
     assert evidence["gate_pass"] is True
@@ -596,7 +614,9 @@ def test_offline_dry_run_registers_every_native_frame(tmp_path, monkeypatch):
         if name == "SHA256SUMS":
             continue
         assert f"{digest_hex}  {name}" in sums
-        assert hashlib.sha256((evidence_dir / name).read_bytes()).hexdigest() == digest_hex
+        assert (
+            hashlib.sha256((evidence_dir / name).read_bytes()).hexdigest() == digest_hex
+        )
     recorded = (output / "ledger.sha256").read_text(encoding="utf-8").split()[0]
     assert recorded == hashlib.sha256((output / "ledger.json").read_bytes()).hexdigest()
     assert gate_accepted({"ok": True, "reconstruction_gate": {"pass": True}}) is True
@@ -643,7 +663,9 @@ def test_absent_budget_stops_before_the_video_probe(tmp_path, monkeypatch):
     monkeypatch.setattr("sceneagent.sf5_colmap_evidence._ffprobe", boom)
     code = execute(_dry_request(tmp_path, video, digest, gpu_free_mib_min=None))
     assert code == 4
-    ledger = json.loads((tmp_path / "out" / "run" / "ledger.json").read_text(encoding="utf-8"))
+    ledger = json.loads(
+        (tmp_path / "out" / "run" / "ledger.json").read_text(encoding="utf-8")
+    )
     assert ledger["process_exit"] == 4
     assert ledger["config"]["gpu_budget_approved"] is False
     assert "6144" in ledger["reason"]
@@ -750,10 +772,20 @@ def test_native_run_passes_the_scaled_timeout(tmp_path, monkeypatch):
         raise EvidenceError("stop after reading the timeout")
 
     monkeypatch.setattr("sceneagent.sf5_colmap_evidence.run_poses", fake_run_poses)
-    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(tmp_path / "timeout" / "run")))
+    code = execute(
+        _dry_request(
+            tmp_path, video, digest, output_prefix=str(tmp_path / "timeout" / "run")
+        )
+    )
     assert code == 2
-    assert seen["colmap_timeout_s"] == native_timeouts(probed["frames"])["colmap_timeout_s"]
-    assert seen["ffmpeg_timeout_s"] == native_timeouts(probed["frames"])["ffmpeg_timeout_s"]
+    assert (
+        seen["colmap_timeout_s"]
+        == native_timeouts(probed["frames"])["colmap_timeout_s"]
+    )
+    assert (
+        seen["ffmpeg_timeout_s"]
+        == native_timeouts(probed["frames"])["ffmpeg_timeout_s"]
+    )
     assert seen["colmap_timeout_s"] > 900
 
 
@@ -859,7 +891,9 @@ def test_timed_out_stage_reaps_a_child_that_ignores_terminate():
 
 
 def test_during_sample_does_not_stop_colmap():
-    assert during_sample_is_terminal({"meets_budget": False, "min_free_mib": 1}) is False
+    assert (
+        during_sample_is_terminal({"meets_budget": False, "min_free_mib": 1}) is False
+    )
 
 
 def test_gpu_stage_drains_pipes_while_sampling(tmp_path):
@@ -1017,9 +1051,7 @@ def test_gpu_query_timeout_fails_closed_and_stops_only_our_stage_child(
     sleeper.chmod(0o755)
     monkeypatch.setenv("SF5_GPU_QUERY_LOG", str(query_log))
     monkeypatch.setenv("PATH", str(query_bin) + os.pathsep + os.environ["PATH"])
-    monkeypatch.setattr(
-        "sceneagent.sf5_colmap_evidence.GPU_QUERY_TIMEOUT_S", 0.2
-    )
+    monkeypatch.setattr("sceneagent.sf5_colmap_evidence.GPU_QUERY_TIMEOUT_S", 0.2)
     stage_stamp = tmp_path / "stage-stamp.txt"
     stage = tmp_path / "stage.py"
     stage.write_text(
@@ -1059,6 +1091,7 @@ def test_gpu_query_timeout_fails_closed_and_stops_only_our_stage_child(
     )
     try:
         assert sentinel.stdout.readline().strip() == "ready"
+
         def sample():
             _nvidia_smi(list(GPU_FREE_ARGV))
 
@@ -1098,14 +1131,38 @@ def test_gpu_query_timeout_fails_closed_and_stops_only_our_stage_child(
     def raise_query_timeout(*_args, **_kwargs):
         raise GpuQueryTimeout("gpu_query_timeout")
 
-    monkeypatch.setattr(
-        "sceneagent.sf5_colmap_evidence.run_poses", raise_query_timeout
-    )
+    monkeypatch.setattr("sceneagent.sf5_colmap_evidence.run_poses", raise_query_timeout)
     output = tmp_path / "query-timeout" / "run"
     code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
     assert code != 0
     ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
     assert ledger["reason"] == "gpu_query_timeout"
+
+
+def test_gpu_query_timeout_exits_3_not_2(tmp_path, monkeypatch):
+    """KAN-29. GpuQueryTimeout is a resource failure, exit 3.
+
+    The reason string is lowercase, so a classifier that only looks for
+    the letters GPU leaves this as identity exit 2.
+    """
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "ledger-bin")
+    monkeypatch.setenv(
+        "PATH", str(tmp_path / "ledger-bin") + os.pathsep + os.environ["PATH"]
+    )
+
+    def raise_query_timeout(*_args, **_kwargs):
+        raise GpuQueryTimeout("gpu_query_timeout")
+
+    monkeypatch.setattr("sceneagent.sf5_colmap_evidence.run_poses", raise_query_timeout)
+    output = tmp_path / "query-timeout-exit" / "run"
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert code == 3
+    assert ledger["process_exit"] == 3
+    assert ledger["reason"] == "gpu_query_timeout"
+    assert code != 2
+    assert code != 4
 
 
 def test_colmap_crash_reason_includes_return_code(tmp_path, monkeypatch):
@@ -1149,7 +1206,9 @@ def test_colmap_crash_reason_includes_return_code(tmp_path, monkeypatch):
 
 
 def test_package_source_does_not_control_other_processes():
-    source = (ROOT / "sceneagent" / "sf5_colmap_evidence.py").read_text(encoding="utf-8")
+    source = (ROOT / "sceneagent" / "sf5_colmap_evidence.py").read_text(
+        encoding="utf-8"
+    )
     for banned in ("os.kill", "pkill", "shell=True", "query-compute-apps"):
         assert banned not in source
     assert shutil.which("nvidia-smi") is None or gpu_query_is_aggregate(GPU_FREE_ARGV)

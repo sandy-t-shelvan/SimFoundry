@@ -956,6 +956,12 @@ def execute(request: dict[str, Any]) -> int:
         kind = "forbidden" if isinstance(exc, ForbiddenPathError) else "identity"
         if isinstance(exc, GpuBudgetError):
             kind = "gpu_budget"
+        elif isinstance(exc, GpuQueryTimeout):
+            # The message is lowercase gpu_query_timeout, so the "GPU"
+            # substring below does not see it. The type is a resource
+            # failure (exit 3), not an identity failure (exit 2). A short
+            # budget stays exit 4 on GpuBudgetError above.
+            kind = "resource"
         elif "COLMAP" in str(exc):
             kind = "version"
         elif "GPU" in str(exc):
