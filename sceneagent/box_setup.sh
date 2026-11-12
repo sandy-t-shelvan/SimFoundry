@@ -60,14 +60,13 @@ SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
 # HEAD of the checkout that finished s_sam3d on 60254439.
 SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
-# Isaac Lab v3.0.0 documents Isaac Sim 6.2.0.0 from pip and Python 3.12.
-# The tag commit is pinned so a moved tag cannot change the install.
-# Pip Isaac Sim needs glibc 2.35; this image is Ubuntu 22.04. The driver
-# minimum that release documents is 580. The simfoundry conda env is a
+# Isaac Lab v2.3.2 documents Isaac Sim 5.1.0 from pip. The tag commit is
+# pinned so a moved tag cannot change the install. Pip Isaac Sim needs
+# glibc 2.35; this image is Ubuntu 22.04. The simfoundry conda env is a
 # different install and is not used here.
-ISAACSIM_PIP=6.2.0.0
-ISAACLAB_TAG=v3.0.0
-ISAACLAB_COMMIT=e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4
+ISAACSIM_PIP=5.1.0
+ISAACLAB_TAG=v2.3.2
+ISAACLAB_COMMIT=37ddf626871758333d6ed89cf64ad702aef127d0
 ISAACLAB_ROOT=/workspace/IsaacLab
 ISAACLAB_ENV="$ENVS/isaaclab"
 STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
@@ -253,12 +252,7 @@ s_isaaclab() {
   echo "glibc $glibc"
   awk -v v="$glibc" 'BEGIN {n=split(v,a,"."); if (n<2 || a[1]+0<2 || (a[1]+0==2 && a[2]+0<35)) exit 1}' \
     || { echo "Isaac Sim pip needs glibc 2.35 or newer (found $glibc)" >&2; return 1; }
-  # Lab 3 refuses any interpreter other than 3.12. An env left from the
-  # 5.1 install is 3.11, so a version mismatch is replaced rather than reused.
-  if ! "$ISAACLAB_ENV/bin/python3" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3, 12) else 1)' 2>/dev/null; then
-    rm -rf "$ISAACLAB_ENV"
-    "$MAMBA" create -y -p "$ISAACLAB_ENV" python=3.12
-  fi
+  [ -x "$ISAACLAB_ENV/bin/python3" ] || "$MAMBA" create -y -p "$ISAACLAB_ENV" python=3.11
   export PATH="$ISAACLAB_ENV/bin:$PATH"
   export CONDA_PREFIX="$ISAACLAB_ENV"
   # The installer prompts on first launch. This is the variable it documents.
