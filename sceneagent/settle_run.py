@@ -30,6 +30,7 @@ import time
 import traceback
 import zlib
 from pathlib import Path
+from typing import Any
 
 ITEM = "Isaac Lab settle"
 SETTLE_S = 2.0
@@ -43,7 +44,7 @@ RESULT = "settle.json"
 FRAME = "settle_frame.png"
 
 
-def judge(objects: dict[str, dict[str, float]]) -> tuple[str, str]:
+def judge(objects: dict[str, dict[str, Any]]) -> tuple[str, str]:
     """Accept when every object is at rest and above the ground."""
     if not objects:
         return "reject", "no object was simulated"
