@@ -136,6 +136,19 @@ def test_masks_made_before_joined_phrases_were_dropped_run_again(tmp_path):
     assert video_run.stage_done(out, "masks", ("SAM masks",))
 
 
+def test_association_before_same_phrase_grouping_runs_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["Gaussian association"])
+    items = ("Gaussian association",)
+    (out / "association_evidence.json").write_text(json.dumps({"rule": {}}))
+    assert not video_run.stage_done(out, "association", items)
+    rule = {"rule": {"grouping": {"same_phrase": True}}}
+    (out / "association_evidence.json").write_text(json.dumps(rule))
+    assert video_run.stage_done(out, "association", items)
+
+
 def test_an_export_without_object_boxes_runs_again(tmp_path):
     out = tmp_path / "mailbox"
     out.mkdir()

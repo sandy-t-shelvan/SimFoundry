@@ -28,6 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from sceneagent.bin_association import SAME_PHRASE
 from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
 
@@ -70,8 +71,9 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     """Accepted in the ledger; the pose stage also needs its finished scene.json.
 
     run4 accepts the poses before the mask views are staged, so a run that
-    stopped between the two must pose again rather than skip. The mask and
-    export stages also need evidence written by their current rules.
+    stopped between the two must pose again rather than skip. The mask,
+    association and export stages also need evidence written by their
+    current rules.
     """
     if not accepted(out, items):
         return False
@@ -82,6 +84,10 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         # does every stage after them.
         evidence = _evidence(out, "masks_evidence.json")
         return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
+    if name == "association":
+        # Association made before differing phrases stopped merging.
+        grouping = _evidence(out, "association_evidence.json").get("rule", {})
+        return grouping.get("grouping", {}).get(SAME_PHRASE) is True
     if name == "export":
         # An export made before it recorded each object's box runs again, so
         # a settle reject can say what the bodies were doing.

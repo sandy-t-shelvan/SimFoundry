@@ -105,6 +105,9 @@ KAPPA_RULE = (
 # 5 objects for 2, run 43296115235). The bin keeps every object, so its
 # score does not move.
 MIN_OBJECT_VIEWS = 3
+# association_evidence.json rule.grouping key; video_run reruns association
+# made before it existed.
+SAME_PHRASE = "same_phrase"
 EXTENT_PERCENTILES = (5.0, 95.0)
 EXTENT_RULE = (
     "ours: the paper does not define e; longest side of the 5th-95th percentile "
@@ -303,13 +306,18 @@ def set_extent(points: np.ndarray) -> float:
 
 
 def group_masks(
-    masks: list[dict[str, Any]], positions: np.ndarray
+    masks: list[dict[str, Any]], positions: np.ndarray, *, same_phrase: bool = False
 ) -> tuple[list[list[int]], list[dict[str, Any]]]:
     """Connected components of ``masks_same_object`` over masks of different views.
 
     Each mask is ``{"view": str, "gaussians": int array}``; empty ones never join.
     Returns the components (mask positions in ``masks``) and every pair that
     shares a Gaussian, with whether it passed each cut and merged.
+
+    With ``same_phrase`` (ours, video scenes), masks whose GroundingDINO
+    phrases differ never merge: Mailbox.mp4 joined 7 "cube" masks into the
+    mailbox (run 43309011103). The bin's category prompt can name one object
+    differently in different views, so it keeps the paper's cuts alone.
     """
     centroid, extent = {}, {}
     for i, mask in enumerate(masks):
@@ -338,6 +346,10 @@ def group_masks(
         distance = float(np.linalg.norm(centroid[a] - centroid[b]))
         e = min(extent[a], extent[b])
         same = masks_same_object(distance, e, containment, jaccard)
+        phrases_differ = same_phrase and masks[a].get("phrase") != masks[b].get(
+            "phrase"
+        )
+        same = same and not phrases_differ
         if same:
             parent[root(a)] = root(b)
         pairs.append(
@@ -350,6 +362,7 @@ def group_masks(
                 "close": distance <= centroid_threshold(e),
                 "overlap": containment >= CONTAINMENT_MIN or jaccard >= JACCARD_MIN,
                 "merged": same,
+                **({"phrases_differ": True} if phrases_differ else {}),
             }
         )
     components: dict[int, list[int]] = {}
@@ -524,8 +537,9 @@ def associate(
         stats["kept_per_mask"] = [int(sets[d["mask_index"]].size) for d in kept]
         views[view] = stats
 
-    components, pairs = group_masks(masks, positions * to_paper)
-    min_views = 1 if scene == BIN_SCENE else MIN_OBJECT_VIEWS
+    video = scene != BIN_SCENE
+    components, pairs = group_masks(masks, positions * to_paper, same_phrase=video)
+    min_views = MIN_OBJECT_VIEWS if video else 1
     dropped = []
     for members in components:
         seen = len({masks[i]["view"] for i in members})
@@ -583,6 +597,7 @@ def associate(
         "merged_pairs": [p for p in pairs if p["merged"]],
         "objects": objects,
         "min_object_views": min_views,
+        "same_phrase": video,
         "dropped_objects": dropped,
         "scene": scene.name,
         "ground_truth": scene.ground_truth,
@@ -643,6 +658,7 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
                 "jaccard_min": JACCARD_MIN,
                 "e": EXTENT_RULE,
                 "pairs": "masks of different views only; objects are connected components",
+                SAME_PHRASE: result.get("same_phrase", False),
             },
             "kappa": KAPPA,
             "kappa_rule": KAPPA_RULE,
