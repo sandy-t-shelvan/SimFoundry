@@ -64,6 +64,8 @@ module = [
     "scipy.*",
     "psutil",
     "psutil.*",
+    "isaacsim",
+    "isaacsim.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
