@@ -112,12 +112,12 @@ def context(out: Path, result: dict) -> str:
         f"object_{o['object']}": o
         for o in _read(out / "bin_score.json").get("icp", {}).get("objects", [])
     }
-    gates = [b.get("gate") for b in boxes.values()]
+    left_out = export.get("excluded_gate_rejects", {})
     parts = [
         (
             f"association {export.get('association_objects')} objects "
             f"({export.get('association_dropped')} dropped under 3 views); "
-            f"exported {len(boxes)}, ICP gate accept {gates.count('accept')}"
+            f"exported {len(boxes)}, {len(left_out)} left out by the ICP gate"
         )
     ]
     for name, motion in sorted(result.get("objects", {}).items()):

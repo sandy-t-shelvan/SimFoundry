@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle]
         default: run4
   pull_request_target:
     types: [labeled]
@@ -227,7 +227,13 @@ jobs:
           name: sceneagent-fruits-failure-manifest
           retention-days: 14
           if-no-files-found: error
-          path: sf4-artifacts/manifest.json
+          # A stage reject has already passed publish_artifacts' key scan.
+          # The settle's result and frame show why physics rejected
+          # (Sandeep, 2026-11-12); plan and ledger stay success-only.
+          path: |
+            sf4-artifacts/manifest.json
+            sf4-artifacts/settle.json
+            sf4-artifacts/settle_frame.png
 
   label_cleanup:
     name: label-cleanup

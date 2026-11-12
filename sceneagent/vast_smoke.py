@@ -204,6 +204,16 @@ PIPELINES = {
         ),
         "GraspClutter6D 000091",
     ),
+    "bin_settle": (
+        (
+            "benchmark scene",
+            "SAM 3D meshes",
+            "ICP residuals",
+            "USD physics export",
+            "Isaac Lab settle",
+        ),
+        "GraspClutter6D 000091",
+    ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
@@ -238,6 +248,7 @@ BIN_PIPELINES = frozenset(
         "review_vlm",
         "review_candidates",
         "review_accept",
+        "bin_settle",
         "mapper",
     }
 )
@@ -845,6 +856,8 @@ def build_remote_command(
             "--accept",
             f"{repo}/{ACCEPT_VERDICTS_RELATIVE}",
         ]
+    if pipeline == "bin_settle":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_settle", "--out", out]
     if pipeline == "mapper":
         return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
     if pipeline == "probe":

@@ -88,13 +88,20 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
                         {
                             "object": 0,
                             "placed": True,
+                            "gate": "accept",
                             "glb": str(glb),
                             "similarity": {
                                 "scale": 1.0,
                                 "rotation": np.eye(3).tolist(),
                                 "translation": [0, 0, 0],
                             },
-                        }
+                        },
+                        {
+                            "object": 1,
+                            "placed": True,
+                            "gate": "reject",
+                            "gate_failed": ["coverage"],
+                        },
                     ]
                 }
             }
@@ -119,6 +126,9 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
     box = evidence["object_boxes"]["object_0"]
     assert abs(box["bottom_z_m"]) < 0.01 and min(box["size_m"]) > 0
     assert evidence["overlapping_boxes"] == []
+    # A gate reject never reaches physics, but is listed with what failed.
+    assert evidence["excluded_gate_rejects"] == {"object_1": ["coverage"]}
+    assert "object_1" not in evidence["object_boxes"]
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
     assert entry["item"] == physics_export.EXPORT_ITEM and entry["decision"] == "accept"
 
@@ -189,6 +199,7 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
                 "objects": [{"prim": "/World/object_1", "route": "physx"}],
                 "association_objects": 3,
                 "association_dropped": 4,
+                "excluded_gate_rejects": {"object_2": ["p90"]},
                 "object_boxes": {
                     "object_1": {
                         "size_m": [0.2, 0.1, 0.3],
@@ -241,10 +252,65 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
     assert reason.startswith("still moving after 2 s: object_1 0.022 m/s | ")
     for piece in (
         "association 3 objects (4 dropped under 3 views)",
-        "exported 1, ICP gate accept 0",
+        "exported 1, 1 left out by the ICP gate",
         "object_1: 0.20x0.10x0.30 m, bottom -0.004 m, gate reject ['p90']",
         "found as cube x1, mailbox x3 in 4 views",
         "v 0.050->0.022 m/s, w ? rad/s",
         "overlapping boxes: object_1~object_2",
     ):
         assert piece in reason
+
+
+def test_export_with_no_gate_accepted_object_rejects_and_says_so(tmp_path, monkeypatch):
+    import sceneagent.bin_association as association
+
+    monkeypatch.setattr(association, "read_ply_xyz", lambda path: np.zeros((4, 3)))
+    rejected = {"object": 0, "placed": True, "gate": "reject"}
+    (tmp_path / "bin_score.json").write_text(
+        json.dumps({"icp": {"objects": [rejected]}})
+    )
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps({"splat_unit_m": 0.5})
+    )
+    (tmp_path / "splat_evidence.json").write_text(json.dumps({"ply": "splat.ply"}))
+    (tmp_path / "association").mkdir()
+    np.savez(tmp_path / "association" / "objects.npz", object_0=np.arange(2))
+    assert physics_export.export_run(tmp_path) == 1
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert "no placed object passed the ICP gate (1 rejected)" in entry["reason"]
+
+
+def test_bin_settle_runs_the_settle_only_after_an_accepted_export(tmp_path):
+    from sceneagent.bin_settle import run_bin_settle
+
+    calls = []
+
+    def settle(out):
+        calls.append(out)
+        return 0
+
+    assert run_bin_settle(tmp_path, export=lambda out: 1, settle=settle) == 1
+    assert calls == []
+    assert run_bin_settle(tmp_path, export=lambda out: 0, settle=settle) == 0
+    assert calls == [tmp_path]
+
+
+def test_the_bin_settle_pipeline_runs_in_the_bin_dir():
+    from sceneagent.vast_smoke import (
+        PIPELINES,
+        REMOTE_BIN_OUT,
+        REMOTE_PYTHON,
+        build_remote_command,
+        remote_out,
+    )
+
+    assert remote_out("bin_settle") == REMOTE_BIN_OUT
+    argv = build_remote_command("/w/repo", REMOTE_BIN_OUT, pipeline="bin_settle")
+    assert argv == [
+        REMOTE_PYTHON,
+        "-m",
+        "sceneagent.bin_settle",
+        "--out",
+        REMOTE_BIN_OUT,
+    ]
+    assert PIPELINES["bin_settle"][0][-2:] == ("USD physics export", "Isaac Lab settle")

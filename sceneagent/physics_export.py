@@ -628,7 +628,8 @@ def diagnose(
 def export_run(out: Path | str) -> int:
     """Export a placed run directory (bin or video) as USD and MJCF, gravity aligned.
 
-    Reads ``bin_score.json`` (each placed object's similarity), the SAM 3D
+    Reads ``bin_score.json`` (each placed object's similarity; objects that
+    failed the ICP gate are left out and listed), the SAM 3D
     GLBs, the splat Gaussians and their object sets, and the splat unit in
     metres from association. The support plane comes from the Gaussians
     that are in no object. Physics records come from ``physics/object_<n>.json``
@@ -664,8 +665,15 @@ def export_run(out: Path | str) -> int:
         placed: list[PlacedObject] = []
         clouds: list[np.ndarray] = []
         in_objects = np.zeros(len(positions), dtype=bool)
+        excluded: dict[str, Any] = {}
         for record in placement["icp"]["objects"]:
             if not record.get("placed"):
+                continue
+            if record.get("gate") != "accept":
+                # Sandeep's call (2026-11-12): physics sees only poses the
+                # pipeline trusts. Mailbox's gate rejects sent a 1 m body into
+                # the ground (run 43309011103).
+                excluded[f"object_{record['object']}"] = record.get("gate_failed")
                 continue
             number = record["object"]
             vertices, faces = load_glb(record["glb"])
@@ -691,7 +699,9 @@ def export_run(out: Path | str) -> int:
             in_objects[ids] = True
             clouds.append(positions[ids])
         if not placed:
-            raise ValueError("no placed object to export")
+            raise ValueError(
+                f"no placed object passed the ICP gate ({len(excluded)} rejected)"
+            )
         support = support_frame(positions[~in_objects], clouds, SUPPORT_BAND_M / metres)
         frame = support["world_from_scene"]
         stage = write_physics_stage(
@@ -718,12 +728,9 @@ def export_run(out: Path | str) -> int:
             obj.name: round(float(stage_points(obj, metres, frame)[:, 2].min()), 4)
             for obj in placed
         }
-        gates = {
-            f"object_{r['object']}": r.get("gate")
-            for r in placement["icp"]["objects"]
-            if r.get("placed")
-        }
+        gates = {obj.name: "accept" for obj in placed}
         evidence.update(diagnose(placed, metres, frame, gates))
+        evidence["excluded_gate_rejects"] = excluded
         evidence.update(
             association_objects=association.get("objects"),
             association_dropped=len(association.get("dropped_objects", [])),
@@ -742,6 +749,7 @@ def export_run(out: Path | str) -> int:
             decision="accept",
             use_gpu=False,
             objects=len(placed),
+            excluded_gate_rejects=len(excluded),
             support_plane=support["chosen"],
             physics_records=evidence["physics_records"],
         )
