@@ -217,6 +217,8 @@ PIPELINES = {
             "Gaussian association",
             "SAM 3D meshes",
             "ICP residuals",
+            "USD physics export",
+            "Isaac Lab settle",
         ),
         MAILBOX_RELATIVE,
     ),
@@ -332,6 +334,9 @@ FETCH_NAMES = (
     "isaaclab_render.log",
     "video_run.json",
     "scene.json",
+    "export_evidence.json",
+    "settle.json",
+    "settle_frame.png",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -363,6 +368,9 @@ PUBLISHED_NAMES = frozenset(
         "isaaclab_render.log",
         "video_run.json",
         "scene.json",
+        "export_evidence.json",
+        "settle.json",
+        "settle_frame.png",
     }
 )
 PUBLIC_FIELDS = (

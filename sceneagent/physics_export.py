@@ -316,6 +316,7 @@ def write_physics_stage(
     metres_per_unit: float = 1.0,
     world_from_scene: np.ndarray | None = None,
     ground_z_m: float | None = 0.0,
+    physics_scene: bool = True,
 ) -> dict[str, Any]:
     """Write the placed bin as a USD physics stage; return what was written.
 
@@ -362,12 +363,17 @@ def write_physics_stage(
         "",
         'def Xform "World"',
         "{",
-        '    def PhysicsScene "physicsScene"',
-        "    {",
-        "        vector3f physics:gravityDirection = (0, 0, -1)",
-        "        float physics:gravityMagnitude = 9.81",
-        "    }",
     ]
+    # Left out when the stage is referenced into a simulator that has its own
+    # (Isaac Lab's settle): two physics scenes in one stage is ambiguous.
+    if physics_scene:
+        lines += [
+            '    def PhysicsScene "physicsScene"',
+            "    {",
+            "        vector3f physics:gravityDirection = (0, 0, -1)",
+            "        float physics:gravityMagnitude = 9.81",
+            "    }",
+        ]
     if ground_z_m is not None:
         half = GROUND_HALF_EXTENT_M
         thick = GROUND_THICKNESS_M
@@ -484,3 +490,225 @@ def write_physics_mjcf(
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text("\n".join(xml), encoding="utf-8")
     return summary
+
+
+# Ours: the support plane's inlier band, in metres. A table is flat to well
+# under this; a wall or a bin side is a different plane.
+SUPPORT_BAND_M = 0.01
+SUPPORT_PLANES = 3
+EXPORT_ITEM = "USD physics export"
+
+
+def rotation_onto_z(normal: np.ndarray) -> np.ndarray:
+    """The rotation that takes unit ``normal`` onto +Z (Rodrigues)."""
+    n = np.asarray(normal, dtype=np.float64)
+    n = n / np.linalg.norm(n)
+    z = np.array([0.0, 0.0, 1.0])
+    axis = np.cross(n, z)
+    sin, cos = float(np.linalg.norm(axis)), float(n @ z)
+    if sin < 1e-12:
+        return np.eye(3) if cos > 0 else np.diag([1.0, -1.0, -1.0])
+    k = axis / sin
+    cross = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + sin * cross + (1 - cos) * cross @ cross
+
+
+def support_frame(
+    background: np.ndarray,
+    objects: Sequence[np.ndarray],
+    band: float,
+    *,
+    planes: int = SUPPORT_PLANES,
+    seed: int = 0,
+) -> dict[str, Any]:
+    """The plane the objects rest on, and the transform that makes it z = 0, +Z up.
+
+    Up to ``planes`` planes are peeled off the background points (each fit
+    with ``infill.fit_plane``, its inliers then removed). Each plane's normal
+    is turned towards the objects; the one the objects' lowest points sit
+    closest to (median over objects of the 2nd-percentile signed distance)
+    is the support. A wall the objects stand away from scores worse than the
+    table they stand on. The choice and every candidate are returned.
+    """
+    from sceneagent.infill import PlaneFitError, fit_plane
+
+    rest = np.asarray(background, dtype=np.float64)
+    centre = np.concatenate([np.asarray(o, dtype=np.float64) for o in objects]).mean(
+        axis=0
+    )
+    candidates: list[dict[str, Any]] = []
+    for _ in range(planes):
+        if len(rest) < 3:
+            break
+        try:
+            plane = fit_plane(rest, residual=band, seed=seed)
+        except PlaneFitError:
+            break
+        origin, normal = plane["origin"], plane["normal"]
+        if (centre - origin) @ normal < 0:
+            normal = -normal
+        lows = [
+            float(np.percentile((np.asarray(o) - origin) @ normal, 2)) for o in objects
+        ]
+        candidates.append(
+            {
+                "origin": origin,
+                "normal": normal,
+                "inliers": plane["n_inliers"],
+                "score": float(np.median(np.abs(lows))),
+                "object_lows": lows,
+            }
+        )
+        keep = np.ones(len(rest), dtype=bool)
+        keep[plane["inliers"]] = False
+        rest = rest[keep]
+    if not candidates:
+        raise ValueError("no support plane in the background points")
+    chosen = min(range(len(candidates)), key=lambda i: candidates[i]["score"])
+    best = candidates[chosen]
+    rotation = rotation_onto_z(best["normal"])
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    transform[:3, 3] = -rotation @ best["origin"]
+    return {
+        "world_from_scene": transform,
+        "chosen": chosen,
+        "candidates": [
+            {
+                "normal": [round(float(v), 5) for v in c["normal"]],
+                "origin": [round(float(v), 5) for v in c["origin"]],
+                "inliers": c["inliers"],
+                "score": round(c["score"], 5),
+            }
+            for c in candidates
+        ],
+    }
+
+
+def load_glb(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
+    """One vertex and face array for a GLB (all its meshes, in its own frame)."""
+    import trimesh
+
+    loaded = trimesh.load(str(path), force="mesh")
+    return np.asarray(loaded.vertices, dtype=np.float64), np.asarray(loaded.faces)
+
+
+def export_run(out: Path | str) -> int:
+    """Export a placed run directory (bin or video) as USD and MJCF, gravity aligned.
+
+    Reads ``bin_score.json`` (each placed object's similarity), the SAM 3D
+    GLBs, the splat Gaussians and their object sets, and the splat unit in
+    metres from association. The support plane comes from the Gaussians
+    that are in no object. Physics records come from ``physics/object_<n>.json``
+    when SF-34 has written them; without one an object takes this module's
+    defaults, and the export says so. Writes ``export/scene.usda``,
+    ``export/scene_settle.usda`` (no physics scene, no ground: for Isaac Lab),
+    ``export/scene.xml`` and ``export_evidence.json``, and one ledger item.
+    """
+    import json
+
+    from sceneagent.bin_association import read_ply_xyz
+    from sceneagent.bin_run import load_scene
+
+    out = Path(out)
+    scene = load_scene(out)
+    ledger_path = out / "ledger.json"
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ledger = {"entries": []}
+    entries = [e for e in ledger.get("entries", []) if e.get("item") != EXPORT_ITEM]
+    entry: dict[str, Any] = {"item": EXPORT_ITEM}
+    evidence: dict[str, Any] = {"scene": scene.name}
+    try:
+        placement = json.loads((out / "bin_score.json").read_text(encoding="utf-8"))
+        association = json.loads(
+            (out / "association_evidence.json").read_text(encoding="utf-8")
+        )
+        splat = json.loads((out / "splat_evidence.json").read_text(encoding="utf-8"))
+        metres = float(association["splat_unit_m"])
+        positions = read_ply_xyz(Path(splat["ply"]))
+        sets = np.load(out / "association" / "objects.npz")
+        placed: list[PlacedObject] = []
+        clouds: list[np.ndarray] = []
+        in_objects = np.zeros(len(positions), dtype=bool)
+        for record in placement["icp"]["objects"]:
+            if not record.get("placed"):
+                continue
+            number = record["object"]
+            vertices, faces = load_glb(record["glb"])
+            similarity = record["similarity"]
+            physics_path = out / "physics" / f"object_{number}.json"
+            properties = (
+                json.loads(physics_path.read_text(encoding="utf-8"))
+                if physics_path.is_file()
+                else {}
+            )
+            placed.append(
+                PlacedObject(
+                    name=f"object_{number}",
+                    vertices=vertices,
+                    faces=faces,
+                    scale=float(similarity["scale"]),
+                    rotation=np.asarray(similarity["rotation"], dtype=np.float64),
+                    translation=np.asarray(similarity["translation"], dtype=np.float64),
+                    properties=properties,
+                )
+            )
+            ids = sets[f"object_{number}"]
+            in_objects[ids] = True
+            clouds.append(positions[ids])
+        if not placed:
+            raise ValueError("no placed object to export")
+        support = support_frame(positions[~in_objects], clouds, SUPPORT_BAND_M / metres)
+        frame = support["world_from_scene"]
+        stage = write_physics_stage(
+            placed,
+            out / "export" / "scene.usda",
+            metres_per_unit=metres,
+            world_from_scene=frame,
+        )
+        write_physics_stage(
+            placed,
+            out / "export" / "scene_settle.usda",
+            metres_per_unit=metres,
+            world_from_scene=frame,
+            ground_z_m=None,
+            physics_scene=False,
+        )
+        write_physics_mjcf(
+            placed,
+            out / "export" / "scene.xml",
+            metres_per_unit=metres,
+            world_from_scene=frame,
+        )
+        lowest = {
+            obj.name: round(float(stage_points(obj, metres, frame)[:, 2].min()), 4)
+            for obj in placed
+        }
+        evidence.update(
+            metres_per_unit=metres,
+            support=support | {"world_from_scene": frame.round(6).tolist()},
+            objects=stage["objects"],
+            lowest_point_z_m=lowest,
+            physics_records=sum(
+                (out / "physics" / f"object_{o.name.split('_')[-1]}.json").is_file()
+                for o in placed
+            ),
+        )
+        entry.update(
+            decision="accept",
+            use_gpu=False,
+            objects=len(placed),
+            support_plane=support["chosen"],
+            physics_records=evidence["physics_records"],
+        )
+    except (OSError, ValueError, KeyError) as exc:
+        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
+    entries.append(entry)
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
+    ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    (out / "export_evidence.json").write_text(
+        json.dumps(evidence, indent=2, default=float) + "\n", encoding="utf-8"
+    )
+    return 0 if entry["decision"] == "accept" else 1

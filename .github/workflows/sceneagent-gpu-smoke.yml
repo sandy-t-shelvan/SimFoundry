@@ -212,6 +212,9 @@ jobs:
             sf4-artifacts/isaaclab_render.log
             sf4-artifacts/video_run.json
             sf4-artifacts/scene.json
+            sf4-artifacts/export_evidence.json
+            sf4-artifacts/settle.json
+            sf4-artifacts/settle_frame.png
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.

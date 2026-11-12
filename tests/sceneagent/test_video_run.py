@@ -141,7 +141,7 @@ def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
 
     funcs = {name: stage(name, items) for name, items in video_run.STAGES}
     assert video_run.run_video(tmp_path / "Mailbox.mp4", out, "x .", stages=funcs) == 0
-    assert calls == ["masks", "association", "sam3d", "place"]
+    assert calls == ["masks", "association", "sam3d", "place", "export", "settle"]
     record = json.loads((out / video_run.RECORD).read_text())
     assert record["complete"] and set(record["stages"]) == set(calls)
 
@@ -208,7 +208,11 @@ def test_the_mailbox_pipeline_has_its_own_dir_and_ships_the_video():
         "--out",
         REMOTE_MAILBOX_OUT,
     ]
-    assert PIPELINES["mailbox"][0][-1] == bin_place.ICP_ITEM
+    assert PIPELINES["mailbox"][0][-3:] == (
+        bin_place.ICP_ITEM,
+        "USD physics export",
+        "Isaac Lab settle",
+    )
     assert bin_place.SCORE_ITEM not in PIPELINES["mailbox"][0]
     for name in (video_run.RECORD, "scene.json"):
         assert name in FETCH_NAMES and name in PUBLISHED_NAMES
