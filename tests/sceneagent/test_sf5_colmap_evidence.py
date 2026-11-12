@@ -158,10 +158,10 @@ def _install_media_stubs(directory: Path, frames: int = _MEDIA_FRAMES) -> None:
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "from pathlib import Path\n"
-        "from PIL import Image\n"
         "if '-h' in sys.argv:\n"
         "    sys.stdout.write('-fps_mode passthrough\\n')\n"
         "    raise SystemExit(0)\n"
+        "from PIL import Image\n"
         "pattern = Path(sys.argv[-1])\n"
         "pattern.parent.mkdir(parents=True, exist_ok=True)\n"
         "image = Image.new('RGB', (8, 8), (40, 80, 120))\n"
@@ -1104,6 +1104,7 @@ def test_gpu_query_timeout_fails_closed_and_stops_only_our_stage_child(
     output = tmp_path / "query-timeout" / "run"
     code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
     assert code != 0
+    assert code == 3
     ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
     assert ledger["reason"] == "gpu_query_timeout"
 
