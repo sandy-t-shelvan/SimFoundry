@@ -129,7 +129,8 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "from groundingdino import _C" not in text  # same .so twice aborts
     assert "pipdeptree==2.28.0" in text and "PIP_CONSTRAINT" in text
     da3 = text.split("s_da3() {", 1)[1].split("\n}", 1)[0]
-    assert da3.index('install -e "$DA3_ROOT"') < da3.index("install numpy==2.4.6")
+    assert da3.index('install -e "$DA3_ROOT"') < da3.index("install numpy==2.4.6 addict")
+    assert "export_to_gs_ply" in da3
     # 4.x replaces torch 2.5.1, so the package pin follows the torch pin.
     sa = text.split("s_env_sa() {", 1)[1].split("\n}", 1)[0]
     assert sa.index("torch==2.5.1") < sa.index("open_clip_torch==3.3.0")
