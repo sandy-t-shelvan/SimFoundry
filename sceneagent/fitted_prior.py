@@ -83,7 +83,9 @@ CONSTANT_OPACITY = 0.99
 MIN_ROWS = 32
 DINO_ID = "vit_small_patch14_dinov2.lvd142m"
 CLIP_ID = "ViT-B-16 openai"
-TEXTURE_SIDE_MAX = 1024  # the prior thumbnails a larger texture, which would blur the atlas
+TEXTURE_SIDE_MAX = (
+    1024  # the prior thumbnails a larger texture, which would blur the atlas
+)
 ATLAS_NOTE = "ours: per-face flat texture atlas from SAM 3D vertex colours"
 
 Runner = Callable[..., Any]
@@ -235,9 +237,9 @@ def ensure_uv_texture(glb: Path, dest: Path) -> tuple[Path, str]:
     atlas[rows, cols] = np.clip(np.rint(face_rgb), 0, 255).astype(np.uint8)
     # The prior samples x = u * (w - 1) and y = (1 - v) * (h - 1); these UVs
     # land on the pixel centres exactly, so no neighbour bleeds in.
-    face_uv = np.stack(
-        [cols / (side - 1), 1.0 - rows / (side - 1)], axis=1
-    ).astype(np.float64)
+    face_uv = np.stack([cols / (side - 1), 1.0 - rows / (side - 1)], axis=1).astype(
+        np.float64
+    )
     vertices = np.asarray(mesh.vertices)[faces].reshape(-1, 3)
     new_faces = np.arange(3 * count).reshape(count, 3)
     new_uv = np.repeat(face_uv, 3, axis=0)
@@ -280,7 +282,12 @@ def driver_env(base: dict[str, str] | None, prior_repo: Path) -> dict[str, str]:
     env = dict(os.environ if base is None else base)
     env["PYTHONPATH"] = str(prior_repo)
     env["PATH"] = os.pathsep.join(
-        [str(Path(FIT_PYTHON).parent), COLMAP_BIN, f"{CUDA_HOME}/bin", env.get("PATH", "")]
+        [
+            str(Path(FIT_PYTHON).parent),
+            COLMAP_BIN,
+            f"{CUDA_HOME}/bin",
+            env.get("PATH", ""),
+        ]
     )
     env["CUDA_HOME"] = CUDA_HOME
     env["HF_HUB_CACHE"] = HF_CACHE
@@ -303,7 +310,11 @@ def run_fitted_prior(
     entry: dict[str, Any] = {"item": ITEM, "use_gpu": True}
     evidence: dict[str, Any] = {
         "scene": SCENE,
-        "prior": {"url": PRIOR_URL, "pinned": PRIOR_COMMIT, "entry": "fitted_splat._convert_one"},
+        "prior": {
+            "url": PRIOR_URL,
+            "pinned": PRIOR_COMMIT,
+            "entry": "fitted_splat._convert_one",
+        },
         "objects": [],
     }
     try:
@@ -343,7 +354,8 @@ def run_fitted_prior(
         jobs_path = root / "jobs.json"
         root.mkdir(parents=True, exist_ok=True)
         jobs_path.write_text(
-            json.dumps({"objects": jobs, "results": str(results_path)}, indent=2) + "\n",
+            json.dumps({"objects": jobs, "results": str(results_path)}, indent=2)
+            + "\n",
             encoding="utf-8",
         )
         results_path.unlink(missing_ok=True)
@@ -376,7 +388,11 @@ def run_fitted_prior(
                 evidence["objects"].append(row)
                 continue
             summary = record.get("summary", {})
-            pack_path = Path(summary.get("prior_input", root / f"object_{number}" / "prior_input.npy"))
+            pack_path = Path(
+                summary.get(
+                    "prior_input", root / f"object_{number}" / "prior_input.npy"
+                )
+            )
             try:
                 checked = validate_pack(np.load(pack_path))
             except (OSError, ValueError) as exc:
@@ -402,17 +418,27 @@ def run_fitted_prior(
             failed=len(failed),
             meshed=len(jobs),
             prior_commit=commit,
-            encoders={k: v.get("id") for k, v in (results.get("encoders") or {}).items()},
+            encoders={
+                k: v.get("id") for k, v in (results.get("encoders") or {}).items()
+            },
         )
         if failed:
             entry["reason"] = "; ".join(
                 f"object_{o['object']}: {o.get('error', '')}"[:200] for o in failed
             )[-800:]
-    except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as exc:
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        RuntimeError,
+        subprocess.TimeoutExpired,
+    ) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
     ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
-    (out / "ledger.json").write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    (out / "ledger.json").write_text(
+        json.dumps(ledger, indent=2) + "\n", encoding="utf-8"
+    )
     (out / "fitted_prior_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )

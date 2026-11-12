@@ -97,7 +97,9 @@ def test_vertex_colours_become_a_per_face_atlas_the_prior_can_sample(tmp_path):
     h, w = image.shape[:2]
     x = np.rint(uv[:, 0] * (w - 1)).astype(int)
     y = np.rint((1 - uv[:, 1]) * (h - 1)).astype(int)
-    assert np.allclose(uv[:, 0] * (w - 1), x) and np.allclose((1 - uv[:, 1]) * (h - 1), y)
+    assert np.allclose(uv[:, 0] * (w - 1), x) and np.allclose(
+        (1 - uv[:, 1]) * (h - 1), y
+    )
     sampled = image[y, x].reshape(-1, 3, 3)
     assert (sampled == sampled[:, :1]).all()  # flat per face
     source = trimesh.load(tmp_path / "object_0.glb", force="mesh", process=False)
@@ -114,7 +116,10 @@ def test_a_mesh_without_any_colour_is_refused(tmp_path):
 
 def test_the_driver_calls_the_priors_own_conversion():
     compile(fp.DRIVER, "<driver>", "exec")
-    assert "fitted_splat as fs" in fp.DRIVER and "fs._convert_one(row, encoders)" in fp.DRIVER
+    assert (
+        "fitted_splat as fs" in fp.DRIVER
+        and "fs._convert_one(row, encoders)" in fp.DRIVER
+    )
     assert "FeatureEncoders().load()" in fp.DRIVER
     env = fp.driver_env({"PATH": "/usr/bin", "PYTHONPATH": "/w/repo"}, Path("/p"))
     assert env["PYTHONPATH"] == "/p"  # our sceneagent must not shadow the prior's
@@ -146,7 +151,11 @@ class _Box:
             pack = self.packs.get(job["object"])
             if pack is None:
                 results["objects"].append(
-                    {"object": job["object"], "ok": False, "error": "RuntimeError: only 3 views"}
+                    {
+                        "object": job["object"],
+                        "ok": False,
+                        "error": "RuntimeError: only 3 views",
+                    }
                 )
                 continue
             directory = Path(job["directory"])
@@ -173,7 +182,9 @@ def _bin(tmp_path: Path, numbers=(3, 5)) -> Path:
     records = []
     for n in numbers:
         _vertex_coloured_box(out / "sam3d" / f"object_{n}.glb")
-        records.append({"object": n, "ok": True, "glb": str(out / "sam3d" / f"object_{n}.glb")})
+        records.append(
+            {"object": n, "ok": True, "glb": str(out / "sam3d" / f"object_{n}.glb")}
+        )
     records.append({"object": 9, "ok": False, "error": "no glb"})
     (out / "sam3d" / "results.json").write_text(json.dumps({"objects": records}))
     return out
