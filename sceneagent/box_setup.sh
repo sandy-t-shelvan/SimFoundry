@@ -258,8 +258,11 @@ s_isaaclab() {
   # The installer prompts on first launch. This is the variable it documents.
   export OMNI_KIT_ACCEPT_EULA=YES
   export HEADLESS=1
-  "$ISAACLAB_ENV/bin/pip" install --upgrade pip
-  "$ISAACLAB_ENV/bin/pip" install "isaacsim[all,extscache]==${ISAACSIM_PIP}" \
+  # The box pip.conf adds pypi.ngc.nvidia.com, which does not resolve, so every
+  # package waits out retries (found on 60254439). Ignore that config.
+  PIP_CONFIG_FILE=/dev/null "$ISAACLAB_ENV/bin/pip" install --upgrade pip
+  PIP_CONFIG_FILE=/dev/null "$ISAACLAB_ENV/bin/pip" install \
+    "isaacsim[all,extscache]==${ISAACSIM_PIP}" \
     --extra-index-url https://pypi.nvidia.com
   clone https://github.com/isaac-sim/IsaacLab "$ISAACLAB_ROOT" "$ISAACLAB_TAG"
   if [ "$(git -C "$ISAACLAB_ROOT" rev-parse HEAD)" != "$ISAACLAB_COMMIT" ]; then
