@@ -204,6 +204,16 @@ PIPELINES = {
         ),
         "GraspClutter6D 000091",
     ),
+    "bin_settle": (
+        (
+            "benchmark scene",
+            "SAM 3D meshes",
+            "ICP residuals",
+            "USD physics export",
+            "Isaac Lab settle",
+        ),
+        "GraspClutter6D 000091",
+    ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
@@ -217,6 +227,8 @@ PIPELINES = {
             "Gaussian association",
             "SAM 3D meshes",
             "ICP residuals",
+            "USD physics export",
+            "Isaac Lab settle",
         ),
         MAILBOX_RELATIVE,
     ),
@@ -236,6 +248,7 @@ BIN_PIPELINES = frozenset(
         "review_vlm",
         "review_candidates",
         "review_accept",
+        "bin_settle",
         "mapper",
     }
 )
@@ -332,6 +345,9 @@ FETCH_NAMES = (
     "isaaclab_render.log",
     "video_run.json",
     "scene.json",
+    "export_evidence.json",
+    "settle.json",
+    "settle_frame.png",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -363,6 +379,9 @@ PUBLISHED_NAMES = frozenset(
         "isaaclab_render.log",
         "video_run.json",
         "scene.json",
+        "export_evidence.json",
+        "settle.json",
+        "settle_frame.png",
     }
 )
 PUBLIC_FIELDS = (
@@ -837,6 +856,8 @@ def build_remote_command(
             "--accept",
             f"{repo}/{ACCEPT_VERDICTS_RELATIVE}",
         ]
+    if pipeline == "bin_settle":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_settle", "--out", out]
     if pipeline == "mapper":
         return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
     if pipeline == "probe":

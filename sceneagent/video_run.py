@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""SF-42 thin slice (KAN-48): one video through the bin chain, up to ICP place.
+"""SF-42 (KAN-48) and SF-35 (KAN-41): one video through the bin chain, then export and settle.
 
     python -m sceneagent.video_run docs/assets/example_videos/Mailbox.mp4 \
         --out /workspace/sf4-smoke/mailbox
@@ -28,6 +28,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from sceneagent.alignment import PLACEMENT_GATE_LABEL
+from sceneagent.bin_association import SAME_PHRASE, VIDEO_KAPPA_SHARE
+from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
 
 # Ours: GroundingDINO phrases for the objects Mailbox.mp4 shows (a red
@@ -48,6 +51,10 @@ STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("association", ("Gaussian association",)),
     ("sam3d", ("SAM 3D meshes",)),
     ("place", ("ICP residuals",)),
+    # KAN-41: the placed scene as USD (gravity aligned on the support plane),
+    # then 2 s in Isaac Lab.
+    ("export", ("USD physics export",)),
+    ("settle", ("Isaac Lab settle",)),
 )
 
 
@@ -65,13 +72,43 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     """Accepted in the ledger; the pose stage also needs its finished scene.json.
 
     run4 accepts the poses before the mask views are staged, so a run that
-    stopped between the two must pose again rather than skip.
+    stopped between the two must pose again rather than skip. The mask,
+    association and export stages also need evidence written by their
+    current rules.
     """
     if not accepted(out, items):
         return False
     if name == "poses":
         return not is_bin(out) and load_scene(out).min_masked_views > 0
+    if name == "masks":
+        # Masks made before joined phrases were dropped run again, and so
+        # does every stage after them.
+        evidence = _evidence(out, "masks_evidence.json")
+        return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
+    if name == "association":
+        # Association made before differing phrases stopped merging.
+        evidence = _evidence(out, "association_evidence.json")
+        grouping = evidence.get("rule", {}).get("grouping", {})
+        # ... and before a video's consensus needed half of an object's views.
+        share = evidence.get("rule", {}).get("video_kappa_share")
+        return grouping.get(SAME_PHRASE) is True and share == VIDEO_KAPPA_SHARE
+    if name == "place":
+        # Placements judged by an earlier gate are judged again.
+        icp = _evidence(out, "bin_score.json").get("icp", {})
+        return icp.get("gate") == PLACEMENT_GATE_LABEL
+    if name == "export":
+        # An export made before it recorded each object's box runs again, so
+        # a settle reject can say what the bodies were doing.
+        return "object_boxes" in _evidence(out, "export_evidence.json")
     return True
+
+
+def _evidence(out: Path, name: str) -> dict[str, Any]:
+    try:
+        evidence = json.loads((out / name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return evidence if isinstance(evidence, dict) else {}
 
 
 def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[], int]]:
@@ -80,6 +117,8 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
     from sceneagent.bin_place import run_bin_place
     from sceneagent.bin_sam3d import run_bin_sam3d
     from sceneagent.bin_splat import run_bin_splat
+    from sceneagent.physics_export import export_run
+    from sceneagent.settle_run import run_settle
 
     return {
         "poses": lambda: run_video_poses(video, out, prompt),
@@ -88,6 +127,8 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
         "association": lambda: run_bin_association(out),
         "sam3d": lambda: run_bin_sam3d(out),
         "place": lambda: run_bin_place(out),
+        "export": lambda: export_run(out),
+        "settle": lambda: run_settle(out),
     }
 
 

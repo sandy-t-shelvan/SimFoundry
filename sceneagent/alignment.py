@@ -19,6 +19,26 @@ OURS_GATE_NOTE = (
     "SceneAgent did not publish these cutoffs. These are our iteration-1 gates."
 )
 
+# Ours, iteration 2 (2026-11-12, Sandeep's yes): the placement gate the bin
+# stages use. On the bin's 14 placed objects (run 43315660864) silhouette
+# tracked ground-truth F1 with Spearman +0.85 and p90 with -0.79, while
+# normalized median (-0.19) and coverage (-0.13, the wrong sign) carried no
+# signal: coverage counts Gaussians a mesh sample lands next to, so it
+# follows how dense an object's Gaussian set is, and 5,000 samples cap it
+# below 0.5 for any set over 7,000. Iteration 1 accepted 1 object (9th of 14
+# by F1) and rejected the three best (Chamfer 5 mm). The silhouette minimum
+# is iteration 1's; the p90 maximum is iteration 1's 0.25 splat units at the
+# bin's 0.20 m per unit, in metres so it holds for a video's own unit. Both
+# residuals the gate drops are still measured and recorded.
+PLACEMENT_GATE_LABEL = "ours_iteration_2"
+PLACEMENT_P90_MAX_M = 0.05
+PLACEMENT_SILHOUETTE_MIN = OURS_SILHOUETTE_MIN
+PLACEMENT_GATE_NOTE = (
+    "Ours, not the paper's: silhouette >= 0.5 and p90 <= 0.05 m. Normalized "
+    "median and coverage are recorded only; on the bin they did not track "
+    "ground truth."
+)
+
 RESIDUAL_NAMES = ("normalized_median", "p90", "coverage", "silhouette")
 DISTANCE_RESIDUALS = ("normalized_median", "p90")
 AGREEMENT_RESIDUALS = ("coverage", "silhouette")
@@ -134,3 +154,31 @@ def accept_alignment(residuals, thresholds=None):
             "silhouette_min": OURS_SILHOUETTE_MIN,
         }
     return body
+
+
+def accept_placement(residuals):
+    """Iteration 2: accept a placed mesh on silhouette and p90 in metres.
+
+    ``residuals`` needs ``silhouette`` and ``p90_m``; a missing one fails,
+    as in iteration 1. The other residuals are not read.
+    """
+    residuals = dict(residuals or {})
+    failed = []
+    silhouette = residuals.get("silhouette")
+    if silhouette is None or float(silhouette) < PLACEMENT_SILHOUETTE_MIN:
+        failed.append("silhouette")
+    p90_m = residuals.get("p90_m")
+    if p90_m is None or float(p90_m) > PLACEMENT_P90_MAX_M:
+        failed.append("p90_m")
+    return {
+        "decision": "reject" if failed else "accept",
+        "accepted": not failed,
+        "failed": failed,
+        "gate": PLACEMENT_GATE_LABEL,
+        "paper_published": False,
+        "note": PLACEMENT_GATE_NOTE,
+        "constants": {
+            "silhouette_min": PLACEMENT_SILHOUETTE_MIN,
+            "p90_max_m": PLACEMENT_P90_MAX_M,
+        },
+    }

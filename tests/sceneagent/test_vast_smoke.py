@@ -821,7 +821,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         1,
     )
     assert (
-        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox pipeline choice"
+        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle pipeline choice"
         in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
@@ -1277,7 +1277,7 @@ def test_failure_path_with_key_in_manifest_publishes_nothing(
     assert "manifest.json" in captured.err
 
 
-def test_failure_upload_step_is_manifest_only():
+def test_failure_upload_step_is_the_manifest_and_the_settle_only():
     lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
     start = next(
         index for index, line in enumerate(lines) if "Upload redacted failure" in line
@@ -1295,6 +1295,13 @@ def test_failure_upload_step_is_manifest_only():
     step = "\n".join(lines[start:end])
     assert "if: failure()" in step
     assert "sf4-artifacts/manifest.json" in step
+    # The settle's result and frame, already through the key scan.
+    published = {line.strip() for line in step.splitlines() if "sf4-artifacts/" in line}
+    assert published == {
+        "sf4-artifacts/manifest.json",
+        "sf4-artifacts/settle.json",
+        "sf4-artifacts/settle_frame.png",
+    }
     assert "plan.json" not in step
     assert "ledger.json" not in step
     assert "if-no-files-found: error" in step

@@ -122,6 +122,61 @@ def test_failed_video_poses_leave_the_pose_stage_to_run_again(tmp_path):
     assert not video_run.stage_done(out, "poses", ("video", "COLMAP camera poses"))
 
 
+def test_masks_made_before_joined_phrases_were_dropped_run_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["SAM masks"])
+    assert not video_run.stage_done(out, "masks", ("SAM masks",))
+    old = {"filter": {"phrase_must_match_prompt": True}}
+    (out / "masks_evidence.json").write_text(json.dumps(old))
+    assert not video_run.stage_done(out, "masks", ("SAM masks",))
+    new = {"filter": {"joined_phrases": "drop"}}
+    (out / "masks_evidence.json").write_text(json.dumps(new))
+    assert video_run.stage_done(out, "masks", ("SAM masks",))
+
+
+def test_association_before_same_phrase_grouping_runs_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["Gaussian association"])
+    items = ("Gaussian association",)
+    (out / "association_evidence.json").write_text(json.dumps({"rule": {}}))
+    assert not video_run.stage_done(out, "association", items)
+    rule = {"rule": {"grouping": {"same_phrase": True}}}
+    (out / "association_evidence.json").write_text(json.dumps(rule))
+    assert not video_run.stage_done(out, "association", items)
+    rule["rule"]["video_kappa_share"] = 0.5
+    (out / "association_evidence.json").write_text(json.dumps(rule))
+    assert video_run.stage_done(out, "association", items)
+
+
+def test_placements_judged_by_an_earlier_gate_are_placed_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["ICP residuals"])
+    old = {"icp": {"gate": "ours_iteration_1", "objects": []}}
+    (out / "bin_score.json").write_text(json.dumps(old))
+    assert not video_run.stage_done(out, "place", ("ICP residuals",))
+    new = {"icp": {"gate": "ours_iteration_2", "objects": []}}
+    (out / "bin_score.json").write_text(json.dumps(new))
+    assert video_run.stage_done(out, "place", ("ICP residuals",))
+
+
+def test_an_export_without_object_boxes_runs_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["USD physics export"])
+    (out / "export_evidence.json").write_text(json.dumps({"objects": []}))
+    assert not video_run.stage_done(out, "export", ("USD physics export",))
+    boxes = {"objects": [], "object_boxes": {}}
+    (out / "export_evidence.json").write_text(json.dumps(boxes))
+    assert video_run.stage_done(out, "export", ("USD physics export",))
+
+
 def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
     out = tmp_path / "mailbox"
     out.mkdir()
@@ -141,7 +196,7 @@ def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
 
     funcs = {name: stage(name, items) for name, items in video_run.STAGES}
     assert video_run.run_video(tmp_path / "Mailbox.mp4", out, "x .", stages=funcs) == 0
-    assert calls == ["masks", "association", "sam3d", "place"]
+    assert calls == ["masks", "association", "sam3d", "place", "export", "settle"]
     record = json.loads((out / video_run.RECORD).read_text())
     assert record["complete"] and set(record["stages"]) == set(calls)
 
@@ -208,7 +263,11 @@ def test_the_mailbox_pipeline_has_its_own_dir_and_ships_the_video():
         "--out",
         REMOTE_MAILBOX_OUT,
     ]
-    assert PIPELINES["mailbox"][0][-1] == bin_place.ICP_ITEM
+    assert PIPELINES["mailbox"][0][-3:] == (
+        bin_place.ICP_ITEM,
+        "USD physics export",
+        "Isaac Lab settle",
+    )
     assert bin_place.SCORE_ITEM not in PIPELINES["mailbox"][0]
     for name in (video_run.RECORD, "scene.json"):
         assert name in FETCH_NAMES and name in PUBLISHED_NAMES
