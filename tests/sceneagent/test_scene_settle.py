@@ -200,6 +200,7 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
                 "association_objects": 3,
                 "association_dropped": 4,
                 "excluded_gate_rejects": {"object_2": ["p90"]},
+                "excluded_evidence": {"object_2": "failed ['p90_m'], silhouette 0.60"},
                 "object_boxes": {
                     "object_1": {
                         "size_m": [0.2, 0.1, 0.3],
@@ -257,6 +258,7 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
         "found as cube x1, mailbox x3 in 4 views",
         "v 0.050->0.022 m/s, w ? rad/s",
         "overlapping boxes: object_1~object_2",
+        "object_2 left out: failed ['p90_m'], silhouette 0.60",
     ):
         assert piece in reason
 

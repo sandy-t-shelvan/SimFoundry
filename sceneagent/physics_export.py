@@ -770,6 +770,7 @@ def export_run(out: Path | str) -> int:
         gates = {obj.name: "accept" for obj in placed}
         evidence.update(diagnose(placed, metres, frame, gates))
         evidence["excluded_gate_rejects"] = excluded
+        evidence["excluded_evidence"] = why
         evidence.update(
             association_objects=association.get("objects"),
             association_dropped=len(association.get("dropped_objects", [])),

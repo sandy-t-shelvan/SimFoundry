@@ -86,12 +86,13 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         evidence = _evidence(out, "masks_evidence.json")
         return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
     if name == "association":
-        # Association made before differing phrases stopped merging.
+        # Association made before the current video rules runs again:
         evidence = _evidence(out, "association_evidence.json")
         grouping = evidence.get("rule", {}).get("grouping", {})
-        # ... and before a video's consensus needed half of an object's views.
+        # ... before a video's consensus needed half of an object's views,
+        # and while phrases still split groups (run 43331599718).
         share = evidence.get("rule", {}).get("video_kappa_share")
-        return grouping.get(SAME_PHRASE) is True and share == VIDEO_KAPPA_SHARE
+        return grouping.get(SAME_PHRASE) is False and share == VIDEO_KAPPA_SHARE
     if name == "place":
         # Placements judged by an earlier gate are judged again.
         icp = _evidence(out, "bin_score.json").get("icp", {})

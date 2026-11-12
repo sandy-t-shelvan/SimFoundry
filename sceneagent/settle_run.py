@@ -131,6 +131,8 @@ def context(out: Path, result: dict) -> str:
             f"->{_num(motion.get('speed_m_s'), '.3f')} m/s, "
             f"w {_num(motion.get('angular_speed_rad_s'), '.2f')} rad/s"
         )
+    for name, why in sorted(export.get("excluded_evidence", {}).items()):
+        parts.append(f"{name} left out: {why}")
     overlaps = export.get("overlapping_boxes", [])
     parts.append(
         "overlapping boxes: " + (", ".join("~".join(p) for p in overlaps) or "none")
@@ -189,7 +191,7 @@ def run_settle(
         if result["decision"] != "accept":
             # A failed run publishes only the manifest, which carries this.
             reason = f"{reason} | {context(out, result)}"
-        entry.update(decision=result["decision"], reason=reason[:1500])
+        entry.update(decision=result["decision"], reason=reason[:2500])
         if result.get("frame"):
             entry["frame"] = result["frame"]
     except (
