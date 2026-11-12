@@ -66,6 +66,8 @@ SAM_PIP = "segment-anything==1.0"
 MASK_PYDEPS = "/workspace/sf4-smoke/pydeps-masks"
 
 WORKER_TIMEOUT_S = 1800
+# masks_evidence.json filter key; video_run reruns masks made before it existed.
+JOINED_PHRASES = "joined_phrases"
 ITEM = "SAM masks"
 # Scene 000091 holds 20 YCB objects (paper §4.1). The gate only asks for a mask
 # in every view; the per-view counts beside this number show how far short of
@@ -117,8 +119,10 @@ def _http_download(url: str, target: Path) -> None:
             out.write(block)
 
 
-def worker_command(images: Path, masks: Path, prompt: str = PROMPT) -> list[str]:
-    return [
+def worker_command(
+    images: Path, masks: Path, prompt: str = PROMPT, *, single_term: bool = False
+) -> list[str]:
+    argv = [
         MASK_PYTHON,
         "-m",
         "sceneagent.mask_worker",
@@ -139,6 +143,7 @@ def worker_command(images: Path, masks: Path, prompt: str = PROMPT) -> list[str]
         "--sam-weights",
         SAM_WEIGHTS,
     ]
+    return argv + ["--single-term"] if single_term else argv
 
 
 def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
@@ -227,6 +232,9 @@ def run_bin_masks(
         poses(out, data)
     expected = expected_views(out, scene)
     prompt = scene.prompt or PROMPT
+    # Ours: a video drops boxes whose phrase joins prompt terms; the bin keeps
+    # its rules so its score does not move.
+    single_term = not is_bin(out)
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -246,6 +254,7 @@ def run_bin_masks(
             "max_box_area_fraction": MAX_BOX_AREA_FRACTION,
             "duplicate_iou": DUPLICATE_IOU,
             "phrase_must_match_prompt": True,
+            JOINED_PHRASES: "drop" if single_term else "keep",
         },
         "sam": "vit_h",
         "detector": "GroundingDINO SwinT-OGC",
@@ -255,7 +264,7 @@ def run_bin_masks(
         evidence["sam_weights"] = weights()
         evidence["segment_anything"] = _ensure_segment_anything(runner)
         masks = out / "masks"
-        argv = worker_command(images, masks, prompt)
+        argv = worker_command(images, masks, prompt, single_term=single_term)
         done = runner(
             argv,
             env=worker_environment(),

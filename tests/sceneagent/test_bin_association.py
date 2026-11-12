@@ -217,6 +217,32 @@ def test_two_views_of_two_cubes_group_into_two_objects(tmp_path):
     assert len(result["merged_pairs"]) == 2
 
 
+def test_a_video_drops_objects_seen_in_fewer_than_three_views(tmp_path):
+    from sceneagent.bin_run import Scene, write_scene
+
+    out, data, _, _ = _run_dir(tmp_path)
+    write_scene(
+        out,
+        Scene(
+            source="video",
+            name="clip",
+            ledger_name="clip",
+            views=2,
+            input_item="video",
+            view_dir="images",
+            min_masked_views=2,
+            ground_truth=False,
+        ),
+    )
+    result = ba.associate(out, data, depth=_fake_depth())
+    # Both cubes are in 2 views: kept for the bin (above), stray for a video.
+    assert result["objects"] == [] and result["min_object_views"] == 3
+    assert [d["views"] for d in result["dropped_objects"]] == [2, 2]
+    evidence = ba.evidence_from(result)
+    assert evidence["min_object_views"] == 3
+    assert len(evidence["dropped_objects"]) == 2
+
+
 def test_masks_in_one_view_never_merge_directly():
     positions = np.zeros((4, 3))
     shared = np.array([0, 1, 2, 3])

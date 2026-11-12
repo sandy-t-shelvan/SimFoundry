@@ -28,6 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
 
 # Ours: GroundingDINO phrases for the objects Mailbox.mp4 shows (a red
@@ -69,12 +70,23 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     """Accepted in the ledger; the pose stage also needs its finished scene.json.
 
     run4 accepts the poses before the mask views are staged, so a run that
-    stopped between the two must pose again rather than skip.
+    stopped between the two must pose again rather than skip. The mask stage
+    also needs evidence that joined phrases were dropped.
     """
     if not accepted(out, items):
         return False
     if name == "poses":
         return not is_bin(out) and load_scene(out).min_masked_views > 0
+    if name == "masks":
+        # Masks made before joined phrases were dropped run again, and so
+        # does every stage after them.
+        try:
+            evidence = json.loads(
+                (out / "masks_evidence.json").read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return False
+        return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
     return True
 
 

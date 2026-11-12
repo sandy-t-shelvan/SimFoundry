@@ -122,6 +122,20 @@ def test_failed_video_poses_leave_the_pose_stage_to_run_again(tmp_path):
     assert not video_run.stage_done(out, "poses", ("video", "COLMAP camera poses"))
 
 
+def test_masks_made_before_joined_phrases_were_dropped_run_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["SAM masks"])
+    assert not video_run.stage_done(out, "masks", ("SAM masks",))
+    old = {"filter": {"phrase_must_match_prompt": True}}
+    (out / "masks_evidence.json").write_text(json.dumps(old))
+    assert not video_run.stage_done(out, "masks", ("SAM masks",))
+    new = {"filter": {"joined_phrases": "drop"}}
+    (out / "masks_evidence.json").write_text(json.dumps(new))
+    assert video_run.stage_done(out, "masks", ("SAM masks",))
+
+
 def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
     out = tmp_path / "mailbox"
     out.mkdir()

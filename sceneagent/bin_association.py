@@ -100,6 +100,11 @@ KAPPA_RULE = (
     "ours: kappa 2 (the paper's experiments use 1); a Gaussian stays when "
     "at least min(2, views of the object) of the object's views admit it"
 )
+# Ours, video scenes only: an object whose masks come from fewer than this
+# many of the ~30 mask views is a stray box, not an object (Mailbox.mp4 gave
+# 5 objects for 2, run 43296115235). The bin keeps every object, so its
+# score does not move.
+MIN_OBJECT_VIEWS = 3
 EXTENT_PERCENTILES = (5.0, 95.0)
 EXTENT_RULE = (
     "ours: the paper does not define e; longest side of the 5th-95th percentile "
@@ -520,6 +525,23 @@ def associate(
         views[view] = stats
 
     components, pairs = group_masks(masks, positions * to_paper)
+    min_views = 1 if scene == BIN_SCENE else MIN_OBJECT_VIEWS
+    dropped = []
+    for members in components:
+        seen = len({masks[i]["view"] for i in members})
+        if seen < min_views:
+            dropped.append(
+                {
+                    "views": seen,
+                    "masks": [
+                        {k: masks[i][k] for k in ("view", "mask_index", "phrase")}
+                        for i in members
+                    ],
+                }
+            )
+    components = [
+        c for c in components if len({masks[i]["view"] for i in c}) >= min_views
+    ]
     objects = []
     for number, members in enumerate(components):
         ids, union_size = consensus_gaussians([masks[i] for i in members], KAPPA)
@@ -560,6 +582,8 @@ def associate(
         "pairs": pairs,
         "merged_pairs": [p for p in pairs if p["merged"]],
         "objects": objects,
+        "min_object_views": min_views,
+        "dropped_objects": dropped,
         "scene": scene.name,
         "ground_truth": scene.ground_truth,
     }
@@ -646,6 +670,8 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
         "overlapping_pairs": pair_outcomes(result["pairs"]),
         "objects": len(objects),
         "objects_seen_in_2_or_more_views": len(multi),
+        "min_object_views": result.get("min_object_views", 1),
+        "dropped_objects": result.get("dropped_objects", []),
         "gt_objects": GT_OBJECTS if result["ground_truth"] else None,
         "object_list": objects,
     }
