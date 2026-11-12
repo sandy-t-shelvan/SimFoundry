@@ -26,7 +26,8 @@ def test_the_setup_script_parses_and_names_every_stage():
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
     text = SCRIPT.read_text(encoding="utf-8")
     stages = text.split('STAGES="', 1)[1].split('"', 1)[0].split()
-    assert stages[0] == "apt" and stages[-1] == "sam3d_weights"
+    assert stages[0] == "apt" and stages[-1] == "isaaclab"
+    assert stages[-2] == "sam3d_weights"
     for name in stages:
         assert f"s_{name}() {{" in text
 
@@ -136,4 +137,13 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "7442e4e9b732a508f80e141e7c2913437a3610ee0c77381a66658c3a445df87b" in text
     assert "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318" in text
     assert "f91db411c50efee93d8db7aeb323885650f6f722" in text
+    assert "ISAACSIM_PIP=5.1.0" in text
+    assert "ISAACLAB_TAG=v2.3.2" in text
+    assert "37ddf626871758333d6ed89cf64ad702aef127d0" in text
+    assert "OMNI_KIT_ACCEPT_EULA=YES" in text
+    assert "--install none" in text
+    assert "range(120)" in (ROOT / "sceneagent/isaaclab_headless_check.py").read_text(
+        encoding="utf-8"
+    )
+    assert "cube_height_m" in text
     assert 'env["LIDRA_SKIP_INIT"] = "true"' in text

@@ -28,6 +28,7 @@ set -uo pipefail
 
 MODE="${1:-}"
 OUT="${2:-/workspace/sf4-smoke/setup}"
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=/workspace/setup
 STATE="$ROOT/state"
 LOGS="$ROOT/logs"
@@ -59,7 +60,16 @@ SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
 # HEAD of the checkout that finished s_sam3d on 60254439.
 SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights"
+# Isaac Lab v2.3.2 documents Isaac Sim 5.1.0 from pip. The tag commit is
+# pinned so a moved tag cannot change the install. Pip Isaac Sim needs
+# glibc 2.35; this image is Ubuntu 22.04. The simfoundry conda env is a
+# different install and is not used here.
+ISAACSIM_PIP=5.1.0
+ISAACLAB_TAG=v2.3.2
+ISAACLAB_COMMIT=37ddf626871758333d6ed89cf64ad702aef127d0
+ISAACLAB_ROOT=/workspace/IsaacLab
+ISAACLAB_ENV="$ENVS/isaaclab"
+STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -236,6 +246,37 @@ s_sam3d_weights() {
   test -s checkpoints/hf/pipeline.yaml
 }
 
+s_isaaclab() {
+  local glibc
+  glibc=$(ldd --version | awk 'NR==1 {print $NF}')
+  echo "glibc $glibc"
+  awk -v v="$glibc" 'BEGIN {n=split(v,a,"."); if (n<2 || a[1]+0<2 || (a[1]+0==2 && a[2]+0<35)) exit 1}' \
+    || { echo "Isaac Sim pip needs glibc 2.35 or newer (found $glibc)" >&2; return 1; }
+  [ -x "$ISAACLAB_ENV/bin/python3" ] || "$MAMBA" create -y -p "$ISAACLAB_ENV" python=3.11
+  export PATH="$ISAACLAB_ENV/bin:$PATH"
+  export CONDA_PREFIX="$ISAACLAB_ENV"
+  # The installer prompts on first launch. This is the variable it documents.
+  export OMNI_KIT_ACCEPT_EULA=YES
+  export HEADLESS=1
+  "$ISAACLAB_ENV/bin/pip" install --upgrade pip
+  "$ISAACLAB_ENV/bin/pip" install "isaacsim[all,extscache]==${ISAACSIM_PIP}" \
+    --extra-index-url https://pypi.nvidia.com
+  clone https://github.com/isaac-sim/IsaacLab "$ISAACLAB_ROOT" "$ISAACLAB_TAG"
+  if [ "$(git -C "$ISAACLAB_ROOT" rev-parse HEAD)" != "$ISAACLAB_COMMIT" ]; then
+    git -C "$ISAACLAB_ROOT" fetch --depth 1 origin "$ISAACLAB_COMMIT"
+    git -C "$ISAACLAB_ROOT" checkout --detach "$ISAACLAB_COMMIT"
+  fi
+  cd "$ISAACLAB_ROOT"
+  # none: the headless check does not use a learning framework.
+  ./isaaclab.sh --install none
+  cd /tmp
+  "$ISAACLAB_ENV/bin/python3" "$HERE/isaaclab_headless_check.py" \
+    | tee "$ROOT/isaaclab_check.log"
+  grep -q '^cube_height_m ' "$ROOT/isaaclab_check.log"
+  du -sb "$ISAACLAB_ENV" "$ISAACLAB_ROOT" | awk '{s+=$1} END {printf "%d\n", s}' \
+    > "$ROOT/isaaclab_disk_bytes"
+}
+
 run_stage() {
   local name="$1"
   if [ -f "$STATE/$name.ok" ]; then
@@ -276,6 +317,8 @@ do_report() {
     GSAM_ROOT="$GSAM_ROOT" DA3_ROOT="$DA3_ROOT" SAM3D_ROOT="$SAM3D_ROOT" \
     SAM3D_ENV="$SAM3D_ENV" SAM_WEIGHTS="$SAM_WEIGHTS" COLMAP_TAG="$COLMAP_TAG" \
     SAM2_CHECKPOINT="$SAM2_CHECKPOINT" SAM2_1_CHECKPOINT="$SAM2_1_CHECKPOINT" \
+    ISAACLAB_ROOT="$ISAACLAB_ROOT" ISAACLAB_ENV="$ISAACLAB_ENV" \
+    ISAACLAB_DISK="$ROOT/isaaclab_disk_bytes" \
     "$py" - <<'PY'
 import hashlib, json, os, pathlib, re, subprocess
 
@@ -379,6 +422,8 @@ versions = {
     "nerf": pyver(envs + "/nerf/bin/python3", ["torch", "torchvision", "nerfstudio", "gsplat"]),
     "gsam2": pyver(envs + "/gsam2/bin/python3", ["torch", "torchvision", "groundingdino", "sam2", "transformers"]),
     "sam3d10": pyver(sam3d_py, ["torch", "pytorch3d", "kaolin", "moge", "sam3d_objects", "gsplat"]),
+    # pip show, not import: importing isaaclab starts the simulator.
+    "isaaclab": run([env["ISAACLAB_ENV"] + "/bin/python3", "-m", "pip", "show", "isaaclab"]),
 }
 document = {
     "box_setup": "ours: sceneagent/box_setup.sh",
@@ -393,6 +438,7 @@ document = {
         "grounded_sam_2": commit(env["GSAM_ROOT"]),
         "depth_anything_3": commit(env["DA3_ROOT"]),
         "sam_3d_objects": commit(env["SAM3D_ROOT"]),
+        "isaac_lab": commit(env["ISAACLAB_ROOT"]),
     },
     "checksums": {
         "sam_vit_h_4b8939.pth": sha256(env["SAM_WEIGHTS"]),
@@ -402,6 +448,7 @@ document = {
         "pipeline.yaml": sha256(env["SAM3D_ROOT"] + "/checkpoints/hf/pipeline.yaml"),
     },
     "sam3d_pipeline_yaml": pathlib.Path(env["SAM3D_ROOT"], "checkpoints/hf/pipeline.yaml").is_file(),
+    "isaaclab_disk_bytes": int(pathlib.Path(env["ISAACLAB_DISK"]).read_text().strip()) if pathlib.Path(env["ISAACLAB_DISK"]).is_file() else None,
     "hf_token_present": pathlib.Path("/root/.cache/huggingface/token").is_file(),
 }
 out.mkdir(parents=True, exist_ok=True)

@@ -56,6 +56,8 @@ module = [
     "depth_anything_3.*",
     "simple_lama_inpainting",
     "simple_lama_inpainting.*",
+    "isaaclab",
+    "isaaclab.*",
     "open_clip",
     "open_clip.*",
     "timm",
