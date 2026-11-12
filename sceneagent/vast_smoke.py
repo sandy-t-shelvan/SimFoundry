@@ -3,7 +3,7 @@
 
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
-The only instance this module will touch is ``58301075``. It may show that
+The only instance this module will touch is ``60254439``. It may show that
 instance when it is already running. It does not start or stop an instance.
 ``workflow_dispatch``, a label, and a request-file trigger all refuse a
 stopped, starting, or unknown instance, and they send no state PUT. Starting
@@ -75,7 +75,7 @@ from typing import Any, TypedDict
 from sceneagent.simfoundry_python import SIMFOUNDRY_PYTHON
 
 API_ORIGIN = "https://console.vast.ai"
-ALLOWED_INSTANCE_ID = 58301075
+ALLOWED_INSTANCE_ID = 60254439
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
 REMOTE_PYTHON = SIMFOUNDRY_PYTHON
@@ -338,7 +338,7 @@ RequestFn = Callable[..., tuple[int, dict[str, Any]]]
 
 
 class InstanceNotApproved(ValueError):
-    """The call is outside the SF-4 allowlist for instance 58301075."""
+    """The call is outside the SF-4 allowlist for instance 60254439."""
 
 
 class SmokeError(RuntimeError):
@@ -346,7 +346,7 @@ class SmokeError(RuntimeError):
 
 
 def parse_instance_id(value: object) -> int:
-    """Return 58301075. Any other id, including 59601312, is refused."""
+    """Return 60254439. Any other id, including 58301075, is refused."""
     parsed: int | None
     if isinstance(value, bool):
         parsed = None
@@ -365,7 +365,7 @@ def parse_instance_id(value: object) -> int:
             shown = type(value).__name__
         raise InstanceNotApproved(
             f"Refusing instance {shown!r}. "
-            f"SF-4 may use only the existing Texas instance {ALLOWED_INSTANCE_ID}."
+            f"SF-4 may use only the existing United Kingdom instance {ALLOWED_INSTANCE_ID}."
         )
     return ALLOWED_INSTANCE_ID
 
@@ -488,7 +488,7 @@ def unwrap_instance(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the instance when it is 58301075 in Texas."""
+    """Return the instance when it is 60254439 in the United Kingdom."""
     row = unwrap_instance(payload)
     if row is None:
         raise InstanceNotApproved(
@@ -503,9 +503,9 @@ def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
     if geo is None:
         geo = row.get("geolocode")
     geo_text = "" if geo is None else str(geo)
-    if "texas" not in geo_text.lower():
+    if "united kingdom" not in geo_text.lower():
         raise InstanceNotApproved(
-            f"instance {ALLOWED_INSTANCE_ID} geolocation is {geo_text!r}, not Texas."
+            f"instance {ALLOWED_INSTANCE_ID} geolocation is {geo_text!r}, not the United Kingdom."
         )
     return row
 
@@ -601,7 +601,7 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
     method = method.upper()
     if method == "GET" and not is_ssh and query == [("owner", "me")] and body is None:
         return
-    # One added read: GET /api/v0/instances/58301075/ssh/ and nothing else.
+    # One added read: GET /api/v0/instances/60254439/ssh/ and nothing else.
     # The id is the constant, not a caller-supplied template. No query, no
     # body, no sub-path, and no other method on this path. No state PUT.
     if (
@@ -2455,7 +2455,7 @@ def load_ssh_key_fingerprints(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    """GET ``/api/v0/instances/58301075/ssh/``. Return count and local fingerprints.
+    """GET ``/api/v0/instances/60254439/ssh/``. Return count and local fingerprints.
 
     This does not detach, and it does not return key material.
     """
@@ -2555,7 +2555,7 @@ def run_smoke(
     commit_sha: str = "",
     pipeline: str = "sceneagent",
 ) -> int:
-    """Run the Fruits smoke on 58301075 when that instance is already running.
+    """Run the Fruits smoke on 60254439 when that instance is already running.
 
     Exit 0 is a GPU accept. Exit 2 is a refusal before the instance is changed.
     Exit 1 is a smoke that ran and did not pass, including a ledger
@@ -2768,7 +2768,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="SceneAgent Fruits GPU smoke on Vast instance 58301075"
+        description="SceneAgent Fruits GPU smoke on Vast instance 60254439"
     )
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--checkout", type=Path, required=True)
