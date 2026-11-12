@@ -3,7 +3,7 @@
 
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
-The only instance this module will touch is ``58301075``. It may show that
+The only instance this module will touch is ``60254439``. It may show that
 instance when it is already running. It does not start or stop an instance.
 ``workflow_dispatch``, a label, and a request-file trigger all refuse a
 stopped, starting, or unknown instance, and they send no state PUT. Starting
@@ -75,7 +75,7 @@ from typing import Any, TypedDict
 from sceneagent.simfoundry_python import SIMFOUNDRY_PYTHON
 
 API_ORIGIN = "https://console.vast.ai"
-ALLOWED_INSTANCE_ID = 58301075
+ALLOWED_INSTANCE_ID = 60254439
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
 REMOTE_PYTHON = SIMFOUNDRY_PYTHON
@@ -86,12 +86,33 @@ REMOTE_COLMAP_BIN = "/opt/colmap-cuda/bin"
 # py7zr goes here rather than into the shared ``sa`` env.
 REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
+# KAN-48 thin slice: the one video, besides Fruits, that the box receives.
+MAILBOX_RELATIVE = "docs/assets/example_videos/Mailbox.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
 # The GraspClutter6D pipelines' own run dir. Sharing REMOTE_OUT with run4 let
 # the bin's COLMAP pose run4's 300 Fruits frames beside its 13 views (bin
 # evidence of the 59601312 splat run 42741443604: 313 inputs, 300 registered).
 REMOTE_BIN_OUT = "/workspace/sf4-smoke/bin"
+REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
+# Isaac Lab render check (KAN-41). Its own run dir and its own interpreter:
+# the isaaclab env that box_setup.sh s_isaaclab installs, never the sa env.
+REMOTE_ISAACLAB_OUT = "/workspace/sf4-smoke/isaaclab"
+# The Mailbox slice's own run dir, so the bin's results are never overwritten.
+REMOTE_MAILBOX_OUT = "/workspace/sf4-smoke/mailbox"
+ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
+# The setup stages run detached on the box (setsid nohup), so a dropped
+# runner does not stop them; each run waits this long, then reports what is
+# done and what is running. A COLMAP CUDA build plus four envs takes longer
+# than one run, and the next dispatch resumes (each stage is skipped once it
+# has succeeded). 30 minutes, not 100: a stalled stage shows up sooner
+# (run 43107275324 sat idle with no way to see why).
+SETUP_WAIT_S = 1800
+# Where the runner writes the Hugging Face token for the `setup` pipeline only
+# (Sandeep, 2026-11-11: send it so SAM 3D's gated weights can be fetched).
+# It travels on ssh stdin, never in an argv, an environment or a log.
+REMOTE_HF_TOKEN = "/root/.cache/huggingface/token"
+HF_TOKEN_ENV = "HF_TOKEN"
 BOOT_TIMEOUT_S = 600.0
 # Room for run4.STEP_TIMEOUT_S["mapper"] (5400 s) inside the 120 min job.
 REMOTE_TIMEOUT_S = 6600.0
@@ -185,6 +206,20 @@ PIPELINES = {
     ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
+    "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
+    "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
+    "mailbox": (
+        (
+            "video",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+            "ICP residuals",
+        ),
+        MAILBOX_RELATIVE,
+    ),
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
@@ -216,6 +251,12 @@ ACCEPT_VERDICTS_RELATIVE = "sceneagent/verdicts/accept_verdicts.json"
 
 def remote_out(pipeline: str) -> str:
     """The run dir on the box: the bin pipelines' own, else run4's."""
+    if pipeline == "setup":
+        return REMOTE_SETUP_OUT
+    if pipeline == "isaaclab_render":
+        return REMOTE_ISAACLAB_OUT
+    if pipeline == "mailbox":
+        return REMOTE_MAILBOX_OUT
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
 
 
@@ -286,6 +327,11 @@ FETCH_NAMES = (
     "bin_review_accept.json",
     "mapper_compare.json",
     "inventory.txt",
+    "setup_evidence.json",
+    "isaaclab_render.png",
+    "isaaclab_render.log",
+    "video_run.json",
+    "scene.json",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -312,6 +358,11 @@ PUBLISHED_NAMES = frozenset(
         "bin_review_accept.json",
         "mapper_compare.json",
         "inventory.txt",
+        "setup_evidence.json",
+        "isaaclab_render.png",
+        "isaaclab_render.log",
+        "video_run.json",
+        "scene.json",
     }
 )
 PUBLIC_FIELDS = (
@@ -338,7 +389,7 @@ RequestFn = Callable[..., tuple[int, dict[str, Any]]]
 
 
 class InstanceNotApproved(ValueError):
-    """The call is outside the SF-4 allowlist for instance 58301075."""
+    """The call is outside the SF-4 allowlist for instance 60254439."""
 
 
 class SmokeError(RuntimeError):
@@ -346,7 +397,7 @@ class SmokeError(RuntimeError):
 
 
 def parse_instance_id(value: object) -> int:
-    """Return 58301075. Any other id, including 59601312, is refused."""
+    """Return 60254439. Any other id, including 58301075, is refused."""
     parsed: int | None
     if isinstance(value, bool):
         parsed = None
@@ -365,7 +416,7 @@ def parse_instance_id(value: object) -> int:
             shown = type(value).__name__
         raise InstanceNotApproved(
             f"Refusing instance {shown!r}. "
-            f"SF-4 may use only the existing Texas instance {ALLOWED_INSTANCE_ID}."
+            f"SF-4 may use only the existing United Kingdom instance {ALLOWED_INSTANCE_ID}."
         )
     return ALLOWED_INSTANCE_ID
 
@@ -488,7 +539,7 @@ def unwrap_instance(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the instance when it is 58301075 in Texas."""
+    """Return the instance when it is 60254439 in the United Kingdom."""
     row = unwrap_instance(payload)
     if row is None:
         raise InstanceNotApproved(
@@ -503,9 +554,9 @@ def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
     if geo is None:
         geo = row.get("geolocode")
     geo_text = "" if geo is None else str(geo)
-    if "texas" not in geo_text.lower():
+    if "united kingdom" not in geo_text.lower():
         raise InstanceNotApproved(
-            f"instance {ALLOWED_INSTANCE_ID} geolocation is {geo_text!r}, not Texas."
+            f"instance {ALLOWED_INSTANCE_ID} geolocation is {geo_text!r}, not the United Kingdom."
         )
     return row
 
@@ -601,7 +652,7 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
     method = method.upper()
     if method == "GET" and not is_ssh and query == [("owner", "me")] and body is None:
         return
-    # One added read: GET /api/v0/instances/58301075/ssh/ and nothing else.
+    # One added read: GET /api/v0/instances/60254439/ssh/ and nothing else.
     # The id is the constant, not a caller-supplied template. No query, no
     # body, no sub-path, and no other method on this path. No state PUT.
     if (
@@ -790,6 +841,28 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
     if pipeline == "probe":
         return ["/bin/sh", "-c", "host inventory", "--out", out]
+    if pipeline == "setup":
+        return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
+    if pipeline == "mailbox":
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.video_run",
+            f"{repo}/{MAILBOX_RELATIVE}",
+            "--out",
+            out,
+        ]
+    if pipeline == "isaaclab_render":
+        # The repo on PYTHONPATH must not shadow packages in the isaaclab env.
+        return [
+            "env",
+            "-u",
+            "PYTHONPATH",
+            ISAACLAB_PYTHON,
+            f"{repo}/sceneagent/isaaclab_headless_check.py",
+            "--render",
+            out,
+        ]
     if pipeline != "run4":
         raise InstanceNotApproved("refusing pipeline")
     argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]
@@ -853,6 +926,32 @@ def build_remote_shell(
             f"mkdir -p {shlex.quote(out)}\n{{\n{PROBE_SCRIPT}\n}} > "
             f"{shlex.quote(out + '/inventory.txt')} 2>&1\necho inventory written\n"
         )
+        _reject_secret_text(script)
+        return script
+    if pipeline == "setup":
+        # Plain shell: no pinned interpreter exists until setup makes one.
+        setup = shlex.quote(repo + "/sceneagent/box_setup.sh")
+        q_out = shlex.quote(out)
+        script = "\n".join(
+            [
+                "set -u",
+                f"mkdir -p {q_out} /workspace/setup/state",
+                # A finished earlier run must not end this wait at once.
+                "rm -f /workspace/setup/state/done",
+                (
+                    f"setsid nohup bash {setup} run {q_out} "
+                    "> /workspace/setup/run.log 2>&1 < /dev/null &"
+                ),
+                "waited=0",
+                (
+                    "while [ ! -f /workspace/setup/state/done ] && "
+                    f"[ $waited -lt {SETUP_WAIT_S} ]; do sleep 30; "
+                    "waited=$((waited + 30)); done"
+                ),
+                f"bash {setup} report {q_out}",
+            ]
+        )
+        script += "\n"
         _reject_secret_text(script)
         return script
     argv = build_remote_command(repo, out, pipeline=pipeline, commit_sha=commit_sha)
@@ -1005,7 +1104,7 @@ def rsync_invocations(
     known_hosts: str,
     repo_dir: str,
 ) -> list[tuple[list[str], Path]]:
-    """Copy ``sceneagent`` and Fruits.mp4. The rest of the checkout stays home."""
+    """Copy ``sceneagent``, Fruits.mp4 and Mailbox.mp4. The rest stays home."""
     repo = require_remote_dir(repo_dir)
     remote = f"root@{host}:{repo}/"
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
@@ -1041,6 +1140,7 @@ def rsync_invocations(
                 "-e",
                 ssh_e,
                 FRUITS_RELATIVE,
+                *[m for m in (MAILBOX_RELATIVE,) if (checkout / m).is_file()],
                 remote,
             ],
             checkout,
@@ -1077,9 +1177,10 @@ def iter_shipped_files(checkout: Path) -> list[Path]:
             if _ship_excluded(relative):
                 continue
             shipped.append(path)
-    fruits = root / FRUITS_RELATIVE
-    if fruits.is_file() and not _ship_excluded(FRUITS_RELATIVE):
-        shipped.append(fruits)
+    for relative in (FRUITS_RELATIVE, MAILBOX_RELATIVE):
+        video = root / relative
+        if video.is_file() and not _ship_excluded(relative):
+            shipped.append(video)
     return shipped
 
 
@@ -2024,6 +2125,8 @@ def publish_artifacts(
     run_dir = Path(run_dir)
     artifact_dir = Path(artifact_dir)
     secret = api_key.encode("utf-8") if api_key else b""
+    # The setup pipeline's Hugging Face token: no published file may hold it.
+    hf_token = os.environ.get(HF_TOKEN_ENV, "").encode("utf-8")
     prepared: list[tuple[str, bytes]] = []
     hits: list[str] = []
     for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
@@ -2038,7 +2141,7 @@ def publish_artifacts(
                 hits.append(rel)
             prepared.append((rel, data))
             continue
-        if secret and secret in data:
+        if (secret and secret in data) or (hf_token and hf_token in data):
             hits.append(rel)
             continue
         prepared.append((rel, data))
@@ -2271,6 +2374,8 @@ class SshRemote:
             pipeline = "sceneagent"
         if not isinstance(commit_sha, str):
             commit_sha = ""
+        if pipeline == "setup":
+            self.hf_token_sent = self._send_hf_token(os.environ.get(HF_TOKEN_ENV, ""))
         code = self._bash(
             build_remote_shell(
                 REMOTE_REPO,
@@ -2342,6 +2447,34 @@ class SshRemote:
                 ]
                 tail = redact(redact(tail, self.api_key), self._private_material)
                 raise SmokeError(f"rsync failed ({completed.returncode}): {tail}")
+
+    def _send_hf_token(self, token: str) -> bool:
+        """Write the Hugging Face token to the box for the setup pipeline.
+
+        Sandeep's call (2026-11-11): SAM 3D's weights are gated, so the setup
+        step needs the token on the box. It goes on ssh stdin into a mode-0600
+        file; the argv names only the path, and nothing echoes it back.
+        """
+        if not token or any(ch.isspace() for ch in token):
+            return False
+        mask_secret(token)
+        target = shlex.quote(REMOTE_HF_TOKEN)
+        folder = shlex.quote(str(Path(REMOTE_HF_TOKEN).parent))
+        argv = [
+            *ssh_base_argv(str(self.private), self.known_hosts, self.port),
+            f"root@{self.host}",
+            f"umask 077 && mkdir -p {folder} && cat > {target}.tmp && mv {target}.tmp {target}",
+        ]
+        _reject_secret_text(" ".join(argv))
+        completed = subprocess.run(
+            argv,
+            check=False,
+            input=token.encode("utf-8"),
+            capture_output=True,
+            env=child_env(),
+            timeout=60,
+        )
+        return completed.returncode == 0
 
     def _bash(self, script: str, timeout_s: float) -> int:
         argv = [
@@ -2455,7 +2588,7 @@ def load_ssh_key_fingerprints(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    """GET ``/api/v0/instances/58301075/ssh/``. Return count and local fingerprints.
+    """GET ``/api/v0/instances/60254439/ssh/``. Return count and local fingerprints.
 
     This does not detach, and it does not return key material.
     """
@@ -2555,7 +2688,7 @@ def run_smoke(
     commit_sha: str = "",
     pipeline: str = "sceneagent",
 ) -> int:
-    """Run the Fruits smoke on 58301075 when that instance is already running.
+    """Run the Fruits smoke on 60254439 when that instance is already running.
 
     Exit 0 is a GPU accept. Exit 2 is a refusal before the instance is changed.
     Exit 1 is a smoke that ran and did not pass, including a ledger
@@ -2768,7 +2901,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="SceneAgent Fruits GPU smoke on Vast instance 58301075"
+        description="SceneAgent Fruits GPU smoke on Vast instance 60254439"
     )
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--checkout", type=Path, required=True)

@@ -33,7 +33,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS, run_bin_poses
+from sceneagent.bin_run import DATA_DIR, is_bin, load_scene, run_bin_poses
 
 # nerfstudio 1.1.4 and gsplat 1.0.0 on instance 58301075 (probe run 42908214934);
 # its run dir already holds a splatfacto run from this env (PSNR 23.56).
@@ -92,17 +92,18 @@ def poses_ready(out: Path) -> Path | None:
     The ledger must still be the bin's: another pipeline sharing ``out`` (run4)
     rewrites it, and its entries are not this scene's.
     """
+    scene = load_scene(out)
     try:
         evidence = json.loads((out / "bin_evidence.json").read_text(encoding="utf-8"))
         ledger = json.loads((out / "ledger.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if ledger.get("scene_name") != f"{SOURCE} {SCENE}":
+    if ledger.get("scene_name") != scene.ledger_name:
         return None
     bar = evidence.get("quality_bar") or {}
     if not bar.get("pass") or bar.get("model") is None:
         return None
-    if bar.get("inputs") != VIEWS:
+    if bar.get("inputs") != scene.views:
         return None
     model = out / "sparse" / str(bar["model"])
     return model if (model / "cameras.bin").is_file() else None
@@ -294,9 +295,10 @@ def run_bin_splat(
 ) -> int:
     """Poses (reused or rerun), then the splat. Return 0 only when both pass."""
     out, data = Path(out), Path(data)
+    scene = load_scene(out)
     model = poses_ready(out)
     reused = model is not None
-    if model is None:
+    if model is None and is_bin(out):
         poses(out, data)
         model = poses_ready(out)
     ledger_path = out / "ledger.json"
@@ -305,12 +307,12 @@ def run_bin_splat(
     except (OSError, ValueError):
         ledger = {"entries": []}
     entries = [e for e in ledger.get("entries", []) if e.get("item") != ITEM]
-    evidence: dict[str, Any] = {"scene": SCENE, "poses_reused": reused}
+    evidence: dict[str, Any] = {"scene": scene.name, "poses_reused": reused}
     if model is None:
         entry: dict[str, Any] = {
             "item": ITEM,
             "decision": "reject",
-            "reason": "bin poses did not pass",
+            "reason": f"{'bin' if is_bin(out) else scene.name} poses did not pass",
         }
     else:
         evidence.update(train_splat(out, model, runner=runner))
@@ -331,7 +333,7 @@ def run_bin_splat(
                 psnr=evidence["ns_eval"].get("psnr"),
             )
     entries.append(entry)
-    ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "splat_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
@@ -339,7 +341,8 @@ def run_bin_splat(
     # The ledger is shared with other bin pipelines (masks); only this run's
     # own items decide its result.
     decisions = {e.get("item"): e.get("decision") for e in entries}
-    return 0 if all(decisions.get(item) == "accept" for item in REQUIRED) else 1
+    required = (scene.input_item, *REQUIRED[1:])
+    return 0 if all(decisions.get(item) == "accept" for item in required) else 1
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -37,7 +37,9 @@ def main(argv: list[str] | None = None) -> int:
     # __file__ is None; __path__ names where it was found either way.
     meta = {"model": args.model, "package": list(depth_anything_3.__path__)}
     views = {}
-    for image_path in sorted(args.images.glob("*.png")):
+    # The bin's views are PNG stills; a video's are run4's JPG frames.
+    images = [*args.images.glob("*.png"), *args.images.glob("*.jpg")]
+    for image_path in sorted(images):
         with Image.open(image_path) as image:
             width, height = image.size
         prediction = model.inference([str(image_path)])
