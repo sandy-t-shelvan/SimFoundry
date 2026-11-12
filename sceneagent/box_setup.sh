@@ -282,7 +282,8 @@ s_isaaclab() {
   "$ISAACLAB_ENV/bin/python3" "$HERE/isaaclab_headless_check.py" \
     > "$ROOT/isaaclab_check.log" 2>&1
   grep -q '^cube_height_m ' "$ROOT/isaaclab_check.log"
-  du -sb "$ISAACLAB_ENV" "$ISAACLAB_ROOT" | awk '{s+=$1} END {printf "%d\n", s}' \
+  # mawk's %d saturates at 2^31-1, and this install is larger than that.
+  du -sb "$ISAACLAB_ENV" "$ISAACLAB_ROOT" | awk '{s+=$1} END {printf "%.0f\n", s}' \
     > "$ROOT/isaaclab_disk_bytes"
 }
 
