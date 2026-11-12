@@ -17,7 +17,7 @@ os.environ.setdefault("HEADLESS", "1")
 
 from isaaclab.app import AppLauncher
 
-simulation_app = AppLauncher(headless=True).app
+_simulation_app = AppLauncher(headless=True).app
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import RigidObject, RigidObjectCfg
@@ -41,5 +41,8 @@ sim.reset()
 for _ in range(120):
     sim.step()
     cube.update(sim.cfg.dt)
-print(f"cube_height_m {float(cube.data.root_pos_w[0, 2])}")
-simulation_app.close()
+# Flush before exit. A redirected run block-buffers this line, and
+# SimulationApp.close hangs after the steps (found on 60254439), so a normal
+# exit never writes it. The process is done once the height is on stdout.
+print(f"cube_height_m {float(cube.data.root_pos_w[0, 2])}", flush=True)
+os._exit(0)

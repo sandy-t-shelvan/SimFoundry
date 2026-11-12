@@ -146,8 +146,9 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "37ddf626871758333d6ed89cf64ad702aef127d0" in text
     assert "OMNI_KIT_ACCEPT_EULA=YES" in text
     assert "--install none" in text
-    assert "range(120)" in (ROOT / "sceneagent/isaaclab_headless_check.py").read_text(
-        encoding="utf-8"
-    )
+    check = (ROOT / "sceneagent/isaaclab_headless_check.py").read_text(encoding="utf-8")
+    assert "range(120)" in check
+    assert "flush=True" in check
+    assert "os._exit(0)" in check
     assert "cube_height_m" in text
     assert 'env["LIDRA_SKIP_INIT"] = "true"' in text
