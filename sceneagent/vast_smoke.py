@@ -93,6 +93,10 @@ REMOTE_OUT = "/workspace/sf4-smoke/run"
 # evidence of the 59601312 splat run 42741443604: 313 inputs, 300 registered).
 REMOTE_BIN_OUT = "/workspace/sf4-smoke/bin"
 REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
+# Isaac Lab render check (KAN-41). Its own run dir and its own interpreter:
+# the isaaclab env that box_setup.sh s_isaaclab installs, never the sa env.
+REMOTE_ISAACLAB_OUT = "/workspace/sf4-smoke/isaaclab"
+ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
 # The setup stages run detached on the box (setsid nohup), so a dropped
 # runner does not stop them; each run waits this long, then reports what is
 # done and what is running. A COLMAP CUDA build plus four envs takes longer
@@ -199,6 +203,7 @@ PIPELINES = {
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
+    "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
@@ -232,6 +237,8 @@ def remote_out(pipeline: str) -> str:
     """The run dir on the box: the bin pipelines' own, else run4's."""
     if pipeline == "setup":
         return REMOTE_SETUP_OUT
+    if pipeline == "isaaclab_render":
+        return REMOTE_ISAACLAB_OUT
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
 
 
@@ -303,6 +310,8 @@ FETCH_NAMES = (
     "mapper_compare.json",
     "inventory.txt",
     "setup_evidence.json",
+    "isaaclab_render.png",
+    "isaaclab_render.log",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -330,6 +339,8 @@ PUBLISHED_NAMES = frozenset(
         "mapper_compare.json",
         "inventory.txt",
         "setup_evidence.json",
+        "isaaclab_render.png",
+        "isaaclab_render.log",
     }
 )
 PUBLIC_FIELDS = (
@@ -810,6 +821,17 @@ def build_remote_command(
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline == "setup":
         return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
+    if pipeline == "isaaclab_render":
+        # The repo on PYTHONPATH must not shadow packages in the isaaclab env.
+        return [
+            "env",
+            "-u",
+            "PYTHONPATH",
+            ISAACLAB_PYTHON,
+            f"{repo}/sceneagent/isaaclab_headless_check.py",
+            "--render",
+            out,
+        ]
     if pipeline != "run4":
         raise InstanceNotApproved("refusing pipeline")
     argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]

@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render]
         default: run4
   pull_request_target:
     types: [labeled]
@@ -208,6 +208,8 @@ jobs:
             sf4-artifacts/mapper_compare.json
             sf4-artifacts/inventory.txt
             sf4-artifacts/setup_evidence.json
+            sf4-artifacts/isaaclab_render.png
+            sf4-artifacts/isaaclab_render.log
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.
