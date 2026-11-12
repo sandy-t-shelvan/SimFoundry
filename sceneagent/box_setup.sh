@@ -151,9 +151,12 @@ s_da3() {
   "$ENVS/sa/bin/pip" install -e "$DA3_ROOT"
   # DA3's pyproject asks for numpy<2 and pip downgrades it; CI's 2.4.6 still
   # imports DA3, and the pipeline is tested against it, so put it back.
-  "$ENVS/sa/bin/pip" install numpy==2.4.6
+  # The gs exporter imports addict, and the base install does not pull it.
+  # Association's depth worker hit that on 60254439 (run 43177596561).
+  "$ENVS/sa/bin/pip" install numpy==2.4.6 addict
   cd /tmp
-  PYTHONPATH="$DA3_ROOT/src" "$ENVS/sa/bin/python3" -c "import depth_anything_3"
+  PYTHONPATH="$DA3_ROOT/src" "$ENVS/sa/bin/python3" -c \
+    "import depth_anything_3; from depth_anything_3.utils.export.gs import export_to_gs_ply"
   # The weights bin_scale loads, into the cache it reads (HF_HUB_CACHE).
   HF_HUB_CACHE=/workspace/sf4-smoke/hf-cache "$ENVS/sa/bin/python3" -c \
     "from huggingface_hub import snapshot_download; snapshot_download('depth-anything/DA3METRIC-LARGE')"
