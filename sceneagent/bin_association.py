@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import struct
 import subprocess
 import sys
@@ -65,7 +66,14 @@ from sceneagent.association import (
     mask_cell_side_px,
     masks_same_object,
 )
-from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS
+from sceneagent.bin_run import (
+    BIN_SCENE,
+    DATA_DIR,
+    SCENE,
+    VIEWS,
+    expected_views,
+    load_scene,
+)
 from sceneagent.bin_scale import (
     PAPER_METRES_PER_UNIT,
     SCALE_RULE,
@@ -93,6 +101,20 @@ KAPPA_RULE = (
     "ours: kappa 2 (the paper's experiments use 1); a Gaussian stays when "
     "at least min(2, views of the object) of the object's views admit it"
 )
+# Ours, video scenes only: an object whose masks come from fewer than this
+# many of the ~30 mask views is a stray box, not an object (Mailbox.mp4 gave
+# 5 objects for 2, run 43296115235). The bin keeps every object, so its
+# score does not move.
+MIN_OBJECT_VIEWS = 3
+# association_evidence.json rule.grouping key; video_run reruns association
+# made before it existed.
+SAME_PHRASE = "same_phrase"
+# Ours, video scenes only: a Gaussian stays when half of the object's views
+# admit it. A video object is seen in up to 30 mask views, where kappa = 2
+# kept strays: on Mailbox.mp4 the cube's set was 1,542 Gaussians in a
+# 0.22 x 0.25 x 0.13 m box at kappa 2 and 394 in 0.05 x 0.05 x 0.06 m at
+# half its 28 views (run 43330532572). The bin keeps kappa = 2.
+VIDEO_KAPPA_SHARE = 0.5
 EXTENT_PERCENTILES = (5.0, 95.0)
 EXTENT_RULE = (
     "ours: the paper does not define e; longest side of the 5th-95th percentile "
@@ -291,13 +313,18 @@ def set_extent(points: np.ndarray) -> float:
 
 
 def group_masks(
-    masks: list[dict[str, Any]], positions: np.ndarray
+    masks: list[dict[str, Any]], positions: np.ndarray, *, same_phrase: bool = False
 ) -> tuple[list[list[int]], list[dict[str, Any]]]:
     """Connected components of ``masks_same_object`` over masks of different views.
 
     Each mask is ``{"view": str, "gaussians": int array}``; empty ones never join.
     Returns the components (mask positions in ``masks``) and every pair that
     shares a Gaussian, with whether it passed each cut and merged.
+
+    With ``same_phrase`` (ours, video scenes), masks whose GroundingDINO
+    phrases differ never merge: Mailbox.mp4 joined 7 "cube" masks into the
+    mailbox (run 43309011103). The bin's category prompt can name one object
+    differently in different views, so it keeps the paper's cuts alone.
     """
     centroid, extent = {}, {}
     for i, mask in enumerate(masks):
@@ -326,6 +353,10 @@ def group_masks(
         distance = float(np.linalg.norm(centroid[a] - centroid[b]))
         e = min(extent[a], extent[b])
         same = masks_same_object(distance, e, containment, jaccard)
+        phrases_differ = same_phrase and masks[a].get("phrase") != masks[b].get(
+            "phrase"
+        )
+        same = same and not phrases_differ
         if same:
             parent[root(a)] = root(b)
         pairs.append(
@@ -338,6 +369,7 @@ def group_masks(
                 "close": distance <= centroid_threshold(e),
                 "overlap": containment >= CONTAINMENT_MIN or jaccard >= JACCARD_MIN,
                 "merged": same,
+                **({"phrases_differ": True} if phrases_differ else {}),
             }
         )
     components: dict[int, list[int]] = {}
@@ -425,6 +457,42 @@ def focal_px(camera: dict[str, Any]) -> float:
     return float(p[0])
 
 
+def video_kappa(members: list[dict[str, Any]]) -> int:
+    """Views that must admit a Gaussian in a video scene: half of the object's, at least KAPPA."""
+    views = len({mask["view"] for mask in members})
+    return max(KAPPA, math.ceil(views * VIDEO_KAPPA_SHARE))
+
+
+def consensus_profile(
+    members: list[dict[str, Any]], positions: np.ndarray, metres: float, kappa: int
+) -> list[dict[str, Any]]:
+    """Diagnostic: the object's Gaussian set at kappa and at a quarter and half of its views.
+
+    A video object is seen in up to 30 mask views, so ``kappa`` = 2 keeps a
+    Gaussian two of them admit; this records how many Gaussians, and how
+    large a box (5th-95th percentile, metres), a stricter count would keep.
+    Nothing reads it to decide.
+    """
+    per_view: dict[str, list[np.ndarray]] = {}
+    for mask in members:
+        per_view.setdefault(mask["view"], []).append(mask["gaussians"])
+    views = len(per_view)
+    seen = [np.unique(np.concatenate(sets)) for sets in per_view.values()]
+    ids, counts = np.unique(np.concatenate(seen), return_counts=True)
+    needs = sorted(
+        {min(kappa, views), max(kappa, -(-views // 4)), max(kappa, -(-views // 2))}
+    )
+    profile = []
+    for need in needs:
+        kept = ids[counts >= need]
+        entry: dict[str, Any] = {"need": int(need), "gaussians": int(kept.size)}
+        if kept.size >= 3:
+            low, high = np.percentile(positions[kept], (5.0, 95.0), axis=0)
+            entry["extent_m"] = [round(float(v) * metres, 3) for v in high - low]
+        profile.append(entry)
+    return profile
+
+
 def associate(
     out: Path,
     data: Path,
@@ -467,8 +535,11 @@ def associate(
             u, v, z = project(world, image, camera)
             projected[view] = (u, v, z * scale, camera)
 
+    scene = load_scene(out)
     depth_dir = out / "depth"
-    depth_meta = depth(out / "images", depth_dir)
+    # Depth only for the views that carry masks: all 13 bin photos, or a
+    # video's every-10th frames.
+    depth_meta = depth(out / scene.view_dir, depth_dir)
     ratios = []
     for view, (u, v, z_units, camera) in projected.items():
         stored = np.load(depth_dir / f"{Path(view).stem}.npz")["depth"]
@@ -509,10 +580,34 @@ def associate(
         stats["kept_per_mask"] = [int(sets[d["mask_index"]].size) for d in kept]
         views[view] = stats
 
-    components, pairs = group_masks(masks, positions * to_paper)
+    video = scene != BIN_SCENE
+    components, pairs = group_masks(masks, positions * to_paper, same_phrase=video)
+    min_views = MIN_OBJECT_VIEWS if video else 1
+    dropped = []
+    for members in components:
+        seen = len({masks[i]["view"] for i in members})
+        if seen < min_views:
+            dropped.append(
+                {
+                    "views": seen,
+                    "masks": [
+                        {k: masks[i][k] for k in ("view", "mask_index", "phrase")}
+                        for i in members
+                    ],
+                }
+            )
+    components = [
+        c for c in components if len({masks[i]["view"] for i in c}) >= min_views
+    ]
+    metres = float(unit["metres_per_unit"])
     objects = []
     for number, members in enumerate(components):
-        ids, union_size = consensus_gaussians([masks[i] for i in members], KAPPA)
+        member_masks = [masks[i] for i in members]
+        need = video_kappa(member_masks) if video else KAPPA
+        ids, union_size = consensus_gaussians(member_masks, need)
+        profile = consensus_profile(
+            [masks[i] for i in members], positions, metres, KAPPA
+        )
         objects.append(
             {
                 "object": number,
@@ -523,17 +618,21 @@ def associate(
                 "views": len({masks[i]["view"] for i in members}),
                 "gaussians": int(ids.size),
                 "gaussians_union": union_size,
+                "kappa": need,
+                "consensus_profile": profile,
                 "centroid": [round(float(c), 5) for c in positions[ids].mean(axis=0)],
                 "ids": ids,
             }
         )
 
-    scene_gt_path = data / "scenes" / SCENE / "scene_gt.json"
-    try:
-        scene_gt = json.loads(scene_gt_path.read_text(encoding="utf-8"))
-        metric = camera_centers_metric(scene_gt, sorted(images))
-    except (OSError, ValueError, KeyError, StopIteration):
-        metric = {}
+    metric: dict[str, np.ndarray] = {}
+    if scene.ground_truth:
+        scene_gt_path = data / "scenes" / SCENE / "scene_gt.json"
+        try:
+            scene_gt = json.loads(scene_gt_path.read_text(encoding="utf-8"))
+            metric = camera_centers_metric(scene_gt, sorted(images))
+        except (OSError, ValueError, KeyError, StopIteration):
+            metric = {}
     m_per_unit = metres_per_unit(camera_centers_colmap(images), metric, scale)
     return {
         "positions": len(positions),
@@ -548,6 +647,11 @@ def associate(
         "pairs": pairs,
         "merged_pairs": [p for p in pairs if p["merged"]],
         "objects": objects,
+        "min_object_views": min_views,
+        "same_phrase": video,
+        "dropped_objects": dropped,
+        "scene": scene.name,
+        "ground_truth": scene.ground_truth,
     }
 
 
@@ -592,7 +696,7 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
     ]
     multi = [o for o in objects if o["views"] > 1]
     return {
-        "scene": SCENE,
+        "scene": result["scene"],
         "rule": {
             "equation_1": {
                 "eps_a": EPS_A,
@@ -605,9 +709,13 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
                 "jaccard_min": JACCARD_MIN,
                 "e": EXTENT_RULE,
                 "pairs": "masks of different views only; objects are connected components",
+                SAME_PHRASE: result.get("same_phrase", False),
             },
             "kappa": KAPPA,
             "kappa_rule": KAPPA_RULE,
+            "video_kappa_share": VIDEO_KAPPA_SHARE
+            if result.get("same_phrase")
+            else None,
             "units": "paper units: splat lengths x unit.to_paper_units",
         },
         "inputs": {
@@ -632,7 +740,9 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
         "overlapping_pairs": pair_outcomes(result["pairs"]),
         "objects": len(objects),
         "objects_seen_in_2_or_more_views": len(multi),
-        "gt_objects": GT_OBJECTS,
+        "min_object_views": result.get("min_object_views", 1),
+        "dropped_objects": result.get("dropped_objects", []),
+        "gt_objects": GT_OBJECTS if result["ground_truth"] else None,
         "object_list": objects,
     }
 
@@ -661,6 +771,7 @@ def run_bin_association(
     paper publishes no count tolerance.
     """
     out, data = Path(out), Path(data)
+    scene = load_scene(out)
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -668,26 +779,28 @@ def run_bin_association(
         ledger = {"entries": []}
     entries = [e for e in ledger.get("entries", []) if e.get("item") != ITEM]
     entry: dict[str, Any] = {"item": ITEM}
-    evidence: dict[str, Any] = {"scene": SCENE}
+    evidence: dict[str, Any] = {"scene": scene.name}
     try:
         result = associate(out, data, depth=depth)
         evidence = evidence_from(result)
         write_sets(out / "association" / "objects.npz", result)
         used = sum(1 for v in result["views"].values() if v.get("registered"))
-        if used == VIEWS and result["objects"]:
+        masked = VIEWS if scene == BIN_SCENE else expected_views(out, scene)
+        if masked and used == masked and result["objects"]:
             entry.update(
                 decision="accept",
                 use_gpu=True,
                 splat_unit_m=round(evidence["splat_unit_m"], 4),
                 objects=evidence["objects"],
                 multi_view_objects=evidence["objects_seen_in_2_or_more_views"],
-                gt_objects=GT_OBJECTS,
                 masks=evidence["masks"],
             )
+            if scene.ground_truth:
+                entry["gt_objects"] = GT_OBJECTS
         else:
             entry.update(
                 decision="reject",
-                reason=f"{used} of {VIEWS} views posed; {len(result['objects'])} objects",
+                reason=f"{used} of {masked} views posed; {len(result['objects'])} objects",
             )
     except (
         OSError,
@@ -699,13 +812,14 @@ def run_bin_association(
     ) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
-    ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "association_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
     decisions = {e.get("item"): e.get("decision") for e in entries}
-    return 0 if all(decisions.get(item) == "accept" for item in REQUIRED) else 1
+    required = (scene.input_item, *REQUIRED[1:])
+    return 0 if all(decisions.get(item) == "accept" for item in required) else 1
 
 
 def main(argv: list[str] | None = None) -> int:

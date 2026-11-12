@@ -217,6 +217,93 @@ def test_two_views_of_two_cubes_group_into_two_objects(tmp_path):
     assert len(result["merged_pairs"]) == 2
 
 
+def test_a_video_drops_objects_seen_in_fewer_than_three_views(tmp_path):
+    from sceneagent.bin_run import Scene, write_scene
+
+    out, data, _, _ = _run_dir(tmp_path)
+    write_scene(
+        out,
+        Scene(
+            source="video",
+            name="clip",
+            ledger_name="clip",
+            views=2,
+            input_item="video",
+            view_dir="images",
+            min_masked_views=2,
+            ground_truth=False,
+        ),
+    )
+    result = ba.associate(out, data, depth=_fake_depth())
+    # Both cubes are in 2 views: kept for the bin (above), stray for a video.
+    assert result["objects"] == [] and result["min_object_views"] == 3
+    assert [d["views"] for d in result["dropped_objects"]] == [2, 2]
+    evidence = ba.evidence_from(result)
+    assert evidence["min_object_views"] == 3
+    assert len(evidence["dropped_objects"]) == 2
+
+
+def test_a_video_never_merges_masks_whose_phrases_differ(tmp_path):
+    out, data, _, _ = _run_dir(tmp_path)
+    detections = json.loads((out / "masks" / "detections.json").read_text())
+    # The second view calls the "box" cube a "can": the same Gaussians.
+    detections["000005.png"][0]["phrase"] = "can"
+    (out / "masks" / "detections.json").write_text(json.dumps(detections))
+    bin_result = ba.associate(out, data, depth=_fake_depth())
+    assert len(bin_result["objects"]) == 2  # the bin keeps the paper's cuts
+    from sceneagent.bin_run import Scene, write_scene
+
+    write_scene(
+        out,
+        Scene(
+            source="video",
+            name="clip",
+            ledger_name="clip",
+            views=2,
+            input_item="video",
+            view_dir="images",
+            min_masked_views=2,
+            ground_truth=False,
+        ),
+    )
+    video = ba.associate(out, data, depth=_fake_depth())
+    assert video["same_phrase"] is True
+    refused = [p for p in video["pairs"] if p.get("phrases_differ")]
+    assert refused and not any(p["merged"] for p in refused)
+    assert ba.evidence_from(video)["rule"]["grouping"][ba.SAME_PHRASE] is True
+
+
+def test_the_consensus_profile_shrinks_a_set_as_more_views_must_agree():
+    # Gaussian 0 is admitted by all 8 views, 1 by 4, 2 by 2: a floater.
+    positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [5.0, 5.0, 5.0]])
+    members = []
+    for view in range(8):
+        ids = [0] + ([1] if view < 4 else []) + ([2] if view < 2 else [])
+        members.append({"view": f"v{view}", "gaussians": np.array(ids)})
+    profile = ba.consensus_profile(members, positions, 0.5, 2)
+    assert [(p["need"], p["gaussians"]) for p in profile] == [(2, 3), (4, 2)]
+    assert "extent_m" in profile[0] and "extent_m" not in profile[1]
+
+
+def test_a_video_object_needs_half_its_views_and_the_bin_keeps_kappa_2(tmp_path):
+    def views(n):
+        return [{"view": f"v{i}", "gaussians": np.array([0])} for i in range(n)]
+
+    assert [ba.video_kappa(views(n)) for n in (1, 3, 4, 5, 14, 28, 30)] == [
+        2,
+        2,
+        2,
+        3,
+        7,
+        14,
+        15,
+    ]
+    out, data, _, _ = _run_dir(tmp_path)
+    bin_result = ba.associate(out, data, depth=_fake_depth())
+    assert {o["kappa"] for o in bin_result["objects"]} == {ba.KAPPA}
+    assert ba.evidence_from(bin_result)["rule"]["video_kappa_share"] is None
+
+
 def test_masks_in_one_view_never_merge_directly():
     positions = np.zeros((4, 3))
     shared = np.array([0, 1, 2, 3])

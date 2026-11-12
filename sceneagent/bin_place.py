@@ -19,9 +19,11 @@ SAM 3D's size; every fit's scale stays within
 (:func:`fit_score`) wins and is recorded, with each pose start's score
 before and after ICP. The silhouette is the mean Jaccard index of each object mask
 and the placed mesh's samples projected into that view, dilated by
-``SILHOUETTE_DILATE_PX``; that rendering is ours. Residuals go through the
-unchanged ``ours_iteration_1`` gate, whose decision is recorded and does not
-stop the score.
+``SILHOUETTE_DILATE_PX``; that rendering is ours. Residuals go through
+``ours_iteration_2`` (:func:`sceneagent.alignment.accept_placement`:
+silhouette and p90 in metres), whose decision is recorded and does not stop
+the score; iteration 1's decision is recorded beside it. Physics export
+takes only the objects this gate accepts.
 
 Score. The reconstruction is mapped into GraspClutter6D's reference frame
 (image 1's camera, metres) by one similarity for the whole scene: Umeyama
@@ -44,7 +46,12 @@ from typing import Any
 
 import numpy as np
 
-from sceneagent.alignment import accept_alignment
+from sceneagent.alignment import (
+    OURS_GATE_LABEL,
+    PLACEMENT_GATE_LABEL,
+    accept_alignment,
+    accept_placement,
+)
 from sceneagent.bin_association import (
     _latest_dataparser_transforms,
     camera_centers_colmap,
@@ -61,7 +68,7 @@ from sceneagent.bin_benchmark import (
     reference_clouds,
     score_bin,
 )
-from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE
+from sceneagent.bin_run import DATA_DIR, SCENE, load_scene
 from sceneagent.similarity_icp import (
     TRIM_KEEP,
     apply_similarity,
@@ -79,7 +86,7 @@ ICP_SOURCE_POINTS = 5000
 SILHOUETTE_POINTS = 20000
 SILHOUETTE_DILATE_PX = 3
 REFERENCE_IMAGE = 1
-GATE = "ours_iteration_1"
+GATE = PLACEMENT_GATE_LABEL
 # PyTorch3D camera (+x left, +y up, +z forward) to OpenCV (+x right, +y down).
 P3D_TO_OPENCV = np.diag([-1.0, -1.0, 1.0])
 # Which camera convention the SAM 3D pose is in is not documented either: the
@@ -442,15 +449,28 @@ def measure_fit(
     residuals = measure_residuals(
         result, target, None if silhouette is None else silhouette["silhouette"]
     )
-    gate = accept_alignment(residuals, GATE)
+    # Splat units to metres with association's DA3 unit, so the p90 limit
+    # means the same on a video as on the bin.
+    m_per_unit = float(inputs["association"]["unit"]["metres_per_unit"])
+    residuals["p90_m"] = residuals["p90"] * m_per_unit
+    gate = accept_placement(residuals)
     return {
         "residuals": {
             k: residuals[k]
-            for k in ("normalized_median", "p90", "median", "coverage", "silhouette")
+            for k in (
+                "normalized_median",
+                "p90",
+                "p90_m",
+                "median",
+                "coverage",
+                "silhouette",
+            )
         },
         "silhouette_views": None if silhouette is None else silhouette["views"],
         "gate": gate["decision"],
         "gate_failed": gate.get("failed"),
+        # What iteration 1 said, kept for comparison.
+        "gate_iteration_1": accept_alignment(residuals, OURS_GATE_LABEL)["decision"],
     }
 
 
@@ -551,9 +571,20 @@ def place_one(
         },
         "fit_total": tried["best_total"],
         "pose_depth_ratio": ratio,
+        # The 5th-95th percentile box of the object's Gaussians and of the
+        # placed mesh, in metres: a mesh much larger than its Gaussians, or
+        # Gaussians spread flat like a tabletop, shows here.
+        "target_extent_m": extent_m(target, m_per_unit),
+        "mesh_extent_m": extent_m(cloud, m_per_unit),
     }
     record.update(measure_fit(out, inputs, number, glb, target, result))
     return cloud, record
+
+
+def extent_m(points: np.ndarray, metres_per_unit: float) -> list[float]:
+    """Side lengths of the 5th-95th percentile box of ``points``, in metres."""
+    low, high = np.percentile(np.asarray(points, dtype=float), (5.0, 95.0), axis=0)
+    return [round(float(v) * metres_per_unit, 3) for v in high - low]
 
 
 def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -616,6 +647,7 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
     the score file is written; its numbers are reported, not gated.
     """
     out, data = Path(out), Path(data)
+    scene = load_scene(out)
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -628,7 +660,7 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
     ]
     icp_entry: dict[str, Any] = {"item": ICP_ITEM}
     score_entry: dict[str, Any] = {"item": SCORE_ITEM}
-    evidence: dict[str, Any] = {"scene": SCENE}
+    evidence: dict[str, Any] = {"scene": scene.name}
     try:
         inputs = _load(out)
         placement = place_objects(out, inputs)
@@ -649,32 +681,39 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
             placed=len(placed),
             gate_accepted=sum(o["gate"] == "accept" for o in placed),
         )
-        score = score_scene(data, inputs, placement["placed"])
-        evidence["score"] = score
-        (out / score["file_name"]).write_text(
-            json.dumps(score, indent=2) + "\n", encoding="utf-8"
-        )
-        score_entry.update(
-            decision="accept",
-            use_gpu=False,
-            f1_mean=round(score["f1_mean"], 4),
-            chamfer_mean_matched_m=score["chamfer_mean_matched_m"],
-            delivered=len(placement["placed"]),
-            reference=score["reference_objects"],
-        )
+        if scene.ground_truth:
+            score = score_scene(data, inputs, placement["placed"])
+            evidence["score"] = score
+            (out / score["file_name"]).write_text(
+                json.dumps(score, indent=2) + "\n", encoding="utf-8"
+            )
+            score_entry.update(
+                decision="accept",
+                use_gpu=False,
+                f1_mean=round(score["f1_mean"], 4),
+                chamfer_mean_matched_m=score["chamfer_mean_matched_m"],
+                delivered=len(placement["placed"]),
+                reference=score["reference_objects"],
+            )
+        else:
+            # No reference scans: nothing to score. Placement stands as is,
+            # and no score entry is written for vast_smoke to judge.
+            evidence["score"] = {"skipped": "no ground truth for this scene"}
+            score_entry = {}
     except (OSError, ValueError, KeyError, RuntimeError, StopIteration) as exc:
         reason = f"{type(exc).__name__}: {exc}"[-800:]
         for entry in (icp_entry, score_entry):
             if "decision" not in entry:
                 entry.update(decision="reject", reason=reason)
-    entries += [icp_entry, score_entry]
-    ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
+    entries += [e for e in (icp_entry, score_entry) if e]
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "bin_score.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
     decisions = {e.get("item"): e.get("decision") for e in entries}
-    return 0 if all(decisions.get(item) == "accept" for item in REQUIRED) else 1
+    required = REQUIRED if scene.ground_truth else REQUIRED[:-1]
+    return 0 if all(decisions.get(item) == "accept" for item in required) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
