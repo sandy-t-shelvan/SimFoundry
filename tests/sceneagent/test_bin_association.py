@@ -285,6 +285,25 @@ def test_the_consensus_profile_shrinks_a_set_as_more_views_must_agree():
     assert "extent_m" in profile[0] and "extent_m" not in profile[1]
 
 
+def test_a_video_object_needs_half_its_views_and_the_bin_keeps_kappa_2(tmp_path):
+    def views(n):
+        return [{"view": f"v{i}", "gaussians": np.array([0])} for i in range(n)]
+
+    assert [ba.video_kappa(views(n)) for n in (1, 3, 4, 5, 14, 28, 30)] == [
+        2,
+        2,
+        2,
+        3,
+        7,
+        14,
+        15,
+    ]
+    out, data, _, _ = _run_dir(tmp_path)
+    bin_result = ba.associate(out, data, depth=_fake_depth())
+    assert {o["kappa"] for o in bin_result["objects"]} == {ba.KAPPA}
+    assert ba.evidence_from(bin_result)["rule"]["video_kappa_share"] is None
+
+
 def test_masks_in_one_view_never_merge_directly():
     positions = np.zeros((4, 3))
     shared = np.array([0, 1, 2, 3])

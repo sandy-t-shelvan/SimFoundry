@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from sceneagent.alignment import PLACEMENT_GATE_LABEL
-from sceneagent.bin_association import SAME_PHRASE
+from sceneagent.bin_association import SAME_PHRASE, VIDEO_KAPPA_SHARE
 from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
 
@@ -89,9 +89,9 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         # Association made before differing phrases stopped merging.
         evidence = _evidence(out, "association_evidence.json")
         grouping = evidence.get("rule", {}).get("grouping", {})
-        # ... and before each object recorded its consensus profile.
-        objects = evidence.get("object_list") or [{}]
-        return grouping.get(SAME_PHRASE) is True and "consensus_profile" in objects[0]
+        # ... and before a video's consensus needed half of an object's views.
+        share = evidence.get("rule", {}).get("video_kappa_share")
+        return grouping.get(SAME_PHRASE) is True and share == VIDEO_KAPPA_SHARE
     if name == "place":
         # Placements judged by an earlier gate are judged again.
         icp = _evidence(out, "bin_score.json").get("icp", {})

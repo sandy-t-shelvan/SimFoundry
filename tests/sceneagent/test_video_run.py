@@ -147,7 +147,7 @@ def test_association_before_same_phrase_grouping_runs_again(tmp_path):
     rule = {"rule": {"grouping": {"same_phrase": True}}}
     (out / "association_evidence.json").write_text(json.dumps(rule))
     assert not video_run.stage_done(out, "association", items)
-    rule["object_list"] = [{"consensus_profile": []}]
+    rule["rule"]["video_kappa_share"] = 0.5
     (out / "association_evidence.json").write_text(json.dumps(rule))
     assert video_run.stage_done(out, "association", items)
 

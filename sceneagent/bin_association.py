@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import struct
 import subprocess
 import sys
@@ -108,6 +109,12 @@ MIN_OBJECT_VIEWS = 3
 # association_evidence.json rule.grouping key; video_run reruns association
 # made before it existed.
 SAME_PHRASE = "same_phrase"
+# Ours, video scenes only: a Gaussian stays when half of the object's views
+# admit it. A video object is seen in up to 30 mask views, where kappa = 2
+# kept strays: on Mailbox.mp4 the cube's set was 1,542 Gaussians in a
+# 0.22 x 0.25 x 0.13 m box at kappa 2 and 394 in 0.05 x 0.05 x 0.06 m at
+# half its 28 views (run 43330532572). The bin keeps kappa = 2.
+VIDEO_KAPPA_SHARE = 0.5
 EXTENT_PERCENTILES = (5.0, 95.0)
 EXTENT_RULE = (
     "ours: the paper does not define e; longest side of the 5th-95th percentile "
@@ -450,6 +457,12 @@ def focal_px(camera: dict[str, Any]) -> float:
     return float(p[0])
 
 
+def video_kappa(members: list[dict[str, Any]]) -> int:
+    """Views that must admit a Gaussian in a video scene: half of the object's, at least KAPPA."""
+    views = len({mask["view"] for mask in members})
+    return max(KAPPA, math.ceil(views * VIDEO_KAPPA_SHARE))
+
+
 def consensus_profile(
     members: list[dict[str, Any]], positions: np.ndarray, metres: float, kappa: int
 ) -> list[dict[str, Any]]:
@@ -589,7 +602,9 @@ def associate(
     metres = float(unit["metres_per_unit"])
     objects = []
     for number, members in enumerate(components):
-        ids, union_size = consensus_gaussians([masks[i] for i in members], KAPPA)
+        member_masks = [masks[i] for i in members]
+        need = video_kappa(member_masks) if video else KAPPA
+        ids, union_size = consensus_gaussians(member_masks, need)
         profile = consensus_profile(
             [masks[i] for i in members], positions, metres, KAPPA
         )
@@ -603,6 +618,7 @@ def associate(
                 "views": len({masks[i]["view"] for i in members}),
                 "gaussians": int(ids.size),
                 "gaussians_union": union_size,
+                "kappa": need,
                 "consensus_profile": profile,
                 "centroid": [round(float(c), 5) for c in positions[ids].mean(axis=0)],
                 "ids": ids,
@@ -697,6 +713,9 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
             },
             "kappa": KAPPA,
             "kappa_rule": KAPPA_RULE,
+            "video_kappa_share": VIDEO_KAPPA_SHARE
+            if result.get("same_phrase")
+            else None,
             "units": "paper units: splat lengths x unit.to_paper_units",
         },
         "inputs": {
