@@ -59,7 +59,13 @@ SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
 # HEAD of the checkout that finished s_sam3d on 60254439.
 SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights"
+# Isaac Lab v2.3.2's pip page installs Isaac Sim 5.1.0 into its own env.
+# That is not the simfoundry env, and usd-core is not installed into either.
+ISAACSIM_PIP=5.1.0
+ISAACLAB_TAG=v2.3.2
+ISAAC_ENV="$ENVS/isaaclab"
+ISAACLAB_ROOT=/workspace/src/IsaacLab
+STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -236,6 +242,37 @@ s_sam3d_weights() {
   test -s checkpoints/hf/pipeline.yaml
 }
 
+s_isaaclab() {
+  # Pip Isaac Sim needs glibc 2.35. Ubuntu 20.04's 2.31 fails the wheel
+  # lookup, so stop before the download.
+  local glibc
+  glibc=$(ldd --version | awk 'NR==1 {print $NF}')
+  /opt/conda/bin/python3 -c 'import sys; got=tuple(int(p) for p in sys.argv[1].split(".")[:2]); need=(2, 35); sys.exit(0 if got >= need else 1)' "$glibc" \
+    || { echo "glibc $glibc is below 2.35; Isaac Sim pip wheels will not install" >&2; return 1; }
+  [ -x "$ISAAC_ENV/bin/python3" ] || "$MAMBA" create -y -p "$ISAAC_ENV" python=3.11
+  "$ISAAC_ENV/bin/pip" install --upgrade pip
+  "$ISAAC_ENV/bin/pip" install "isaacsim[all,extscache]==$ISAACSIM_PIP" \
+    --extra-index-url https://pypi.nvidia.com
+  if [ ! -d "$ISAACLAB_ROOT/.git" ]; then
+    git clone --depth 1 --branch "$ISAACLAB_TAG" https://github.com/isaac-sim/IsaacLab.git "$ISAACLAB_ROOT"
+  fi
+  if [ "$(git -C "$ISAACLAB_ROOT" rev-parse --abbrev-ref HEAD)" != "$ISAACLAB_TAG" ] \
+    && ! git -C "$ISAACLAB_ROOT" describe --tags --exact-match 2>/dev/null | grep -qx "$ISAACLAB_TAG"; then
+    git -C "$ISAACLAB_ROOT" fetch --depth 1 origin "refs/tags/$ISAACLAB_TAG:refs/tags/$ISAACLAB_TAG"
+    git -C "$ISAACLAB_ROOT" checkout --detach "$ISAACLAB_TAG"
+  fi
+  # The installer prompts for the Omniverse EULA. The documented variable
+  # accepts YES and skips that prompt.
+  export OMNI_KIT_ACCEPT_EULA=YES
+  export PATH="$ISAAC_ENV/bin:$PATH"
+  cd "$ISAACLAB_ROOT"
+  ./isaaclab.sh --install
+  du -sb "$ISAACLAB_ROOT" "$ISAAC_ENV" | tee "$ROOT/isaaclab-size.txt"
+  local here
+  here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  OMNI_KIT_ACCEPT_EULA=YES "$ISAAC_ENV/bin/python3" "$here/isaaclab_headless_check.py"
+}
+
 run_stage() {
   local name="$1"
   if [ -f "$STATE/$name.ok" ]; then
@@ -276,6 +313,7 @@ do_report() {
     GSAM_ROOT="$GSAM_ROOT" DA3_ROOT="$DA3_ROOT" SAM3D_ROOT="$SAM3D_ROOT" \
     SAM3D_ENV="$SAM3D_ENV" SAM_WEIGHTS="$SAM_WEIGHTS" COLMAP_TAG="$COLMAP_TAG" \
     SAM2_CHECKPOINT="$SAM2_CHECKPOINT" SAM2_1_CHECKPOINT="$SAM2_1_CHECKPOINT" \
+    ISAAC_ENV="$ISAAC_ENV" ISAACLAB_ROOT="$ISAACLAB_ROOT" \
     "$py" - <<'PY'
 import hashlib, json, os, pathlib, re, subprocess
 
@@ -379,6 +417,8 @@ versions = {
     "nerf": pyver(envs + "/nerf/bin/python3", ["torch", "torchvision", "nerfstudio", "gsplat"]),
     "gsam2": pyver(envs + "/gsam2/bin/python3", ["torch", "torchvision", "groundingdino", "sam2", "transformers"]),
     "sam3d10": pyver(sam3d_py, ["torch", "pytorch3d", "kaolin", "moge", "sam3d_objects", "gsplat"]),
+    "isaaclab": pyver(env["ISAAC_ENV"] + "/bin/python3", ["isaacsim", "isaaclab"]),
+    "isaaclab_bytes": run(["du", "-sb", env["ISAACLAB_ROOT"], env["ISAAC_ENV"]]),
 }
 document = {
     "box_setup": "ours: sceneagent/box_setup.sh",
