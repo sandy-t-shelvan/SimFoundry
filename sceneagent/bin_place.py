@@ -571,9 +571,20 @@ def place_one(
         },
         "fit_total": tried["best_total"],
         "pose_depth_ratio": ratio,
+        # The 5th-95th percentile box of the object's Gaussians and of the
+        # placed mesh, in metres: a mesh much larger than its Gaussians, or
+        # Gaussians spread flat like a tabletop, shows here.
+        "target_extent_m": extent_m(target, m_per_unit),
+        "mesh_extent_m": extent_m(cloud, m_per_unit),
     }
     record.update(measure_fit(out, inputs, number, glb, target, result))
     return cloud, record
+
+
+def extent_m(points: np.ndarray, metres_per_unit: float) -> list[float]:
+    """Side lengths of the 5th-95th percentile box of ``points``, in metres."""
+    low, high = np.percentile(np.asarray(points, dtype=float), (5.0, 95.0), axis=0)
+    return [round(float(v) * metres_per_unit, 3) for v in high - low]
 
 
 def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:

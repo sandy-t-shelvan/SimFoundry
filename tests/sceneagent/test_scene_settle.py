@@ -265,7 +265,16 @@ def test_a_rejected_export_says_why_and_clears_the_stale_settle(tmp_path, monkey
     import sceneagent.bin_association as association
 
     monkeypatch.setattr(association, "read_ply_xyz", lambda path: np.zeros((4, 3)))
-    rejected = {"object": 0, "placed": True, "gate": "reject"}
+    rejected = {
+        "object": 0,
+        "placed": True,
+        "gate": "reject",
+        "gate_failed": ["silhouette"],
+        "residuals": {"silhouette": 0.19, "p90_m": 0.028},
+        "target_extent_m": [0.31, 0.3, 0.06],
+        "mesh_extent_m": [0.28, 0.29, 0.07],
+        "pose_depth_ratio": 0.764,
+    }
     (tmp_path / "bin_score.json").write_text(
         json.dumps({"icp": {"objects": [rejected]}})
     )
@@ -283,7 +292,13 @@ def test_a_rejected_export_says_why_and_clears_the_stale_settle(tmp_path, monkey
     assert physics_export.export_run(tmp_path) == 1
     entries = json.loads((tmp_path / "ledger.json").read_text())["entries"]
     assert [e["item"] for e in entries] == [physics_export.EXPORT_ITEM]
-    assert "no placed object passed the ICP gate (1 rejected)" in entries[0]["reason"]
+    reason = entries[0]["reason"]
+    assert "no placed object passed the ICP gate (1 rejected)" in reason
+    # The manifest is all a failed run publishes, so the reason says why.
+    assert (
+        "object_0 failed ['silhouette'], silhouette 0.19, p90 0.028 m, "
+        "Gaussians 0.31x0.30x0.06 m, mesh 0.28x0.29x0.07 m, depth ratio 0.76"
+    ) in reason
     assert not (tmp_path / settle_run.RESULT).exists()
     assert not (tmp_path / settle_run.FRAME).exists()
 
@@ -322,3 +337,13 @@ def test_the_bin_settle_pipeline_runs_in_the_bin_dir():
         REMOTE_BIN_OUT,
     ]
     assert PIPELINES["bin_settle"][0][-2:] == ("USD physics export", "Isaac Lab settle")
+
+
+def test_extent_is_the_middle_ninety_percent_box_in_metres():
+    from sceneagent.bin_place import extent_m
+
+    rng = np.random.default_rng(0)
+    points = rng.uniform(0, 1, (20000, 3)) * [2.0, 1.0, 0.1]
+    sides = extent_m(points, 0.5)
+    assert sides == [round(s, 3) for s in sides]
+    assert np.allclose(sides, [0.9, 0.45, 0.045], atol=0.01)

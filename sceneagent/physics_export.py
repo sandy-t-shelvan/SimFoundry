@@ -625,6 +625,26 @@ def diagnose(
     return {"object_boxes": diagnostics, "overlapping_boxes": overlaps}
 
 
+def _gate_evidence(record: dict[str, Any]) -> str:
+    """One gate reject in a line: what failed, the residuals, the two sizes."""
+    residuals = record.get("residuals") or {}
+
+    def num(value: Any, spec: str) -> str:
+        return "?" if value is None else format(value, spec)
+
+    def box(sides: Any) -> str:
+        return "x".join(f"{v:.2f}" for v in sides) if sides else "?"
+
+    return (
+        f"failed {record.get('gate_failed')}, "
+        f"silhouette {num(residuals.get('silhouette'), '.2f')}, "
+        f"p90 {num(residuals.get('p90_m'), '.3f')} m, "
+        f"Gaussians {box(record.get('target_extent_m'))} m, "
+        f"mesh {box(record.get('mesh_extent_m'))} m, "
+        f"depth ratio {num(record.get('pose_depth_ratio'), '.2f')}"
+    )
+
+
 def export_run(out: Path | str) -> int:
     """Export a placed run directory (bin or video) as USD and MJCF, gravity aligned.
 
@@ -674,6 +694,7 @@ def export_run(out: Path | str) -> int:
         clouds: list[np.ndarray] = []
         in_objects = np.zeros(len(positions), dtype=bool)
         excluded: dict[str, Any] = {}
+        why: dict[str, str] = {}
         for record in placement["icp"]["objects"]:
             if not record.get("placed"):
                 continue
@@ -682,6 +703,7 @@ def export_run(out: Path | str) -> int:
                 # pipeline trusts. Mailbox's gate rejects sent a 1 m body into
                 # the ground (run 43309011103).
                 excluded[f"object_{record['object']}"] = record.get("gate_failed")
+                why[f"object_{record['object']}"] = _gate_evidence(record)
                 continue
             number = record["object"]
             vertices, faces = load_glb(record["glb"])
@@ -707,8 +729,10 @@ def export_run(out: Path | str) -> int:
             in_objects[ids] = True
             clouds.append(positions[ids])
         if not placed:
+            # A failed run publishes only the manifest, which carries this.
             raise ValueError(
-                f"no placed object passed the ICP gate ({len(excluded)} rejected)"
+                f"no placed object passed the ICP gate ({len(excluded)} rejected): "
+                + "; ".join(f"{name} {text}" for name, text in why.items())
             )
         support = support_frame(positions[~in_objects], clouds, SUPPORT_BAND_M / metres)
         frame = support["world_from_scene"]
@@ -762,7 +786,7 @@ def export_run(out: Path | str) -> int:
             physics_records=evidence["physics_records"],
         )
     except (OSError, ValueError, KeyError) as exc:
-        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
+        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[:1500])
     entries.append(entry)
     ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
