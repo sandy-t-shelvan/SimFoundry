@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from sceneagent.bin_run import SCENE, SOURCE
+from sceneagent.bin_run import load_scene
 
 # The sam3d10 env and checkout on 58301075 (probe run 42908974589):
 # sam3d_objects 0.0.1 editable from /root/sam-3d-objects, pytorch3d 0.7.8,
@@ -142,6 +142,7 @@ def run_bin_sam3d(
 ) -> int:
     """Mesh every grouped object. Return 0 only when every object has a mesh."""
     out = Path(out)
+    scene = load_scene(out)
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -149,7 +150,11 @@ def run_bin_sam3d(
         ledger = {"entries": []}
     entries = [e for e in ledger.get("entries", []) if e.get("item") != ITEM]
     entry: dict[str, Any] = {"item": ITEM}
-    evidence: dict[str, Any] = {"scene": SCENE, "seed": SEED, "view_rule": VIEW_RULE}
+    evidence: dict[str, Any] = {
+        "scene": scene.name,
+        "seed": SEED,
+        "view_rule": VIEW_RULE,
+    }
     try:
         association = json.loads(
             (out / "association_evidence.json").read_text(encoding="utf-8")
@@ -227,13 +232,14 @@ def run_bin_sam3d(
     ) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
-    ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "sam3d_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
     decisions = {e.get("item"): e.get("decision") for e in entries}
-    return 0 if all(decisions.get(item) == "accept" for item in REQUIRED) else 1
+    required = (scene.input_item, *REQUIRED[1:])
+    return 0 if all(decisions.get(item) == "accept" for item in required) else 1
 
 
 def main(argv: list[str] | None = None) -> int:

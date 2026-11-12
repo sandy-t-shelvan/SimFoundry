@@ -86,6 +86,8 @@ REMOTE_COLMAP_BIN = "/opt/colmap-cuda/bin"
 # py7zr goes here rather than into the shared ``sa`` env.
 REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
+# KAN-48 thin slice: the one video, besides Fruits, that the box receives.
+MAILBOX_RELATIVE = "docs/assets/example_videos/Mailbox.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
 # The GraspClutter6D pipelines' own run dir. Sharing REMOTE_OUT with run4 let
@@ -96,6 +98,8 @@ REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
 # Isaac Lab render check (KAN-41). Its own run dir and its own interpreter:
 # the isaaclab env that box_setup.sh s_isaaclab installs, never the sa env.
 REMOTE_ISAACLAB_OUT = "/workspace/sf4-smoke/isaaclab"
+# The Mailbox slice's own run dir, so the bin's results are never overwritten.
+REMOTE_MAILBOX_OUT = "/workspace/sf4-smoke/mailbox"
 ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
 # The setup stages run detached on the box (setsid nohup), so a dropped
 # runner does not stop them; each run waits this long, then reports what is
@@ -204,6 +208,18 @@ PIPELINES = {
     "probe": ((), "host inventory"),
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
     "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
+    "mailbox": (
+        (
+            "video",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+            "ICP residuals",
+        ),
+        MAILBOX_RELATIVE,
+    ),
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
@@ -239,6 +255,8 @@ def remote_out(pipeline: str) -> str:
         return REMOTE_SETUP_OUT
     if pipeline == "isaaclab_render":
         return REMOTE_ISAACLAB_OUT
+    if pipeline == "mailbox":
+        return REMOTE_MAILBOX_OUT
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
 
 
@@ -312,6 +330,8 @@ FETCH_NAMES = (
     "setup_evidence.json",
     "isaaclab_render.png",
     "isaaclab_render.log",
+    "video_run.json",
+    "scene.json",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -341,6 +361,8 @@ PUBLISHED_NAMES = frozenset(
         "setup_evidence.json",
         "isaaclab_render.png",
         "isaaclab_render.log",
+        "video_run.json",
+        "scene.json",
     }
 )
 PUBLIC_FIELDS = (
@@ -821,6 +843,15 @@ def build_remote_command(
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline == "setup":
         return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
+    if pipeline == "mailbox":
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.video_run",
+            f"{repo}/{MAILBOX_RELATIVE}",
+            "--out",
+            out,
+        ]
     if pipeline == "isaaclab_render":
         # The repo on PYTHONPATH must not shadow packages in the isaaclab env.
         return [
@@ -1073,7 +1104,7 @@ def rsync_invocations(
     known_hosts: str,
     repo_dir: str,
 ) -> list[tuple[list[str], Path]]:
-    """Copy ``sceneagent`` and Fruits.mp4. The rest of the checkout stays home."""
+    """Copy ``sceneagent``, Fruits.mp4 and Mailbox.mp4. The rest stays home."""
     repo = require_remote_dir(repo_dir)
     remote = f"root@{host}:{repo}/"
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
@@ -1109,6 +1140,7 @@ def rsync_invocations(
                 "-e",
                 ssh_e,
                 FRUITS_RELATIVE,
+                *[m for m in (MAILBOX_RELATIVE,) if (checkout / m).is_file()],
                 remote,
             ],
             checkout,
@@ -1145,9 +1177,10 @@ def iter_shipped_files(checkout: Path) -> list[Path]:
             if _ship_excluded(relative):
                 continue
             shipped.append(path)
-    fruits = root / FRUITS_RELATIVE
-    if fruits.is_file() and not _ship_excluded(FRUITS_RELATIVE):
-        shipped.append(fruits)
+    for relative in (FRUITS_RELATIVE, MAILBOX_RELATIVE):
+        video = root / relative
+        if video.is_file() and not _ship_excluded(relative):
+            shipped.append(video)
     return shipped
 
 

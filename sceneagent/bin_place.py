@@ -61,7 +61,7 @@ from sceneagent.bin_benchmark import (
     reference_clouds,
     score_bin,
 )
-from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE
+from sceneagent.bin_run import DATA_DIR, SCENE, load_scene
 from sceneagent.similarity_icp import (
     TRIM_KEEP,
     apply_similarity,
@@ -616,6 +616,7 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
     the score file is written; its numbers are reported, not gated.
     """
     out, data = Path(out), Path(data)
+    scene = load_scene(out)
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -628,7 +629,7 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
     ]
     icp_entry: dict[str, Any] = {"item": ICP_ITEM}
     score_entry: dict[str, Any] = {"item": SCORE_ITEM}
-    evidence: dict[str, Any] = {"scene": SCENE}
+    evidence: dict[str, Any] = {"scene": scene.name}
     try:
         inputs = _load(out)
         placement = place_objects(out, inputs)
@@ -649,32 +650,39 @@ def run_bin_place(out: Path | str, data: Path | str = DATA_DIR) -> int:
             placed=len(placed),
             gate_accepted=sum(o["gate"] == "accept" for o in placed),
         )
-        score = score_scene(data, inputs, placement["placed"])
-        evidence["score"] = score
-        (out / score["file_name"]).write_text(
-            json.dumps(score, indent=2) + "\n", encoding="utf-8"
-        )
-        score_entry.update(
-            decision="accept",
-            use_gpu=False,
-            f1_mean=round(score["f1_mean"], 4),
-            chamfer_mean_matched_m=score["chamfer_mean_matched_m"],
-            delivered=len(placement["placed"]),
-            reference=score["reference_objects"],
-        )
+        if scene.ground_truth:
+            score = score_scene(data, inputs, placement["placed"])
+            evidence["score"] = score
+            (out / score["file_name"]).write_text(
+                json.dumps(score, indent=2) + "\n", encoding="utf-8"
+            )
+            score_entry.update(
+                decision="accept",
+                use_gpu=False,
+                f1_mean=round(score["f1_mean"], 4),
+                chamfer_mean_matched_m=score["chamfer_mean_matched_m"],
+                delivered=len(placement["placed"]),
+                reference=score["reference_objects"],
+            )
+        else:
+            # No reference scans: nothing to score. Placement stands as is,
+            # and no score entry is written for vast_smoke to judge.
+            evidence["score"] = {"skipped": "no ground truth for this scene"}
+            score_entry = {}
     except (OSError, ValueError, KeyError, RuntimeError, StopIteration) as exc:
         reason = f"{type(exc).__name__}: {exc}"[-800:]
         for entry in (icp_entry, score_entry):
             if "decision" not in entry:
                 entry.update(decision="reject", reason=reason)
-    entries += [icp_entry, score_entry]
-    ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
+    entries += [e for e in (icp_entry, score_entry) if e]
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "bin_score.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
     decisions = {e.get("item"): e.get("decision") for e in entries}
-    return 0 if all(decisions.get(item) == "accept" for item in REQUIRED) else 1
+    required = REQUIRED if scene.ground_truth else REQUIRED[:-1]
+    return 0 if all(decisions.get(item) == "accept" for item in required) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
