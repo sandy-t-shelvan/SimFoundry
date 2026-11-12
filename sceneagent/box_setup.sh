@@ -260,9 +260,10 @@ s_isaaclab() {
   export HEADLESS=1
   # The box pip.conf adds pypi.ngc.nvidia.com, which does not resolve, so every
   # package waits out retries (found on 60254439). Ignore that config.
-  PIP_CONFIG_FILE=/dev/null "$ISAACLAB_ENV/bin/pip" install --upgrade pip
-  PIP_CONFIG_FILE=/dev/null "$ISAACLAB_ENV/bin/pip" install \
-    "isaacsim[all,extscache]==${ISAACSIM_PIP}" \
+  # isaaclab.sh runs pip itself, so the variable has to be exported.
+  export PIP_CONFIG_FILE=/dev/null
+  "$ISAACLAB_ENV/bin/pip" install --upgrade pip
+  "$ISAACLAB_ENV/bin/pip" install "isaacsim[all,extscache]==${ISAACSIM_PIP}" \
     --extra-index-url https://pypi.nvidia.com
   clone https://github.com/isaac-sim/IsaacLab "$ISAACLAB_ROOT" "$ISAACLAB_TAG"
   if [ "$(git -C "$ISAACLAB_ROOT" rev-parse HEAD)" != "$ISAACLAB_COMMIT" ]; then
@@ -270,11 +271,16 @@ s_isaaclab() {
     git -C "$ISAACLAB_ROOT" checkout --detach "$ISAACLAB_COMMIT"
   fi
   cd "$ISAACLAB_ROOT"
+  # flatdict 4.0.1 builds with pkg_resources, which setuptools 82 removed.
+  # The installer keeps going when that build fails, so the core package is
+  # missing and the check cannot import it (found on 60254439).
+  "$ISAACLAB_ENV/bin/pip" install "setuptools>=69,<81"
+  "$ISAACLAB_ENV/bin/pip" install --no-build-isolation flatdict==4.0.1
   # none: the headless check does not use a learning framework.
   ./isaaclab.sh --install none
   cd /tmp
   "$ISAACLAB_ENV/bin/python3" "$HERE/isaaclab_headless_check.py" \
-    | tee "$ROOT/isaaclab_check.log"
+    > "$ROOT/isaaclab_check.log" 2>&1
   grep -q '^cube_height_m ' "$ROOT/isaaclab_check.log"
   du -sb "$ISAACLAB_ENV" "$ISAACLAB_ROOT" | awk '{s+=$1} END {printf "%d\n", s}' \
     > "$ROOT/isaaclab_disk_bytes"

@@ -140,6 +140,8 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "ISAACSIM_PIP=5.1.0" in text
     isaac = text.split("s_isaaclab() {", 1)[1].split("\n}", 1)[0]
     assert "PIP_CONFIG_FILE=/dev/null" in isaac
+    assert isaac.index("setuptools>=69,<81") < isaac.index("./isaaclab.sh --install none")
+    assert "flatdict==4.0.1" in isaac
     assert "ISAACLAB_TAG=v2.3.2" in text
     assert "37ddf626871758333d6ed89cf64ad702aef127d0" in text
     assert "OMNI_KIT_ACCEPT_EULA=YES" in text
