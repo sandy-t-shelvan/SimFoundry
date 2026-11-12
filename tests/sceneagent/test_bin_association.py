@@ -273,6 +273,18 @@ def test_a_video_never_merges_masks_whose_phrases_differ(tmp_path):
     assert ba.evidence_from(video)["rule"]["grouping"][ba.SAME_PHRASE] is True
 
 
+def test_the_consensus_profile_shrinks_a_set_as_more_views_must_agree():
+    # Gaussian 0 is admitted by all 8 views, 1 by 4, 2 by 2: a floater.
+    positions = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [5.0, 5.0, 5.0]])
+    members = []
+    for view in range(8):
+        ids = [0] + ([1] if view < 4 else []) + ([2] if view < 2 else [])
+        members.append({"view": f"v{view}", "gaussians": np.array(ids)})
+    profile = ba.consensus_profile(members, positions, 0.5, 2)
+    assert [(p["need"], p["gaussians"]) for p in profile] == [(2, 3), (4, 2)]
+    assert "extent_m" in profile[0] and "extent_m" not in profile[1]
+
+
 def test_masks_in_one_view_never_merge_directly():
     positions = np.zeros((4, 3))
     shared = np.array([0, 1, 2, 3])

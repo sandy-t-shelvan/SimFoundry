@@ -450,6 +450,36 @@ def focal_px(camera: dict[str, Any]) -> float:
     return float(p[0])
 
 
+def consensus_profile(
+    members: list[dict[str, Any]], positions: np.ndarray, metres: float, kappa: int
+) -> list[dict[str, Any]]:
+    """Diagnostic: the object's Gaussian set at kappa and at a quarter and half of its views.
+
+    A video object is seen in up to 30 mask views, so ``kappa`` = 2 keeps a
+    Gaussian two of them admit; this records how many Gaussians, and how
+    large a box (5th-95th percentile, metres), a stricter count would keep.
+    Nothing reads it to decide.
+    """
+    per_view: dict[str, list[np.ndarray]] = {}
+    for mask in members:
+        per_view.setdefault(mask["view"], []).append(mask["gaussians"])
+    views = len(per_view)
+    seen = [np.unique(np.concatenate(sets)) for sets in per_view.values()]
+    ids, counts = np.unique(np.concatenate(seen), return_counts=True)
+    needs = sorted(
+        {min(kappa, views), max(kappa, -(-views // 4)), max(kappa, -(-views // 2))}
+    )
+    profile = []
+    for need in needs:
+        kept = ids[counts >= need]
+        entry: dict[str, Any] = {"need": int(need), "gaussians": int(kept.size)}
+        if kept.size >= 3:
+            low, high = np.percentile(positions[kept], (5.0, 95.0), axis=0)
+            entry["extent_m"] = [round(float(v) * metres, 3) for v in high - low]
+        profile.append(entry)
+    return profile
+
+
 def associate(
     out: Path,
     data: Path,
@@ -556,9 +586,13 @@ def associate(
     components = [
         c for c in components if len({masks[i]["view"] for i in c}) >= min_views
     ]
+    metres = float(unit["metres_per_unit"])
     objects = []
     for number, members in enumerate(components):
         ids, union_size = consensus_gaussians([masks[i] for i in members], KAPPA)
+        profile = consensus_profile(
+            [masks[i] for i in members], positions, metres, KAPPA
+        )
         objects.append(
             {
                 "object": number,
@@ -569,6 +603,7 @@ def associate(
                 "views": len({masks[i]["view"] for i in members}),
                 "gaussians": int(ids.size),
                 "gaussians_union": union_size,
+                "consensus_profile": profile,
                 "centroid": [round(float(c), 5) for c in positions[ids].mean(axis=0)],
                 "ids": ids,
             }

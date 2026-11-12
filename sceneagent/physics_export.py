@@ -625,8 +625,8 @@ def diagnose(
     return {"object_boxes": diagnostics, "overlapping_boxes": overlaps}
 
 
-def _gate_evidence(record: dict[str, Any]) -> str:
-    """One gate reject in a line: what failed, the residuals, the two sizes."""
+def _gate_evidence(record: dict[str, Any], found: dict[str, Any] | None = None) -> str:
+    """One gate reject in a line: what failed, the residuals, the sizes, the consensus."""
     residuals = record.get("residuals") or {}
 
     def num(value: Any, spec: str) -> str:
@@ -642,6 +642,10 @@ def _gate_evidence(record: dict[str, Any]) -> str:
         f"Gaussians {box(record.get('target_extent_m'))} m, "
         f"mesh {box(record.get('mesh_extent_m'))} m, "
         f"depth ratio {num(record.get('pose_depth_ratio'), '.2f')}"
+        + "".join(
+            f", {p['need']} views {p['gaussians']} at {box(p.get('extent_m'))} m"
+            for p in (found or {}).get("consensus_profile", [])
+        )
     )
 
 
@@ -695,6 +699,7 @@ def export_run(out: Path | str) -> int:
         in_objects = np.zeros(len(positions), dtype=bool)
         excluded: dict[str, Any] = {}
         why: dict[str, str] = {}
+        found = {o["object"]: o for o in association.get("object_list", [])}
         for record in placement["icp"]["objects"]:
             if not record.get("placed"):
                 continue
@@ -703,7 +708,9 @@ def export_run(out: Path | str) -> int:
                 # pipeline trusts. Mailbox's gate rejects sent a 1 m body into
                 # the ground (run 43309011103).
                 excluded[f"object_{record['object']}"] = record.get("gate_failed")
-                why[f"object_{record['object']}"] = _gate_evidence(record)
+                why[f"object_{record['object']}"] = _gate_evidence(
+                    record, found.get(record["object"], {})
+                )
                 continue
             number = record["object"]
             vertices, faces = load_glb(record["glb"])

@@ -87,8 +87,11 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
     if name == "association":
         # Association made before differing phrases stopped merging.
-        grouping = _evidence(out, "association_evidence.json").get("rule", {})
-        return grouping.get("grouping", {}).get(SAME_PHRASE) is True
+        evidence = _evidence(out, "association_evidence.json")
+        grouping = evidence.get("rule", {}).get("grouping", {})
+        # ... and before each object recorded its consensus profile.
+        objects = evidence.get("object_list") or [{}]
+        return grouping.get(SAME_PHRASE) is True and "consensus_profile" in objects[0]
     if name == "place":
         # Placements judged by an earlier gate are judged again.
         icp = _evidence(out, "bin_score.json").get("icp", {})
