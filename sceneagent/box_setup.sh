@@ -59,7 +59,14 @@ SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
 # HEAD of the checkout that finished s_sam3d on 60254439.
 SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights"
+# Isaac Lab is its own env. Do not install it into sa or sam3d10, and do not
+# add usd-core: Isaac Sim ships pxr (AGENTS.md). Pins are the pair already
+# used together in this repo: Isaac Sim 5.1.0 and Isaac Lab v2.3.2.
+ISAACSIM_VERSION=5.1.0
+ISAACLAB_TAG=v2.3.2
+ISAACLAB_ROOT=/workspace/src/IsaacLab
+ISAACLAB_ENV="$ENVS/isaaclab"
+STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -236,6 +243,46 @@ s_sam3d_weights() {
   test -s checkpoints/hf/pipeline.yaml
 }
 
+s_isaaclab() {
+  # After sam3d. Own Python 3.11 env, pip Isaac Sim, then the Lab tag.
+  [ -x "$ISAACLAB_ENV/bin/python3" ] || "$MAMBA" create -y -p "$ISAACLAB_ENV" python=3.11
+  local py="$ISAACLAB_ENV/bin/python3"
+  local pip="$ISAACLAB_ENV/bin/pip"
+  "$pip" install "isaacsim[all,extscache]==${ISAACSIM_VERSION}" \
+    --extra-index-url https://pypi.nvidia.com
+  clone https://github.com/isaac-sim/IsaacLab "$ISAACLAB_ROOT" "$ISAACLAB_TAG"
+  export OMNI_KIT_ACCEPT_EULA=YES
+  export CONDA_PREFIX="$ISAACLAB_ENV"
+  cd "$ISAACLAB_ROOT"
+  PATH="$ISAACLAB_ENV/bin:$PATH" ./isaaclab.sh --install
+  cd /tmp
+  OMNI_KIT_ACCEPT_EULA=YES "$py" - <<'PY'
+import os
+
+os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
+from isaacsim import SimulationApp
+
+app = SimulationApp({"headless": True})
+import omni.usd
+from pxr import Gf, UsdGeom
+
+stage = omni.usd.get_context().get_stage()
+UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+UsdGeom.Mesh.Define(stage, "/World/Ground")
+cube = UsdGeom.Cube.Define(stage, "/World/Cube")
+cube.CreateSizeAttr(0.2)
+cube.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 1.0))
+for _ in range(120):
+    app.update()
+height = cube.GetPrim().GetAttribute("xformOp:translate").Get()[2]
+print(f"ISAACLAB_CUBE_HEIGHT {float(height)}")
+app.close()
+PY
+  # Last so the report's log tail still has the installed size.
+  echo "isaaclab_disk_bytes $(du -sb "$ISAACLAB_ENV" "$ISAACLAB_ROOT" | awk '{s+=$1} END {print s}')"
+}
+
 run_stage() {
   local name="$1"
   if [ -f "$STATE/$name.ok" ]; then
@@ -275,6 +322,7 @@ do_report() {
   STATE="$STATE" LOGS="$LOGS" OUT="$OUT" STAGES="$STAGES" ENVS="$ENVS" \
     GSAM_ROOT="$GSAM_ROOT" DA3_ROOT="$DA3_ROOT" SAM3D_ROOT="$SAM3D_ROOT" \
     SAM3D_ENV="$SAM3D_ENV" SAM_WEIGHTS="$SAM_WEIGHTS" COLMAP_TAG="$COLMAP_TAG" \
+    ISAACLAB_ROOT="$ISAACLAB_ROOT" ISAACLAB_TAG="$ISAACLAB_TAG" \
     SAM2_CHECKPOINT="$SAM2_CHECKPOINT" SAM2_1_CHECKPOINT="$SAM2_1_CHECKPOINT" \
     "$py" - <<'PY'
 import hashlib, json, os, pathlib, re, subprocess
@@ -379,6 +427,7 @@ versions = {
     "nerf": pyver(envs + "/nerf/bin/python3", ["torch", "torchvision", "nerfstudio", "gsplat"]),
     "gsam2": pyver(envs + "/gsam2/bin/python3", ["torch", "torchvision", "groundingdino", "sam2", "transformers"]),
     "sam3d10": pyver(sam3d_py, ["torch", "pytorch3d", "kaolin", "moge", "sam3d_objects", "gsplat"]),
+    "isaaclab": pyver(envs + "/isaaclab/bin/python3", ["isaacsim", "isaaclab"]),
 }
 document = {
     "box_setup": "ours: sceneagent/box_setup.sh",
@@ -393,6 +442,8 @@ document = {
         "grounded_sam_2": commit(env["GSAM_ROOT"]),
         "depth_anything_3": commit(env["DA3_ROOT"]),
         "sam_3d_objects": commit(env["SAM3D_ROOT"]),
+        "isaaclab": commit(env["ISAACLAB_ROOT"]),
+        "isaaclab_tag": env["ISAACLAB_TAG"],
     },
     "checksums": {
         "sam_vit_h_4b8939.pth": sha256(env["SAM_WEIGHTS"]),

@@ -26,7 +26,8 @@ def test_the_setup_script_parses_and_names_every_stage():
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
     text = SCRIPT.read_text(encoding="utf-8")
     stages = text.split('STAGES="', 1)[1].split('"', 1)[0].split()
-    assert stages[0] == "apt" and stages[-1] == "sam3d_weights"
+    assert stages[0] == "apt" and stages[-2] == "sam3d_weights"
+    assert stages[-1] == "isaaclab"
     for name in stages:
         assert f"s_{name}() {{" in text
 
@@ -137,3 +138,23 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318" in text
     assert "f91db411c50efee93d8db7aeb323885650f6f722" in text
     assert 'env["LIDRA_SKIP_INIT"] = "true"' in text
+
+
+def test_isaaclab_is_its_own_env_after_sam3d():
+    text = SCRIPT.read_text(encoding="utf-8")
+    stages = text.split('STAGES="', 1)[1].split('"', 1)[0].split()
+    assert stages.index("sam3d") < stages.index("isaaclab")
+    body = text.split("s_isaaclab() {", 1)[1].split("\nrun_stage()", 1)[0]
+    assert "python=3.11" in body
+    assert "isaacsim[all,extscache]==${ISAACSIM_VERSION}" in body
+    assert "ISAACSIM_VERSION=5.1.0" in text
+    assert "ISAACLAB_TAG=v2.3.2" in text
+    assert "OMNI_KIT_ACCEPT_EULA=YES" in body
+    assert "./isaaclab.sh --install" in body
+    assert "ISAACLAB_CUBE_HEIGHT" in body
+    assert "range(120)" in body
+    assert "isaaclab_disk_bytes" in body
+    assert "usd-core" not in body
+    assert '"$ENVS/sa"' not in body
+    assert "sam3d10" not in body
+    assert "$ISAACLAB_ENV" in body
