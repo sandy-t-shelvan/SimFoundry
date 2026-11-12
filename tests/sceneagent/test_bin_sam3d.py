@@ -182,13 +182,13 @@ def test_sam3d_is_a_bin_pipeline():
     assert "sam3d_evidence.json" in FETCH_NAMES
 
 
-def test_the_worker_uses_the_envs_certifi_bundle_only_when_present(tmp_path, monkeypatch):
+def test_the_worker_uses_the_first_ca_bundle_that_exists(tmp_path, monkeypatch):
     from sceneagent import bin_sam3d
 
-    missing = tmp_path / "none.pem"
-    monkeypatch.setattr(bin_sam3d, "SAM3D_CERTS", str(missing))
+    first, second = tmp_path / "a.pem", tmp_path / "b.pem"
+    monkeypatch.setattr(bin_sam3d, "CERT_BUNDLES", (str(first), str(second)))
     assert "SSL_CERT_FILE" not in bin_sam3d.worker_environment({})
-    bundle = tmp_path / "cacert.pem"
-    bundle.write_text("certs")
-    monkeypatch.setattr(bin_sam3d, "SAM3D_CERTS", str(bundle))
-    assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(bundle)
+    second.write_text("certs")
+    assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(second)
+    first.write_text("certs")
+    assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(first)
