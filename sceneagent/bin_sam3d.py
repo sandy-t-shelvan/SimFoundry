@@ -33,6 +33,7 @@ from sceneagent.bin_run import load_scene
 # kaolin 0.17.0, moge 1.0.0. The box's other env, sam3d, has no pytorch3d.
 # The checkout is read, never written.
 SAM3D_ENV = "/opt/conda/envs/sam3d10"
+SAM3D_CERTS = f"{SAM3D_ENV}/lib/python3.11/site-packages/certifi/cacert.pem"
 SAM3D_PYTHON = f"{SAM3D_ENV}/bin/python3"
 SAM3D_ROOT = "/root/sam-3d-objects"
 # Where setup.md's download leaves pipeline.yaml (checkpoints/hf), where an
@@ -131,6 +132,12 @@ def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     # (run 42759919334). Downloads land in our own dir, never in /root's cache.
     env.pop("HF_HUB_OFFLINE", None)
     env["HF_HUB_CACHE"] = HF_CACHE
+    # The DINO embedder fetches its weights through torch.hub, whose TLS uses
+    # the env's conda CA bundle from the base image; on 60254439 that failed
+    # with "certificate has expired" (run 43179492561). pip's certifi in the
+    # same env is current, so point TLS at it when it is there.
+    if Path(SAM3D_CERTS).is_file():
+        env["SSL_CERT_FILE"] = SAM3D_CERTS
     return env
 
 

@@ -180,3 +180,15 @@ def test_sam3d_is_a_bin_pipeline():
     assert remote_out("sam3d") == REMOTE_BIN_OUT
     assert PIPELINES["sam3d"][0][-1] == "SAM 3D meshes"
     assert "sam3d_evidence.json" in FETCH_NAMES
+
+
+def test_the_worker_uses_the_envs_certifi_bundle_only_when_present(tmp_path, monkeypatch):
+    from sceneagent import bin_sam3d
+
+    missing = tmp_path / "none.pem"
+    monkeypatch.setattr(bin_sam3d, "SAM3D_CERTS", str(missing))
+    assert "SSL_CERT_FILE" not in bin_sam3d.worker_environment({})
+    bundle = tmp_path / "cacert.pem"
+    bundle.write_text("certs")
+    monkeypatch.setattr(bin_sam3d, "SAM3D_CERTS", str(bundle))
+    assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(bundle)
