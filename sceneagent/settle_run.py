@@ -129,7 +129,10 @@ def context(out: Path, result: dict) -> str:
             f"found as {_phrases(found.get(name, {}))}, "
             f"v {_num(motion.get('speed_1s_m_s'), '.3f')}"
             f"->{_num(motion.get('speed_m_s'), '.3f')} m/s, "
-            f"w {_num(motion.get('angular_speed_rad_s'), '.2f')} rad/s"
+            f"w {_num(motion.get('angular_speed_rad_s'), '.2f')} rad/s, "
+            f"COM {_num(motion.get('com_speed_m_s'), '.3f')} m/s, "
+            f"last 0.5 s moved {_num(motion.get('moved_last_0_5_s_m'), '.4f')} m "
+            f"turned {_num(motion.get('turned_last_0_5_s_deg'), '.1f')} deg"
         )
     for name, why in sorted(export.get("excluded_evidence", {}).items()):
         parts.append(f"{name} left out: {why}")
@@ -266,6 +269,39 @@ def _angular_speed(body, torch) -> float | None:
         return None
 
 
+def _pose(body) -> tuple:
+    """Diagnostic: root position and quaternion (w, x, y, z) as plain floats."""
+    try:
+        position = [float(v) for v in body.data.root_pos_w.torch[0]]
+        quat = [float(v) for v in body.data.root_quat_w.torch[0]]
+    except (AttributeError, IndexError, TypeError):
+        return ()
+    return (position, quat)
+
+
+def _com_speed(body, torch) -> float | None:
+    """Diagnostic: the centre of mass's speed, when Isaac Lab exposes it."""
+    try:
+        return float(torch.linalg.norm(body.data.root_com_lin_vel_w.torch[0]))
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+def _last_half_second(before: tuple | None, after: tuple) -> dict:
+    """How far a body moved and turned between 1.5 s and 2 s."""
+    if not before or not after:
+        return {}
+    import math
+
+    (p0, q0), (p1, q1) = before, after
+    moved = math.dist(p0, p1)
+    dot = min(1.0, abs(sum(a * b for a, b in zip(q0, q1, strict=True))))
+    return {
+        "moved_last_0_5_s_m": moved,
+        "turned_last_0_5_s_deg": math.degrees(2 * math.acos(dot)),
+    }
+
+
 def _steps(stage: Path, out: Path, prims: list[str], sim_cfg: object) -> None:
     import isaaclab.sim as sim_utils
     import numpy as np
@@ -310,6 +346,7 @@ def _steps(stage: Path, out: Path, prims: list[str], sim_cfg: object) -> None:
     start_z = {n: float(b.data.root_pos_w.torch[0][2]) for n, b in bodies.items()}
     steps = round(SETTLE_S / dt)
     halfway: dict[str, float] = {}
+    late: dict[str, tuple] = {}
     for step in range(steps):
         for body in bodies.values():
             body.write_data_to_sim()
@@ -324,6 +361,11 @@ def _steps(stage: Path, out: Path, prims: list[str], sim_cfg: object) -> None:
                 n: float(torch.linalg.norm(b.data.root_lin_vel_w.torch[0]))
                 for n, b in bodies.items()
             }
+        if step == steps - steps // 4 - 1:
+            # Pose at 1.5 s: how far a body really moves in the last 0.5 s,
+            # whatever its frame's velocity says (run 43332392762: an
+            # upright mailbox read 0.035 m/s with 0.40 rad/s of spin).
+            late = {n: _pose(b) for n, b in bodies.items()}
     objects = {}
     for name, body in bodies.items():
         velocity = body.data.root_lin_vel_w.torch[0]
@@ -334,6 +376,8 @@ def _steps(stage: Path, out: Path, prims: list[str], sim_cfg: object) -> None:
             "speed_1s_m_s": halfway.get(name),
             "angular_speed_rad_s": _angular_speed(body, torch),
             "start_centre_z_m": start_z[name],
+            "com_speed_m_s": _com_speed(body, torch),
+            **_last_half_second(late.get(name), _pose(body)),
         }
     frame = camera.data.output["rgb"][0, ..., :3]
     if frame.dtype.is_floating_point:

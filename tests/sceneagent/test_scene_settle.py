@@ -256,7 +256,7 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
         "exported 1, 1 left out by the ICP gate",
         "object_1: 0.20x0.10x0.30 m, bottom -0.004 m, gate reject ['p90']",
         "found as cube x1, mailbox x3 in 4 views",
-        "v 0.050->0.022 m/s, w ? rad/s",
+        "v 0.050->0.022 m/s, w ? rad/s, COM ? m/s, last 0.5 s moved ? m turned ? deg",
         "overlapping boxes: object_1~object_2",
         "object_2 left out: failed ['p90_m'], silhouette 0.60",
     ):
@@ -349,3 +349,19 @@ def test_extent_is_the_middle_ninety_percent_box_in_metres():
     sides = extent_m(points, 0.5)
     assert sides == [round(s, 3) for s in sides]
     assert np.allclose(sides, [0.9, 0.45, 0.045], atol=0.01)
+
+
+def test_last_half_second_measures_real_motion_not_frame_velocity():
+    still = ([0.0, 0.0, 0.1], [1.0, 0.0, 0.0, 0.0])
+    assert settle_run._last_half_second(still, still) == {
+        "moved_last_0_5_s_m": 0.0,
+        "turned_last_0_5_s_deg": 0.0,
+    }
+    import math
+
+    half = math.radians(10) / 2  # 10 degrees about z
+    turned = ([0.0, 0.01, 0.1], [math.cos(half), 0.0, 0.0, math.sin(half)])
+    moved = settle_run._last_half_second(still, turned)
+    assert abs(moved["moved_last_0_5_s_m"] - 0.01) < 1e-9
+    assert abs(moved["turned_last_0_5_s_deg"] - 10.0) < 1e-6
+    assert settle_run._last_half_second(None, still) == {}
