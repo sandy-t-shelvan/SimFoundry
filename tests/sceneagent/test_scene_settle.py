@@ -200,6 +200,22 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
             }
         )
     )
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "object_list": [
+                    {
+                        "object": 1,
+                        "views": 4,
+                        "masks": [{"phrase": "mailbox"}] * 3 + [{"phrase": "cube"}],
+                    }
+                ]
+            }
+        )
+    )
+    (tmp_path / "bin_score.json").write_text(
+        json.dumps({"icp": {"objects": [{"object": 1, "gate_failed": ["p90"]}]}})
+    )
     moving = {
         "speed_m_s": 0.022,
         "centre_z_m": 0.1,
@@ -226,7 +242,8 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
     for piece in (
         "association 3 objects (4 dropped under 3 views)",
         "exported 1, ICP gate accept 0",
-        "object_1: 0.20x0.10x0.30 m, bottom -0.004 m, gate reject",
+        "object_1: 0.20x0.10x0.30 m, bottom -0.004 m, gate reject ['p90']",
+        "found as cube x1, mailbox x3 in 4 views",
         "v 0.050->0.022 m/s, w ? rad/s",
         "overlapping boxes: object_1~object_2",
     ):

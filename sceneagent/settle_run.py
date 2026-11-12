@@ -76,17 +76,42 @@ def judge(objects: dict[str, dict[str, Any]]) -> tuple[str, str]:
     )
 
 
+def _read(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _phrases(found: dict) -> str:
+    """``mailbox x9, cube x2 in 11 views`` from one association object."""
+    counts: dict[str, int] = {}
+    for mask in found.get("masks", []):
+        phrase = str(mask.get("phrase"))
+        counts[phrase] = counts.get(phrase, 0) + 1
+    listed = ", ".join(f"{p} x{n}" for p, n in sorted(counts.items()))
+    return f"{listed or '?'} in {found.get('views', '?')} views"
+
+
 def _num(value, spec: str) -> str:
     return "?" if value is None else format(value, spec)
 
 
 def context(out: Path, result: dict) -> str:
     """One line of evidence for a reject: counts, then per object box, gate and motion."""
-    try:
-        export = json.loads((out / "export_evidence.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        export = {}
+    export = _read(out / "export_evidence.json")
     boxes = export.get("object_boxes", {})
+    # What each object was found as (GroundingDINO phrases, mask views) and
+    # which residual failed its ICP gate.
+    found = {
+        f"object_{o['object']}": o
+        for o in _read(out / "association_evidence.json").get("object_list", [])
+    }
+    icp = {
+        f"object_{o['object']}": o
+        for o in _read(out / "bin_score.json").get("icp", {}).get("objects", [])
+    }
     gates = [b.get("gate") for b in boxes.values()]
     parts = [
         (
@@ -100,7 +125,8 @@ def context(out: Path, result: dict) -> str:
         size = "x".join(f"{v:.2f}" for v in box.get("size_m", []))
         parts.append(
             f"{name}: {size} m, bottom {_num(box.get('bottom_z_m'), '+.3f')} m, "
-            f"gate {box.get('gate')}, "
+            f"gate {box.get('gate')} {icp.get(name, {}).get('gate_failed') or ''}, "
+            f"found as {_phrases(found.get(name, {}))}, "
             f"v {_num(motion.get('speed_1s_m_s'), '.3f')}"
             f"->{_num(motion.get('speed_m_s'), '.3f')} m/s, "
             f"w {_num(motion.get('angular_speed_rad_s'), '.2f')} rad/s"
