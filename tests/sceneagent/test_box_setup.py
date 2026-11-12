@@ -26,7 +26,8 @@ def test_the_setup_script_parses_and_names_every_stage():
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
     text = SCRIPT.read_text(encoding="utf-8")
     stages = text.split('STAGES="', 1)[1].split('"', 1)[0].split()
-    assert stages[0] == "apt" and stages[-1] == "sam3d_weights"
+    assert stages[0] == "apt" and stages[-1] == "isaaclab"
+    assert stages[-2] == "sam3d_weights"
     for name in stages:
         assert f"s_{name}() {{" in text
 
@@ -113,6 +114,26 @@ def test_no_published_file_may_hold_the_token(tmp_path, monkeypatch):
     with pytest.raises(vs.SmokeError, match="No artifacts were published"):
         vs.publish_artifacts(run, tmp_path / "artifacts", api_key="")
     assert not (tmp_path / "artifacts").exists()
+
+
+def test_isaaclab_is_its_own_pinned_stage_after_sam3d():
+    text = SCRIPT.read_text(encoding="utf-8")
+    stage = text.split("s_isaaclab() {", 1)[1].split("\nrun_stage()", 1)[0]
+    assert "ISAACSIM_SPEC='isaacsim[all,extscache]==5.1.0'" in text
+    assert "ISAACLAB_TAG=v2.3.2" in text
+    assert "ISAACLAB_ENV=/opt/conda/envs/isaaclab" in text
+    assert "sam3d10" not in stage
+    assert "usd-core" not in stage
+    assert "OMNI_KIT_ACCEPT_EULA=YES" in stage
+    assert "ISAACLAB_GLIBC" in stage
+    assert "./isaaclab.sh --install none" in stage
+    assert "du -sb" in stage
+    assert "isaaclab_ground_check.py" in stage
+    check = (ROOT / "sceneagent" / "isaaclab_ground_check.py").read_text(encoding="utf-8")
+    assert "GroundPlaneCfg" in check
+    assert "CuboidCfg" in check
+    assert "range(120)" in check
+    assert "CUBE_HEIGHT" in check
 
 
 def test_the_fixes_found_on_the_box_stay_in_the_script():

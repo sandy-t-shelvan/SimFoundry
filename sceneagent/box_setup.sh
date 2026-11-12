@@ -59,7 +59,14 @@ SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
 # HEAD of the checkout that finished s_sam3d on 60254439.
 SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights"
+# Isaac Lab v2.3.2's pip page pins Isaac Sim 5.1.0 and requires glibc 2.35.
+# https://isaac-sim.github.io/IsaacLab/v2.3.2/source/setup/installation/pip_installation.html
+ISAACSIM_SPEC='isaacsim[all,extscache]==5.1.0'
+ISAACLAB_TAG=v2.3.2
+ISAACLAB_ROOT=/workspace/IsaacLab
+ISAACLAB_ENV=/opt/conda/envs/isaaclab
+ISAACLAB_GLIBC=2.35
+STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -234,6 +241,39 @@ s_sam3d_weights() {
     rm -rf checkpoints/hf-download
   fi
   test -s checkpoints/hf/pipeline.yaml
+}
+
+s_isaaclab() {
+  # Own env. The SAM 3D env and the simfoundry env each ship a different pxr.
+  local glibc
+  glibc=$(ldd --version | awk 'NR==1 {print $NF}')
+  awk -v v="$glibc" -v need="$ISAACLAB_GLIBC" 'BEGIN {
+    split(v, a, "."); split(need, b, ".")
+    if (a[1] < b[1] || (a[1] == b[1] && a[2]+0 < b[2]+0)) exit 1
+  }' || {
+    echo "glibc $glibc is below $ISAACLAB_GLIBC; Isaac Lab's pip install refuses this. Not installing." >&2
+    return 1
+  }
+  [ -x "$ISAACLAB_ENV/bin/python3" ] || \
+    "$MAMBA" create -y -p "$ISAACLAB_ENV" python=3.11
+  # Isaac Sim reads this instead of an interactive EULA prompt.
+  export OMNI_KIT_ACCEPT_EULA=YES
+  "$ISAACLAB_ENV/bin/pip" install --upgrade pip
+  "$ISAACLAB_ENV/bin/pip" install "$ISAACSIM_SPEC" --extra-index-url https://pypi.nvidia.com
+  clone https://github.com/isaac-sim/IsaacLab "$ISAACLAB_ROOT" "$ISAACLAB_TAG"
+  if [ "$(git -C "$ISAACLAB_ROOT" describe --tags --exact-match 2>/dev/null || true)" != "$ISAACLAB_TAG" ]; then
+    git -C "$ISAACLAB_ROOT" fetch --depth 1 origin "refs/tags/$ISAACLAB_TAG:refs/tags/$ISAACLAB_TAG"
+    git -C "$ISAACLAB_ROOT" checkout --detach "$ISAACLAB_TAG"
+  fi
+  cd "$ISAACLAB_ROOT"
+  export CONDA_PREFIX="$ISAACLAB_ENV"
+  export PATH="$ISAACLAB_ENV/bin:$PATH"
+  # none: the settle check does not use a learning framework.
+  ./isaaclab.sh --install none
+  du -sb "$ISAACLAB_ROOT" "$ISAACLAB_ENV"
+  local check
+  check="$(cd "$(dirname "$0")" && pwd)/isaaclab_ground_check.py"
+  ./isaaclab.sh -p "$check" --headless
 }
 
 run_stage() {

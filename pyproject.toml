@@ -64,6 +64,12 @@ module = [
     "scipy.*",
     "psutil",
     "psutil.*",
+    "isaaclab",
+    "isaaclab.*",
+    "omni",
+    "omni.*",
+    "pxr",
+    "pxr.*",
 ]
 ignore_missing_imports = true
 follow_imports = "skip"
