@@ -70,8 +70,8 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     """Accepted in the ledger; the pose stage also needs its finished scene.json.
 
     run4 accepts the poses before the mask views are staged, so a run that
-    stopped between the two must pose again rather than skip. The mask stage
-    also needs evidence that joined phrases were dropped.
+    stopped between the two must pose again rather than skip. The mask and
+    export stages also need evidence written by their current rules.
     """
     if not accepted(out, items):
         return False
@@ -80,14 +80,21 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     if name == "masks":
         # Masks made before joined phrases were dropped run again, and so
         # does every stage after them.
-        try:
-            evidence = json.loads(
-                (out / "masks_evidence.json").read_text(encoding="utf-8")
-            )
-        except (OSError, ValueError):
-            return False
+        evidence = _evidence(out, "masks_evidence.json")
         return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
+    if name == "export":
+        # An export made before it recorded each object's box runs again, so
+        # a settle reject can say what the bodies were doing.
+        return "object_boxes" in _evidence(out, "export_evidence.json")
     return True
+
+
+def _evidence(out: Path, name: str) -> dict[str, Any]:
+    try:
+        evidence = json.loads((out / name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return evidence if isinstance(evidence, dict) else {}
 
 
 def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[], int]]:

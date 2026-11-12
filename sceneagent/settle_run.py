@@ -75,6 +75,42 @@ def judge(objects: dict[str, dict[str, float]]) -> tuple[str, str]:
     )
 
 
+def _num(value, spec: str) -> str:
+    return "?" if value is None else format(value, spec)
+
+
+def context(out: Path, result: dict) -> str:
+    """One line of evidence for a reject: counts, then per object box, gate and motion."""
+    try:
+        export = json.loads((out / "export_evidence.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        export = {}
+    boxes = export.get("object_boxes", {})
+    gates = [b.get("gate") for b in boxes.values()]
+    parts = [
+        (
+            f"association {export.get('association_objects')} objects "
+            f"({export.get('association_dropped')} dropped under 3 views); "
+            f"exported {len(boxes)}, ICP gate accept {gates.count('accept')}"
+        )
+    ]
+    for name, motion in sorted(result.get("objects", {}).items()):
+        box = boxes.get(name, {})
+        size = "x".join(f"{v:.2f}" for v in box.get("size_m", []))
+        parts.append(
+            f"{name}: {size} m, bottom {_num(box.get('bottom_z_m'), '+.3f')} m, "
+            f"gate {box.get('gate')}, "
+            f"v {_num(motion.get('speed_1s_m_s'), '.3f')}"
+            f"->{_num(motion.get('speed_m_s'), '.3f')} m/s, "
+            f"w {_num(motion.get('angular_speed_rad_s'), '.2f')} rad/s"
+        )
+    overlaps = export.get("overlapping_boxes", [])
+    parts.append(
+        "overlapping boxes: " + (", ".join("~".join(p) for p in overlaps) or "none")
+    )
+    return "; ".join(parts)
+
+
 def run_settle(
     out: Path | str, *, runner=subprocess.run, python: str = ISAACLAB_PYTHON
 ) -> int:
@@ -122,7 +158,11 @@ def run_settle(
             raise RuntimeError(
                 f"settle exited {done.returncode}: " + " | ".join(tail)
             ) from None
-        entry.update(decision=result["decision"], reason=result["reason"])
+        reason = result["reason"]
+        if result["decision"] != "accept":
+            # A failed run publishes only the manifest, which carries this.
+            reason = f"{reason} | {context(out, result)}"
+        entry.update(decision=result["decision"], reason=reason[:1500])
         if result.get("frame"):
             entry["frame"] = result["frame"]
     except (
@@ -189,6 +229,14 @@ def _simulate(stage: Path, out: Path, prims: list[str]) -> None:
         os._exit(0)
 
 
+def _angular_speed(body, torch) -> float | None:
+    """Diagnostic only: a missing field must not cost the settle its result."""
+    try:
+        return float(torch.linalg.norm(body.data.root_ang_vel_w.torch[0]))
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
 def _steps(stage: Path, out: Path, prims: list[str], sim_cfg: object) -> None:
     import isaaclab.sim as sim_utils
     import numpy as np
@@ -230,13 +278,23 @@ def _steps(stage: Path, out: Path, prims: list[str], sim_cfg: object) -> None:
     middle = torch.stack(centres).mean(dim=0)
     eye = middle + torch.tensor([0.8, 0.8, 0.6], device=middle.device)
     camera.set_world_poses_from_view(eye[None], middle[None])
-    for _ in range(round(SETTLE_S / dt)):
+    start_z = {n: float(b.data.root_pos_w.torch[0][2]) for n, b in bodies.items()}
+    steps = round(SETTLE_S / dt)
+    halfway: dict[str, float] = {}
+    for step in range(steps):
         for body in bodies.values():
             body.write_data_to_sim()
         sim.step()
         for body in bodies.values():
             body.update(dt)
         camera.update(dt)
+        if step == steps // 2 - 1:
+            # Decaying between 1 s and 2 s is settling; steady is rolling,
+            # rocking or being pushed.
+            halfway = {
+                n: float(torch.linalg.norm(b.data.root_lin_vel_w.torch[0]))
+                for n, b in bodies.items()
+            }
     objects = {}
     for name, body in bodies.items():
         velocity = body.data.root_lin_vel_w.torch[0]
@@ -244,6 +302,9 @@ def _steps(stage: Path, out: Path, prims: list[str], sim_cfg: object) -> None:
         objects[name] = {
             "speed_m_s": float(torch.linalg.norm(velocity)),
             "centre_z_m": float(position[2]),
+            "speed_1s_m_s": halfway.get(name),
+            "angular_speed_rad_s": _angular_speed(body, torch),
+            "start_centre_z_m": start_z[name],
         }
     frame = camera.data.output["rgb"][0, ..., :3]
     if frame.dtype.is_floating_point:

@@ -136,6 +136,18 @@ def test_masks_made_before_joined_phrases_were_dropped_run_again(tmp_path):
     assert video_run.stage_done(out, "masks", ("SAM masks",))
 
 
+def test_an_export_without_object_boxes_runs_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["USD physics export"])
+    (out / "export_evidence.json").write_text(json.dumps({"objects": []}))
+    assert not video_run.stage_done(out, "export", ("USD physics export",))
+    boxes = {"objects": [], "object_boxes": {}}
+    (out / "export_evidence.json").write_text(json.dumps(boxes))
+    assert video_run.stage_done(out, "export", ("USD physics export",))
+
+
 def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
     out = tmp_path / "mailbox"
     out.mkdir()

@@ -116,6 +116,9 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
     # Resting on the table, which is now z = 0, in metres (0.5 m per unit).
     assert abs(evidence["lowest_point_z_m"]["object_0"]) < 0.01
     assert evidence["physics_records"] == 0
+    box = evidence["object_boxes"]["object_0"]
+    assert abs(box["bottom_z_m"]) < 0.01 and min(box["size_m"]) > 0
+    assert evidence["overlapping_boxes"] == []
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
     assert entry["item"] == physics_export.EXPORT_ITEM and entry["decision"] == "accept"
 
@@ -151,3 +154,80 @@ def test_a_settle_that_writes_nothing_rejects_with_its_tail(tmp_path):
     assert settle_run.run_settle(tmp_path, runner=runner) == 1
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
     assert "exited 139" in entry["reason"] and "Segmentation fault" in entry["reason"]
+
+
+def test_overlapping_boxes_are_named_and_apart_ones_are_not():
+    cube = np.array(
+        [[x, y, z] for x in (0, 1) for y in (0, 1) for z in (0, 1)], dtype=float
+    )
+
+    def body(name, shift):
+        return physics_export.PlacedObject(
+            name=name,
+            vertices=cube + shift,
+            faces=np.zeros((0, 3), dtype=int),
+            scale=1.0,
+            rotation=np.eye(3),
+            translation=np.zeros(3),
+            properties={},
+        )
+
+    placed = [body("a", 0.0), body("b", 0.5), body("c", 5.0)]
+    found = physics_export.diagnose(placed, 0.1, np.eye(4), {"a": "accept"})
+    assert found["overlapping_boxes"] == [["a", "b"]]
+    assert found["object_boxes"]["a"] == {
+        "size_m": [0.1, 0.1, 0.1],
+        "bottom_z_m": 0.0,
+        "gate": "accept",
+    }
+
+
+def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
+    (tmp_path / "export_evidence.json").write_text(
+        json.dumps(
+            {
+                "objects": [{"prim": "/World/object_1", "route": "physx"}],
+                "association_objects": 3,
+                "association_dropped": 4,
+                "object_boxes": {
+                    "object_1": {
+                        "size_m": [0.2, 0.1, 0.3],
+                        "bottom_z_m": -0.004,
+                        "gate": "reject",
+                    }
+                },
+                "overlapping_boxes": [["object_1", "object_2"]],
+            }
+        )
+    )
+    moving = {
+        "speed_m_s": 0.022,
+        "centre_z_m": 0.1,
+        "speed_1s_m_s": 0.05,
+        "angular_speed_rad_s": None,
+    }
+
+    def runner(argv, **kwargs):
+        decision, reason = settle_run.judge({"object_1": moving})
+        (tmp_path / settle_run.RESULT).write_text(
+            json.dumps(
+                {
+                    "decision": decision,
+                    "reason": reason,
+                    "objects": {"object_1": moving},
+                }
+            )
+        )
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert settle_run.run_settle(tmp_path, runner=runner) == 1
+    reason = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]["reason"]
+    assert reason.startswith("still moving after 2 s: object_1 0.022 m/s | ")
+    for piece in (
+        "association 3 objects (4 dropped under 3 views)",
+        "exported 1, ICP gate accept 0",
+        "object_1: 0.20x0.10x0.30 m, bottom -0.004 m, gate reject",
+        "v 0.050->0.022 m/s, w ? rad/s",
+        "overlapping boxes: object_1~object_2",
+    ):
+        assert piece in reason

@@ -38,6 +38,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import quoteattr
@@ -593,6 +594,37 @@ def load_glb(path: Path | str) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(loaded.vertices, dtype=np.float64), np.asarray(loaded.faces)
 
 
+def diagnose(
+    placed: list[PlacedObject],
+    metres_per_unit: float,
+    world_from_scene: np.ndarray,
+    gates: dict[str, Any],
+) -> dict[str, Any]:
+    """What the settle needs explained: each object's stage box and gate, and overlaps.
+
+    ``bottom_z_m`` below 0 starts the body inside the ground; above 0 drops
+    it. Overlapping boxes at t = 0 are bodies that may push each other apart.
+    """
+    boxes = {}
+    for obj in placed:
+        points = stage_points(obj, metres_per_unit, world_from_scene)
+        boxes[obj.name] = (points.min(axis=0), points.max(axis=0))
+    diagnostics = {
+        name: {
+            "size_m": [round(float(v), 3) for v in high - low],
+            "bottom_z_m": round(float(low[2]), 4),
+            "gate": gates.get(name),
+        }
+        for name, (low, high) in boxes.items()
+    }
+    overlaps = [
+        [a, b]
+        for a, b in combinations(sorted(boxes), 2)
+        if np.all(boxes[a][0] < boxes[b][1]) and np.all(boxes[b][0] < boxes[a][1])
+    ]
+    return {"object_boxes": diagnostics, "overlapping_boxes": overlaps}
+
+
 def export_run(out: Path | str) -> int:
     """Export a placed run directory (bin or video) as USD and MJCF, gravity aligned.
 
@@ -686,6 +718,16 @@ def export_run(out: Path | str) -> int:
             obj.name: round(float(stage_points(obj, metres, frame)[:, 2].min()), 4)
             for obj in placed
         }
+        gates = {
+            f"object_{r['object']}": r.get("gate")
+            for r in placement["icp"]["objects"]
+            if r.get("placed")
+        }
+        evidence.update(diagnose(placed, metres, frame, gates))
+        evidence.update(
+            association_objects=association.get("objects"),
+            association_dropped=len(association.get("dropped_objects", [])),
+        )
         evidence.update(
             metres_per_unit=metres,
             support=support | {"world_from_scene": frame.round(6).tolist()},
