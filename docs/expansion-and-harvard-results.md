@@ -9,18 +9,30 @@ The tables under "Cut 1 ticket board" record the check at 2026-11-06 2:20 AM ET 
 
 At the 2026-11-06 2:20 AM ET check, `main` was `da997fcee6f860f33abd5fbaf1344d85d13f6e51` and `Main_duplicate` was `d99c3b64e961154ae411765cd58bc584608f516f`. Both `docs/expansion-and-harvard-results.md` and `docs/canvases/sceneagent-paper-gaps.canvas.tsx` differ between those two commits: `git diff --shortstat` reports 28 insertions and 29 deletions across the two files. Cut 2 epic KAN-15 is on hold. Sandeep's 2:00 AM ET rule starts Cut 2 once all Cut 1 PRs are merged into `Main_duplicate`. [KAN-13 comment 10318](https://sandeeptssworkspace-35047491.atlassian.net/browse/KAN-13?focusedCommentId=10318) still holds the SF-8 part 2, SF-9, and SF-10 GPU packages until Cut 2 has SF-15 masks and the SAM 3D ticket that follows them.
 
+### Checked 2026-11-11 9:00 PM ET
+
+This check supersedes the tip sentence and the "KAN-15 is on hold" sentence above. It does not change a catalog or canvas status word, and it does not mark a ticket Accepted.
+
+`main` is `9c08d467f35e8a76c3001730367fd632be74ff0d`, the merge of [PR #59](https://github.com/sandy-t-shelvan/SimFoundry/pull/59) (GitHub `merged_at` 2026-11-12T00:43:39Z, 7:43 PM ET). `Main_duplicate` is `8ae82eb63c5c7d7fff632697562064859b1f6fdd`, the merge of [PR #32](https://github.com/sandy-t-shelvan/SimFoundry/pull/32) (2026-11-07 6:14 PM ET). `Main_duplicate` is an ancestor of `main`. The sentence that names tip `f6e1df5` is the earlier note.
+
+Jira KAN-15 is In Progress. [KAN-15 comment 10462](https://sandeeptssworkspace-35047491.atlassian.net/browse/KAN-15?focusedCommentId=10462) (2026-11-11) records the bin chain and moves the epic to In Progress. The 2:20 AM ET on-hold sentence is that earlier check. No Cut 2 ticket is Accepted.
+
+Jira KAN-32 (SF-29) is In Progress, not To Do. The install pin is met: `SAM3D_COMMIT` `f91db411c50efee93d8db7aeb323885650f6f722` is in `sceneagent/box_setup.sh` at `4fc3cfc`, merged in PR #59, and the same SHA is `commits.sam_3d_objects` in the 60254439 setup report (decision accept, 9 of 9 stages). The next step in that issue is not started: repeat `bin_poses` through `bin_review` on Vast 60254439 for GraspClutter6D `000091`, compared with F1 0.1245 at κ=2. `Mailbox.mp4` is not that scene. This note does not start that run, and it does not start, stop, or destroy the instance. KAN-32 says 58301075 was deleted and the box is 60254439. The 58301075 score table below stays that box's result.
+
+Jira, same check: KAN-16 and KAN-17 are In Review. KAN-31, KAN-36, and KAN-38 are In Review. None of those is Accepted.
+
 ### Cut 2 board (2026-11-10)
 
 This subsection is the newest status and supersedes the Cut 1 tables below where they disagree. Cut 2 ran the paper's §3.2–3.3 chain on GraspClutter6D `hard/000091` (13 views, 20 YCB objects) and wrote the first bin score. The plan is [`docs/cut2-plan.md`](cut2-plan.md). The living run status is [`docs/session-handoff.md`](session-handoff.md). Every Cut 2 Jira ticket (KAN-16 to KAN-32) is still To Do or In Progress, and none is Accepted. Per comment 10222, no catalog or canvas status word moves. The progress is recorded here and in the canvas `ticket` fields.
 
 | Phase | Ticket | Merged | Evidence |
 |---|---|---|---|
-| 1. Benchmark and scorer | SF-28 / KAN-31 (In Progress) | PR #33 | `bin_benchmark.py`, `gc6d_fetch.py`, `metrics.py`. Scene 000091 fetched with SHA-256s. |
+| 1. Benchmark and scorer | SF-28 / KAN-31 (In Review as of 2026-11-11 9:00 PM ET) | PR #33 | `bin_benchmark.py`, `gc6d_fetch.py`, `metrics.py`. Scene 000091 fetched with SHA-256s. |
 | 2. Poses | SF-28 | PR #36, #40 | 13/13 views registered, 0.55 px ([run 42751476849](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42751476849)). |
 | 2. Full-scene splat | (SF-4 follow-on) | PR #38, #40 | splatfacto, 214,976 Gaussians; held-out PSNR 23.07, SSIM 0.825, LPIPS 0.178 (same run). The splat first merged with #38 was trained on 313 images, 300 of them Fruits frames, and is void. |
-| 2. Masks | SF-15 / KAN-16 (To Do) | PR #39 | GroundingDINO + SAM vit_h on all 13 views: 94 masks, 5–11 per view ([run 42753282904](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42753282904)). |
-| 3. Association and grouping | SF-16 / KAN-17 (To Do) | PR #41 | Equation (1) over the whole splat, then grouping: 94 masks → 25 objects (GT 20), 15 seen in ≥ 2 views. Lengths are in the paper's 0.915 m unit through a Depth Anything 3 scale of 0.201 m per splat unit. GT cameras give 0.206, used as a check only ([run 42759126731](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42759126731)). |
-| 4. Meshes | SF-29 / KAN-32 (To Do) | PR #42 | SAM 3D meshed all 25 objects ([run 42760087159](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42760087159)). |
+| 2. Masks | SF-15 / KAN-16 (In Review as of 2026-11-11 9:00 PM ET) | PR #39 | GroundingDINO + SAM vit_h on all 13 views: 94 masks, 5–11 per view ([run 42753282904](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42753282904)). |
+| 3. Association and grouping | SF-16 / KAN-17 (In Review as of 2026-11-11 9:00 PM ET) | PR #41 | Equation (1) over the whole splat, then grouping: 94 masks → 25 objects (GT 20), 15 seen in ≥ 2 views. Lengths are in the paper's 0.915 m unit through a Depth Anything 3 scale of 0.201 m per splat unit. GT cameras give 0.206, used as a check only ([run 42759126731](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42759126731)). |
+| 4. Meshes | SF-29 / KAN-32 (In Progress as of 2026-11-11 9:00 PM ET) | PR #42, #59 | SAM 3D meshed all 25 objects ([run 42760087159](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42760087159)). Install pin met in PR #59 (`f91db411`). The bin-chain repeat on 60254439 is not started. Not Accepted. |
 | 4. ICP and first score | SF-8 / KAN-8 (In Review), SF-28 | PR #42 | Observed-to-mesh trimmed similarity ICP, with one camera-based scene similarity. **F1@1cm 0.058, matched Chamfer 0.130 m** (`docs/results/bin_000091_score_…chamfer.json`, [run 42762718646](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/42762718646)). Silhouette IoU median 0.16. |
 | 5. Per-object reviewer | SF-19 / KAN-20 (In Progress) | PR #44 (merged `6d184cb`) | 11 drawn views per object; retries are `icp_flip` and `sam3d_next_view`, chosen by rule (the VLM verdict is SF-18). **F1 0.067, Chamfer 0.125 m** after review (`…_reviewed.json`). |
 | Parallel mapper check | (none; feeds KAN-48) | PR #43 (merged `3074fa2`) | COLMAP 4.1.1 `global_mapper` against incremental on the bin and Fruits (`docs/results/mapper_compare_bin_fruits.json`). Bin: same cameras, incremental faster, so the bin keeps it. Fruits: global registers all 300 frames about 3.5–4× faster; all-pairs matching plus `global_mapper` is the video choice for M6. |
