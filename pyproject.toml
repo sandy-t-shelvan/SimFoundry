@@ -58,6 +58,9 @@ module = [
     "simple_lama_inpainting.*",
     "isaaclab",
     "isaaclab.*",
+    # Installed only in the box's isaaclab env, beside isaaclab itself.
+    "isaaclab_physx",
+    "isaaclab_physx.*",
     "open_clip",
     "open_clip.*",
     "timm",
