@@ -278,6 +278,8 @@ def _run(out: Path | None) -> None:
     print(f"cube_height_m {height_m}", flush=True)
     if out is None:
         return
+    # `camera` is created exactly when `out` is set. mypy does not connect those.
+    assert camera is not None
 
     # The first RTX frames come back dark while the renderer warms up.
     for _ in range(30):
