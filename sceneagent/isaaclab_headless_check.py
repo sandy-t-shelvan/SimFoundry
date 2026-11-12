@@ -210,16 +210,44 @@ def main() -> None:
 
 
 def _run(out: Path | None) -> None:
-    from isaaclab.app import AppLauncher
+    import argparse
 
-    # Held for the whole run, as the original check held its .app.
-    launcher = AppLauncher(headless=True, enable_cameras=out is not None)
-    assert launcher.app is not None
+    from isaaclab.app import add_launcher_args, launch_simulation
 
+    parser = argparse.ArgumentParser(description="Headless Isaac Lab cube check.")
+    add_launcher_args(parser)
+    # Kit reads sys.argv. The render flag is already removed; pass nothing else.
+    args = parser.parse_args([])
+    # Not a launcher flag. Kit starts the rendering experience only when this is set,
+    # and a camera created afterwards cannot turn it on.
+    args.enable_cameras = out is not None
+
+    import isaaclab.sim as sim_utils
+
+    sim_cfg = sim_utils.SimulationCfg(dt=1.0 / 120.0)
+    # Exit from inside the context. Leaving it shuts Kit down through
+    # SimulationApp.close, which did not return on 60254439, so a redirected
+    # run would keep the height in the buffer and never finish the stage.
+    with launch_simulation(sim_cfg, args):
+        try:
+            _simulate(out, sim_cfg)
+        except Exception:
+            if out is None:
+                traceback.print_exc()
+                sys.stdout.flush()
+                os._exit(1)
+            _fail(out, "exception: " + traceback.format_exc()[-1500:])
+            sys.stdout.flush()
+            os._exit(0)
+        sys.stdout.flush()
+        os._exit(0)
+
+
+def _simulate(out: Path | None, sim_cfg: object) -> None:
     import isaaclab.sim as sim_utils
     from isaaclab.assets import RigidObject, RigidObjectCfg
 
-    sim = sim_utils.SimulationContext(sim_utils.SimulationCfg(dt=1.0 / 120.0))
+    sim = sim_utils.SimulationContext(sim_cfg)
     ground = sim_utils.GroundPlaneCfg()
     ground.func("/World/ground", ground)
     looks = {}
@@ -229,14 +257,17 @@ def _run(out: Path | None) -> None:
         )
         light = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.8, 0.8, 0.8))
         light.func("/World/Light", light)
+    # Lab 3 split the old property classes into schema fragments. The old names
+    # still spawn a body on 3.0.0 and warn that they go away in 3.2 (the 6.2
+    # check on 60254439 printed all three).
     cube = RigidObject(
         RigidObjectCfg(
             prim_path="/World/Cube",
             spawn=sim_utils.CuboidCfg(
                 size=(CUBE_SIZE_M,) * 3,
-                rigid_props=sim_utils.RigidBodyPropertiesCfg(),
-                mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
-                collision_props=sim_utils.CollisionPropertiesCfg(),
+                rigid_props=sim_utils.UsdPhysicsRigidBodyCfg(),
+                mass_props=sim_utils.MassCfg(mass=1.0),
+                collision_props=sim_utils.UsdPhysicsCollisionCfg(),
                 **looks,
             ),
             init_state=RigidObjectCfg.InitialStateCfg(pos=(0.0, 0.0, 0.5)),
@@ -244,7 +275,8 @@ def _run(out: Path | None) -> None:
     )
     camera = None
     if out is not None:
-        from isaaclab.sensors import Camera, CameraCfg
+        from isaaclab.sensors.camera import Camera, CameraCfg
+        from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
         camera = Camera(
             CameraCfg(
@@ -253,6 +285,7 @@ def _run(out: Path | None) -> None:
                 height=HEIGHT,
                 width=WIDTH,
                 data_types=["rgb"],
+                renderer_cfg=IsaacRtxRendererCfg(),
                 spawn=sim_utils.PinholeCameraCfg(
                     focal_length=24.0,
                     focus_distance=400.0,
@@ -269,12 +302,16 @@ def _run(out: Path | None) -> None:
             torch.tensor([[0.6, 0.6, 0.5]], device=sim.device),
             torch.tensor([[0.0, 0.0, 0.1]], device=sim.device),
         )
+    dt = sim.get_physics_dt()
     for _ in range(120):
+        cube.write_data_to_sim()
         sim.step()
-        cube.update(sim.cfg.dt)
+        cube.update(dt)
         if camera is not None:
-            camera.update(sim.cfg.dt)
-    height_m = float(cube.data.root_pos_w[0, 2])
+            camera.update(dt)
+    # root_pos_w is a warp proxy. Indexing it as a tensor warns, and the
+    # warning names the removal of that bridge.
+    height_m = float(cube.data.root_pos_w.torch[0, 2])
     print(f"cube_height_m {height_m}", flush=True)
     if out is None:
         return
@@ -283,9 +320,10 @@ def _run(out: Path | None) -> None:
 
     # The first RTX frames come back dark while the renderer warms up.
     for _ in range(30):
+        cube.write_data_to_sim()
         sim.step()
-        camera.update(sim.cfg.dt)
-    frame = camera.data.output["rgb"][0, ..., :3]
+        camera.update(dt)
+    frame = camera.data.output["rgb"].torch[0, ..., :3]
     if frame.dtype.is_floating_point:
         frame = (frame.clamp(0, 1) * 255).round()
     rgb = frame.to("cpu").numpy().astype("uint8")

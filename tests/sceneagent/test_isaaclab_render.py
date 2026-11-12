@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import struct
 import zlib
+from pathlib import Path
 
 import numpy as np
 
@@ -52,6 +53,20 @@ def test_red_fraction_counts_only_red_pixels():
     rgb = np.full((10, 10, 3), 128, dtype=np.uint8)
     rgb[:2] = (220, 30, 30)
     assert check.red_fraction(rgb) == 0.2
+
+
+def test_the_scene_uses_the_lab_3_spawn_api():
+    text = Path(check.__file__).read_text(encoding="utf-8")
+    assert "launch_simulation" in text
+    assert "UsdPhysicsRigidBodyCfg" in text
+    assert "UsdPhysicsCollisionCfg" in text
+    assert "MassCfg(mass=1.0)" in text
+    assert "root_pos_w.torch" in text
+    assert "IsaacRtxRendererCfg" in text
+    assert "RigidBodyPropertiesCfg" not in text
+    assert "MassPropertiesCfg" not in text
+    assert "CollisionPropertiesCfg" not in text
+    assert "AppLauncher" not in text
 
 
 def test_pipeline_runs_the_isaaclab_interpreter_in_its_own_dir():

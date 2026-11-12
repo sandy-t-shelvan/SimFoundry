@@ -142,6 +142,9 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "PIP_CONFIG_FILE=/dev/null" in isaac
     assert "python=3.12" in isaac
     assert isaac.index("setuptools>=69,<81") < isaac.index("./isaaclab.sh --install none")
+    assert isaac.index("./isaaclab.sh --install none") < isaac.index("torchaudio==2.11.0")
+    assert "https://download.pytorch.org/whl/cu130" in isaac
+    assert "libxt6" in isaac
     assert "flatdict==4.0.1" in isaac
     assert 'printf "%.0f\\n"' in isaac
     assert "ISAACLAB_TAG=v3.0.0" in text

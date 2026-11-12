@@ -284,6 +284,20 @@ s_isaaclab() {
   "$ISAACLAB_ENV/bin/pip" install --no-build-isolation flatdict==4.0.1
   # none: the headless check does not use a learning framework.
   ./isaaclab.sh --install none
+  # The installer pins torch and torchvision from the cu130 index, uninstalls
+  # torchaudio, and does not put it back. isaacsim-core requires the matching
+  # wheel (found on 60254439).
+  if ! "$ISAACLAB_ENV/bin/python3" -c 'import torchaudio' >/dev/null 2>&1; then
+    "$ISAACLAB_ENV/bin/pip" install "torchaudio==2.11.0" \
+      --index-url https://download.pytorch.org/whl/cu130
+  fi
+  # MaterialX's render libraries need libXt. Kit logged three load errors for
+  # it at startup, and apt.ok is already written on a resumed box (found on
+  # 60254439).
+  if ! ldconfig -p | grep -q 'libXt\.so\.6'; then
+    apt-get update
+    apt-get install -y --no-install-recommends libxt6
+  fi
   cd /tmp
   "$ISAACLAB_ENV/bin/python3" "$HERE/isaaclab_headless_check.py" \
     > "$ROOT/isaaclab_check.log" 2>&1
