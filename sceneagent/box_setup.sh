@@ -59,7 +59,17 @@ SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
 # HEAD of the checkout that finished s_sam3d on 60254439.
 SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights"
+# Isaac Lab is its own env. It is not the simfoundry/OmniGibson install, and
+# usd-core is not installed here (AGENTS.md: that package shadows Isaac's pxr).
+# Pins are the published Isaac Sim 5.1 pip extra and Isaac Lab tag v2.3.2,
+# which this repo already ran as a standalone pair. Isaac Lab 3.x wants
+# Python 3.12 and is not this stage.
+ISAACSIM_PIP=5.1.0
+ISAACLAB_TAG=v2.3.2
+ISAACLAB_ROOT=/workspace/src/IsaacLab
+ISAACLAB_ENV="$ENVS/isaaclab"
+ISAACLAB_CHECK=/workspace/sf4-smoke/repo/sceneagent/isaaclab_headless_check.py
+STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -236,6 +246,36 @@ s_sam3d_weights() {
   test -s checkpoints/hf/pipeline.yaml
 }
 
+s_isaaclab() {
+  # After sam3d: this stage is last, so a resume does not start it early.
+  [ -x "$ISAACLAB_ENV/bin/python3" ] || "$MAMBA" create -y -p "$ISAACLAB_ENV" python=3.11
+  export OMNI_KIT_ACCEPT_EULA=YES
+  "$ISAACLAB_ENV/bin/pip" install "isaacsim[all,extscache]==${ISAACSIM_PIP}" \
+    --extra-index-url https://pypi.nvidia.com
+  if [ ! -d "$ISAACLAB_ROOT/.git" ]; then
+    git clone --depth 1 --branch "$ISAACLAB_TAG" \
+      https://github.com/isaac-sim/IsaacLab.git "$ISAACLAB_ROOT"
+  fi
+  git -C "$ISAACLAB_ROOT" fetch --depth 1 origin tag "$ISAACLAB_TAG"
+  git -C "$ISAACLAB_ROOT" checkout --detach "$ISAACLAB_TAG"
+  cd "$ISAACLAB_ROOT"
+  PATH="$ISAACLAB_ENV/bin:$PATH" OMNI_KIT_ACCEPT_EULA=YES ./isaaclab.sh --install
+  if [ ! -f "$ISAACLAB_CHECK" ]; then
+    echo "missing $ISAACLAB_CHECK" >&2
+    return 1
+  fi
+  cd /tmp
+  PATH="$ISAACLAB_ENV/bin:$PATH" OMNI_KIT_ACCEPT_EULA=YES \
+    "$ISAACLAB_ENV/bin/python3" "$ISAACLAB_CHECK" | tee "$STATE/isaaclab.check"
+  grep -q '^cube_final_height_m=' "$STATE/isaaclab.check"
+  du -sb "$ISAACLAB_ENV" "$ISAACLAB_ROOT" | awk '{s+=$1} END {print s}' > "$STATE/isaaclab.bytes"
+  {
+    echo "isaacsim==$ISAACSIM_PIP"
+    echo "isaaclab==$ISAACLAB_TAG"
+    echo "bytes=$(cat "$STATE/isaaclab.bytes")"
+  } > "$STATE/isaaclab.pin"
+}
+
 run_stage() {
   local name="$1"
   if [ -f "$STATE/$name.ok" ]; then
@@ -276,6 +316,8 @@ do_report() {
     GSAM_ROOT="$GSAM_ROOT" DA3_ROOT="$DA3_ROOT" SAM3D_ROOT="$SAM3D_ROOT" \
     SAM3D_ENV="$SAM3D_ENV" SAM_WEIGHTS="$SAM_WEIGHTS" COLMAP_TAG="$COLMAP_TAG" \
     SAM2_CHECKPOINT="$SAM2_CHECKPOINT" SAM2_1_CHECKPOINT="$SAM2_1_CHECKPOINT" \
+    ISAACLAB_ROOT="$ISAACLAB_ROOT" ISAACSIM_PIP="$ISAACSIM_PIP" \
+    ISAACLAB_TAG="$ISAACLAB_TAG" \
     "$py" - <<'PY'
 import hashlib, json, os, pathlib, re, subprocess
 
@@ -403,6 +445,13 @@ document = {
     },
     "sam3d_pipeline_yaml": pathlib.Path(env["SAM3D_ROOT"], "checkpoints/hf/pipeline.yaml").is_file(),
     "hf_token_present": pathlib.Path("/root/.cache/huggingface/token").is_file(),
+    "isaaclab": {
+        "isaacsim": env.get("ISAACSIM_PIP"),
+        "tag": env.get("ISAACLAB_TAG"),
+        "commit": commit(env.get("ISAACLAB_ROOT", "")),
+        "bytes": (state / "isaaclab.bytes").read_text().strip() if (state / "isaaclab.bytes").is_file() else None,
+        "check": (state / "isaaclab.check").read_text(errors="replace").strip().splitlines()[-1:] if (state / "isaaclab.check").is_file() else [],
+    },
 }
 out.mkdir(parents=True, exist_ok=True)
 (out / "plan.json").write_text(json.dumps({"pipeline": "setup", "stages": stages}, indent=2) + "\n")
