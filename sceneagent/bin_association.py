@@ -65,7 +65,14 @@ from sceneagent.association import (
     mask_cell_side_px,
     masks_same_object,
 )
-from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS
+from sceneagent.bin_run import (
+    BIN_SCENE,
+    DATA_DIR,
+    SCENE,
+    VIEWS,
+    expected_views,
+    load_scene,
+)
 from sceneagent.bin_scale import (
     PAPER_METRES_PER_UNIT,
     SCALE_RULE,
@@ -467,8 +474,11 @@ def associate(
             u, v, z = project(world, image, camera)
             projected[view] = (u, v, z * scale, camera)
 
+    scene = load_scene(out)
     depth_dir = out / "depth"
-    depth_meta = depth(out / "images", depth_dir)
+    # Depth only for the views that carry masks: all 13 bin photos, or a
+    # video's every-10th frames.
+    depth_meta = depth(out / scene.view_dir, depth_dir)
     ratios = []
     for view, (u, v, z_units, camera) in projected.items():
         stored = np.load(depth_dir / f"{Path(view).stem}.npz")["depth"]
@@ -528,12 +538,14 @@ def associate(
             }
         )
 
-    scene_gt_path = data / "scenes" / SCENE / "scene_gt.json"
-    try:
-        scene_gt = json.loads(scene_gt_path.read_text(encoding="utf-8"))
-        metric = camera_centers_metric(scene_gt, sorted(images))
-    except (OSError, ValueError, KeyError, StopIteration):
-        metric = {}
+    metric: dict[str, np.ndarray] = {}
+    if scene.ground_truth:
+        scene_gt_path = data / "scenes" / SCENE / "scene_gt.json"
+        try:
+            scene_gt = json.loads(scene_gt_path.read_text(encoding="utf-8"))
+            metric = camera_centers_metric(scene_gt, sorted(images))
+        except (OSError, ValueError, KeyError, StopIteration):
+            metric = {}
     m_per_unit = metres_per_unit(camera_centers_colmap(images), metric, scale)
     return {
         "positions": len(positions),
@@ -548,6 +560,8 @@ def associate(
         "pairs": pairs,
         "merged_pairs": [p for p in pairs if p["merged"]],
         "objects": objects,
+        "scene": scene.name,
+        "ground_truth": scene.ground_truth,
     }
 
 
@@ -592,7 +606,7 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
     ]
     multi = [o for o in objects if o["views"] > 1]
     return {
-        "scene": SCENE,
+        "scene": result["scene"],
         "rule": {
             "equation_1": {
                 "eps_a": EPS_A,
@@ -632,7 +646,7 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
         "overlapping_pairs": pair_outcomes(result["pairs"]),
         "objects": len(objects),
         "objects_seen_in_2_or_more_views": len(multi),
-        "gt_objects": GT_OBJECTS,
+        "gt_objects": GT_OBJECTS if result["ground_truth"] else None,
         "object_list": objects,
     }
 
@@ -661,6 +675,7 @@ def run_bin_association(
     paper publishes no count tolerance.
     """
     out, data = Path(out), Path(data)
+    scene = load_scene(out)
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
@@ -668,26 +683,28 @@ def run_bin_association(
         ledger = {"entries": []}
     entries = [e for e in ledger.get("entries", []) if e.get("item") != ITEM]
     entry: dict[str, Any] = {"item": ITEM}
-    evidence: dict[str, Any] = {"scene": SCENE}
+    evidence: dict[str, Any] = {"scene": scene.name}
     try:
         result = associate(out, data, depth=depth)
         evidence = evidence_from(result)
         write_sets(out / "association" / "objects.npz", result)
         used = sum(1 for v in result["views"].values() if v.get("registered"))
-        if used == VIEWS and result["objects"]:
+        masked = VIEWS if scene == BIN_SCENE else expected_views(out, scene)
+        if masked and used == masked and result["objects"]:
             entry.update(
                 decision="accept",
                 use_gpu=True,
                 splat_unit_m=round(evidence["splat_unit_m"], 4),
                 objects=evidence["objects"],
                 multi_view_objects=evidence["objects_seen_in_2_or_more_views"],
-                gt_objects=GT_OBJECTS,
                 masks=evidence["masks"],
             )
+            if scene.ground_truth:
+                entry["gt_objects"] = GT_OBJECTS
         else:
             entry.update(
                 decision="reject",
-                reason=f"{used} of {VIEWS} views posed; {len(result['objects'])} objects",
+                reason=f"{used} of {masked} views posed; {len(result['objects'])} objects",
             )
     except (
         OSError,
@@ -699,13 +716,14 @@ def run_bin_association(
     ) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
-    ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "association_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
     decisions = {e.get("item"): e.get("decision") for e in entries}
-    return 0 if all(decisions.get(item) == "accept" for item in REQUIRED) else 1
+    required = (scene.input_item, *REQUIRED[1:])
+    return 0 if all(decisions.get(item) == "accept" for item in required) else 1
 
 
 def main(argv: list[str] | None = None) -> int:

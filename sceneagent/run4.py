@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -410,16 +411,30 @@ def load_frames(
 
 
 def _score_png(raw: bytes) -> float:
+    """``laplacian_variance`` of the grayscale frame, computed with NumPy.
+
+    Same stencil and the same population-variance formula; the pure-Python
+    loop took seconds per 1080p frame, and Mailbox.mp4 has 1,192 of them.
+    """
+    import numpy as np
     from PIL import Image
 
-    from sceneagent.run4_sampling import laplacian_variance
-
     with Image.open(io.BytesIO(raw)) as image:
-        gray = image.convert("L")
-        width, height = gray.size
-        pixels = list(gray.getdata())
-    rows = [[float(pixels[y * width + x]) for x in range(width)] for y in range(height)]
-    return laplacian_variance(rows)
+        gray = np.asarray(image.convert("L"), dtype=np.float64)
+    if gray.ndim != 2 or gray.shape[0] < 3 or gray.shape[1] < 3:
+        raise ValueError("frame too small")
+    lap = (
+        -4.0 * gray[1:-1, 1:-1]
+        + gray[:-2, 1:-1]
+        + gray[2:, 1:-1]
+        + gray[1:-1, :-2]
+        + gray[1:-1, 2:]
+    )
+    mean = float(lap.mean())
+    variance = float((lap * lap).mean()) - mean * mean
+    if not math.isfinite(variance) or variance < 0:
+        raise ValueError("invalid sharpness")
+    return variance
 
 
 def extract_selected_frames(

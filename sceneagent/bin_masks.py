@@ -30,7 +30,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from sceneagent.bin_run import DATA_DIR, SCENE, SOURCE, VIEWS, run_bin_poses
+from sceneagent.bin_run import (
+    DATA_DIR,
+    VIEWS,
+    expected_views,
+    is_bin,
+    load_scene,
+    run_bin_poses,
+)
 from sceneagent.mask_filter import (
     BOX_THRESHOLD,
     DUPLICATE_IOU,
@@ -110,7 +117,7 @@ def _http_download(url: str, target: Path) -> None:
             out.write(block)
 
 
-def worker_command(images: Path, masks: Path) -> list[str]:
+def worker_command(images: Path, masks: Path, prompt: str = PROMPT) -> list[str]:
     return [
         MASK_PYTHON,
         "-m",
@@ -120,7 +127,7 @@ def worker_command(images: Path, masks: Path) -> list[str]:
         "--out",
         str(masks),
         "--prompt",
-        PROMPT,
+        prompt,
         "--box-threshold",
         str(BOX_THRESHOLD),
         "--text-threshold",
@@ -191,6 +198,15 @@ def summarize(detections_by_view: dict[str, list[dict[str, Any]]]) -> dict[str, 
     }
 
 
+def _mask_shortfall(summary: dict[str, Any], expected: int, needed: int) -> str:
+    reason = f"{summary['views_with_masks']} of {expected} views kept a mask"
+    if needed != expected:
+        reason += f" (need {needed})"
+    if summary["views"] != expected:
+        reason += f"; the worker saw {summary['views']} views"
+    return reason
+
+
 def run_bin_masks(
     out: Path | str,
     data: Path | str = DATA_DIR,
@@ -199,23 +215,31 @@ def run_bin_masks(
     runner: Runner = subprocess.run,
     weights: Callable[[], dict[str, Any]] = ensure_sam_weights,
 ) -> int:
-    """Mask every bin view. Return 0 only when all 13 views keep at least one mask."""
+    """Mask every view. Return 0 when enough views keep at least one mask.
+
+    The bin needs all 13; a video needs ``min_masked_views`` of its mask
+    views (``scene.json``).
+    """
     out, data = Path(out), Path(data)
-    images = out / "images"
-    if len(list(images.glob("*.png"))) != VIEWS:
+    scene = load_scene(out)
+    images = out / scene.view_dir
+    if is_bin(out) and len(list(images.glob("*.png"))) != VIEWS:
         poses(out, data)
+    expected = expected_views(out, scene)
+    prompt = scene.prompt or PROMPT
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         ledger = {"entries": []}
-    if ledger.get("scene_name") != f"{SOURCE} {SCENE}":
+    if ledger.get("scene_name") != scene.ledger_name:
         ledger = {"entries": []}
     entries = [e for e in ledger.get("entries", []) if e.get("item") != ITEM]
     evidence: dict[str, Any] = {
-        "scene": SCENE,
-        "prompt": PROMPT,
-        "prompt_source": PROMPT_SOURCE,
+        "scene": scene.name,
+        "prompt": prompt,
+        "prompt_source": PROMPT_SOURCE if scene.prompt is None else "scene.json (ours)",
+        "views_dir": scene.view_dir,
         "box_threshold": BOX_THRESHOLD,
         "text_threshold": TEXT_THRESHOLD,
         "filter": {
@@ -226,12 +250,12 @@ def run_bin_masks(
         "sam": "vit_h",
         "detector": "GroundingDINO SwinT-OGC",
     }
-    entry: dict[str, Any] = {"item": ITEM, "sam": "vit_h", "prompt": PROMPT}
+    entry: dict[str, Any] = {"item": ITEM, "sam": "vit_h", "prompt": prompt}
     try:
         evidence["sam_weights"] = weights()
         evidence["segment_anything"] = _ensure_segment_anything(runner)
         masks = out / "masks"
-        argv = worker_command(images, masks)
+        argv = worker_command(images, masks, prompt)
         done = runner(
             argv,
             env=worker_environment(),
@@ -254,26 +278,33 @@ def run_bin_masks(
         detections = json.loads((masks / "detections.json").read_text(encoding="utf-8"))
         summary = summarize(detections)
         evidence["summary"] = summary
-        if summary["views"] == VIEWS and summary["views_with_masks"] == VIEWS:
+        if (
+            expected
+            and summary["views"] == expected
+            and summary["views_with_masks"] >= scene.min_masked_views
+        ):
             entry.update(
                 decision="accept",
                 use_gpu=True,
                 masks=summary["kept_total"],
+                views=expected,
+                views_with_masks=summary["views_with_masks"],
                 kept_per_view=[
                     summary["kept_per_view_min"],
                     summary["kept_per_view_max"],
                 ],
-                gt_objects=GT_OBJECTS,
             )
+            if scene.ground_truth:
+                entry["gt_objects"] = GT_OBJECTS
         else:
             entry.update(
                 decision="reject",
-                reason=f"{summary['views_with_masks']} of {VIEWS} views kept a mask",
+                reason=_mask_shortfall(summary, expected, scene.min_masked_views),
             )
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
-    ledger.update(scene_name=f"{SOURCE} {SCENE}", source=SOURCE, entries=entries)
+    ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "masks_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
