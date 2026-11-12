@@ -28,6 +28,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from sceneagent.alignment import PLACEMENT_GATE_LABEL
 from sceneagent.bin_association import SAME_PHRASE
 from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
@@ -88,6 +89,10 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         # Association made before differing phrases stopped merging.
         grouping = _evidence(out, "association_evidence.json").get("rule", {})
         return grouping.get("grouping", {}).get(SAME_PHRASE) is True
+    if name == "place":
+        # Placements judged by an earlier gate are judged again.
+        icp = _evidence(out, "bin_score.json").get("icp", {})
+        return icp.get("gate") == PLACEMENT_GATE_LABEL
     if name == "export":
         # An export made before it recorded each object's box runs again, so
         # a settle reject can say what the bodies were doing.

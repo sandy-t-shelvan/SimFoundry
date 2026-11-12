@@ -149,6 +149,19 @@ def test_association_before_same_phrase_grouping_runs_again(tmp_path):
     assert video_run.stage_done(out, "association", items)
 
 
+def test_placements_judged_by_an_earlier_gate_are_placed_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["ICP residuals"])
+    old = {"icp": {"gate": "ours_iteration_1", "objects": []}}
+    (out / "bin_score.json").write_text(json.dumps(old))
+    assert not video_run.stage_done(out, "place", ("ICP residuals",))
+    new = {"icp": {"gate": "ours_iteration_2", "objects": []}}
+    (out / "bin_score.json").write_text(json.dumps(new))
+    assert video_run.stage_done(out, "place", ("ICP residuals",))
+
+
 def test_an_export_without_object_boxes_runs_again(tmp_path):
     out = tmp_path / "mailbox"
     out.mkdir()

@@ -19,9 +19,11 @@ SAM 3D's size; every fit's scale stays within
 (:func:`fit_score`) wins and is recorded, with each pose start's score
 before and after ICP. The silhouette is the mean Jaccard index of each object mask
 and the placed mesh's samples projected into that view, dilated by
-``SILHOUETTE_DILATE_PX``; that rendering is ours. Residuals go through the
-unchanged ``ours_iteration_1`` gate, whose decision is recorded and does not
-stop the score.
+``SILHOUETTE_DILATE_PX``; that rendering is ours. Residuals go through
+``ours_iteration_2`` (:func:`sceneagent.alignment.accept_placement`:
+silhouette and p90 in metres), whose decision is recorded and does not stop
+the score; iteration 1's decision is recorded beside it. Physics export
+takes only the objects this gate accepts.
 
 Score. The reconstruction is mapped into GraspClutter6D's reference frame
 (image 1's camera, metres) by one similarity for the whole scene: Umeyama
@@ -44,7 +46,12 @@ from typing import Any
 
 import numpy as np
 
-from sceneagent.alignment import accept_alignment
+from sceneagent.alignment import (
+    OURS_GATE_LABEL,
+    PLACEMENT_GATE_LABEL,
+    accept_alignment,
+    accept_placement,
+)
 from sceneagent.bin_association import (
     _latest_dataparser_transforms,
     camera_centers_colmap,
@@ -79,7 +86,7 @@ ICP_SOURCE_POINTS = 5000
 SILHOUETTE_POINTS = 20000
 SILHOUETTE_DILATE_PX = 3
 REFERENCE_IMAGE = 1
-GATE = "ours_iteration_1"
+GATE = PLACEMENT_GATE_LABEL
 # PyTorch3D camera (+x left, +y up, +z forward) to OpenCV (+x right, +y down).
 P3D_TO_OPENCV = np.diag([-1.0, -1.0, 1.0])
 # Which camera convention the SAM 3D pose is in is not documented either: the
@@ -442,15 +449,28 @@ def measure_fit(
     residuals = measure_residuals(
         result, target, None if silhouette is None else silhouette["silhouette"]
     )
-    gate = accept_alignment(residuals, GATE)
+    # Splat units to metres with association's DA3 unit, so the p90 limit
+    # means the same on a video as on the bin.
+    m_per_unit = float(inputs["association"]["unit"]["metres_per_unit"])
+    residuals["p90_m"] = residuals["p90"] * m_per_unit
+    gate = accept_placement(residuals)
     return {
         "residuals": {
             k: residuals[k]
-            for k in ("normalized_median", "p90", "median", "coverage", "silhouette")
+            for k in (
+                "normalized_median",
+                "p90",
+                "p90_m",
+                "median",
+                "coverage",
+                "silhouette",
+            )
         },
         "silhouette_views": None if silhouette is None else silhouette["views"],
         "gate": gate["decision"],
         "gate_failed": gate.get("failed"),
+        # What iteration 1 said, kept for comparison.
+        "gate_iteration_1": accept_alignment(residuals, OURS_GATE_LABEL)["decision"],
     }
 
 
