@@ -33,12 +33,6 @@ from sceneagent.bin_run import load_scene
 # kaolin 0.17.0, moge 1.0.0. The box's other env, sam3d, has no pytorch3d.
 # The checkout is read, never written.
 SAM3D_ENV = "/opt/conda/envs/sam3d10"
-# CA bundles tried in order for the worker's TLS (see worker_environment).
-CERT_BUNDLES = (
-    f"{SAM3D_ENV}/lib/python3.11/site-packages/certifi/cacert.pem",
-    "/root/.local/share/mamba/envs/sa/lib/python3.11/site-packages/certifi/cacert.pem",
-    "/etc/ssl/certs/ca-certificates.crt",
-)
 SAM3D_PYTHON = f"{SAM3D_ENV}/bin/python3"
 SAM3D_ROOT = "/root/sam-3d-objects"
 # Where setup.md's download leaves pipeline.yaml (checkpoints/hf), where an
@@ -123,14 +117,6 @@ def worker_command(jobs: Path, out: Path, config: Path) -> list[str]:
     ]
 
 
-def _readable_file(path: str) -> bool:
-    """A file we may use; a path we may not even stat (CI is not root) is not one."""
-    try:
-        return Path(path).is_file()
-    except OSError:
-        return False
-
-
 def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     """This repo on the path and the env named as conda would name it.
 
@@ -145,13 +131,6 @@ def worker_environment(base: dict[str, str] | None = None) -> dict[str, str]:
     # (run 42759919334). Downloads land in our own dir, never in /root's cache.
     env.pop("HF_HUB_OFFLINE", None)
     env["HF_HUB_CACHE"] = HF_CACHE
-    # The DINO embedder fetches its weights through torch.hub, whose TLS uses
-    # the env's conda CA bundle from the base image; on 60254439 that failed
-    # with "certificate has expired" (run 43179492561). pip's certifi in the
-    # same env is current, so point TLS at the first bundle that exists.
-    bundle = next((b for b in CERT_BUNDLES if _readable_file(b)), None)
-    if bundle is not None:
-        env["SSL_CERT_FILE"] = bundle
     return env
 
 
@@ -251,11 +230,7 @@ def run_bin_sam3d(
         RuntimeError,
         subprocess.TimeoutExpired,
     ) as exc:
-        # The failure manifest carries only this reason; name the CA bundle
-        # so a TLS failure on the box says which one was used.
-        tls = worker_environment().get("SSL_CERT_FILE", "none")
-        reason = f"{type(exc).__name__}: {exc}"[-700:] + f" [SSL_CERT_FILE={tls}]"
-        entry.update(decision="reject", reason=reason)
+        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
     ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")

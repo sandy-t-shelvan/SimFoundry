@@ -182,29 +182,18 @@ def test_sam3d_is_a_bin_pipeline():
     assert "sam3d_evidence.json" in FETCH_NAMES
 
 
-def test_the_worker_uses_the_first_ca_bundle_that_exists(tmp_path, monkeypatch):
-    from sceneagent import bin_sam3d
+def test_the_worker_builds_dinov2_without_its_weight_download():
+    from sceneagent.sam3d_worker import without_dino_download
 
-    first, second = tmp_path / "a.pem", tmp_path / "b.pem"
-    monkeypatch.setattr(bin_sam3d, "CERT_BUNDLES", (str(first), str(second)))
-    assert "SSL_CERT_FILE" not in bin_sam3d.worker_environment({})
-    second.write_text("certs")
-    assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(second)
-    first.write_text("certs")
-    assert bin_sam3d.worker_environment({})["SSL_CERT_FILE"] == str(first)
+    calls = []
 
+    def hub_load(repo_or_dir, model, *args, **kwargs):
+        calls.append((repo_or_dir, model, kwargs))
+        return "model"
 
-def test_an_unreadable_bundle_path_counts_as_missing(tmp_path, monkeypatch):
-    from sceneagent import bin_sam3d
-
-    locked = tmp_path / "locked"
-    locked.mkdir()
-    (locked / "a.pem").write_text("certs")
-    locked.chmod(0)
-    try:
-        monkeypatch.setattr(bin_sam3d, "CERT_BUNDLES", (str(locked / "a.pem"),))
-        if bin_sam3d._readable_file(str(locked / "a.pem")):
-            return  # root can stat it anyway; nothing to check here
-        assert "SSL_CERT_FILE" not in bin_sam3d.worker_environment({})
-    finally:
-        locked.chmod(0o755)
+    load = without_dino_download(hub_load)
+    assert load("facebookresearch/dinov2", "dinov2_vitb14", source="github") == "model"
+    assert calls[-1][2] == {"source": "github", "pretrained": False}
+    # Anything else goes through untouched.
+    load("other/repo", "m", source="github")
+    assert calls[-1][2] == {"source": "github"}

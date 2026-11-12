@@ -57,6 +57,26 @@ def mask_depth(pointmap, mask) -> float | None:
     return float(np.median(z)) if z.size else None
 
 
+def without_dino_download(hub_load):
+    """``torch.hub.load`` that builds DINOv2 without fetching its pretrained weights.
+
+    SAM 3D's Dino embedder calls ``torch.hub.load("facebookresearch/dinov2",
+    ...)``, which downloads the weights from dl.fbaipublicfiles.com. That
+    host's certificate had expired on 2026-11-12 (runs 43179492561 to
+    43181696152, and curl elsewhere). The download only seeds weights that
+    SAM 3D then replaces: the condition embedder, DINO included, is loaded
+    from ss_generator.ckpt and slat_generator.ckpt with strict=True, so a
+    DINO weight missing from those raises instead of staying random.
+    """
+
+    def load(repo_or_dir, model, *args, **kwargs):
+        if "dinov2" in str(repo_or_dir):
+            kwargs["pretrained"] = False
+        return hub_load(repo_or_dir, model, *args, **kwargs)
+
+    return load
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--jobs", type=Path, required=True)
@@ -69,6 +89,8 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, args.notebook)
     import numpy as np
     import torch
+
+    torch.hub.load = without_dino_download(torch.hub.load)
 
     # The upstream notebook's module, found through --notebook on sys.path;
     # imported by name because "inference" is too generic to list for mypy.
