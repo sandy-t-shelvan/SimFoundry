@@ -650,7 +650,15 @@ def export_run(out: Path | str) -> int:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         ledger = {"entries": []}
-    entries = [e for e in ledger.get("entries", []) if e.get("item") != EXPORT_ITEM]
+    from sceneagent import settle_run
+
+    # A new export makes any earlier settle stale: its ledger item, result and
+    # frame go, so a rejected export cannot publish the last run's picture
+    # (run 43315879642 did).
+    stale = {EXPORT_ITEM, settle_run.ITEM}
+    entries = [e for e in ledger.get("entries", []) if e.get("item") not in stale]
+    for name in (settle_run.RESULT, settle_run.FRAME):
+        (out / name).unlink(missing_ok=True)
     entry: dict[str, Any] = {"item": EXPORT_ITEM}
     evidence: dict[str, Any] = {"scene": scene.name}
     try:

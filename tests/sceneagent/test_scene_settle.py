@@ -261,7 +261,7 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
         assert piece in reason
 
 
-def test_export_with_no_gate_accepted_object_rejects_and_says_so(tmp_path, monkeypatch):
+def test_a_rejected_export_says_why_and_clears_the_stale_settle(tmp_path, monkeypatch):
     import sceneagent.bin_association as association
 
     monkeypatch.setattr(association, "read_ply_xyz", lambda path: np.zeros((4, 3)))
@@ -275,9 +275,17 @@ def test_export_with_no_gate_accepted_object_rejects_and_says_so(tmp_path, monke
     (tmp_path / "splat_evidence.json").write_text(json.dumps({"ply": "splat.ply"}))
     (tmp_path / "association").mkdir()
     np.savez(tmp_path / "association" / "objects.npz", object_0=np.arange(2))
+    # The last run's settle: a new export makes it stale.
+    old = {"item": settle_run.ITEM, "decision": "reject", "reason": "old"}
+    (tmp_path / "ledger.json").write_text(json.dumps({"entries": [old]}))
+    (tmp_path / settle_run.RESULT).write_text("{}")
+    (tmp_path / settle_run.FRAME).write_bytes(b"png")
     assert physics_export.export_run(tmp_path) == 1
-    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
-    assert "no placed object passed the ICP gate (1 rejected)" in entry["reason"]
+    entries = json.loads((tmp_path / "ledger.json").read_text())["entries"]
+    assert [e["item"] for e in entries] == [physics_export.EXPORT_ITEM]
+    assert "no placed object passed the ICP gate (1 rejected)" in entries[0]["reason"]
+    assert not (tmp_path / settle_run.RESULT).exists()
+    assert not (tmp_path / settle_run.FRAME).exists()
 
 
 def test_bin_settle_runs_the_settle_only_after_an_accepted_export(tmp_path):
