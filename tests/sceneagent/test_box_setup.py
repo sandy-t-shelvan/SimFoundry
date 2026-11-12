@@ -26,7 +26,8 @@ def test_the_setup_script_parses_and_names_every_stage():
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
     text = SCRIPT.read_text(encoding="utf-8")
     stages = text.split('STAGES="', 1)[1].split('"', 1)[0].split()
-    assert stages[0] == "apt" and stages[-1] == "sam3d_weights"
+    assert stages[0] == "apt" and stages[-1] == "isaaclab"
+    assert stages[-2] == "sam3d_weights"
     for name in stages:
         assert f"s_{name}() {{" in text
 
@@ -128,7 +129,8 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "from groundingdino import _C" not in text  # same .so twice aborts
     assert "pipdeptree==2.28.0" in text and "PIP_CONSTRAINT" in text
     da3 = text.split("s_da3() {", 1)[1].split("\n}", 1)[0]
-    assert da3.index('install -e "$DA3_ROOT"') < da3.index("install numpy==2.4.6")
+    assert da3.index('install -e "$DA3_ROOT"') < da3.index("install numpy==2.4.6 addict")
+    assert "export_to_gs_ply" in da3
     # 4.x replaces torch 2.5.1, so the package pin follows the torch pin.
     sa = text.split("s_env_sa() {", 1)[1].split("\n}", 1)[0]
     assert sa.index("torch==2.5.1") < sa.index("open_clip_torch==3.3.0")
@@ -136,4 +138,23 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "7442e4e9b732a508f80e141e7c2913437a3610ee0c77381a66658c3a445df87b" in text
     assert "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318" in text
     assert "f91db411c50efee93d8db7aeb323885650f6f722" in text
+    assert "ISAACSIM_PIP=6.2.0.0" in text
+    isaac = text.split("s_isaaclab() {", 1)[1].split("\n}", 1)[0]
+    assert "PIP_CONFIG_FILE=/dev/null" in isaac
+    assert "python=3.12" in isaac
+    assert isaac.index("setuptools>=69,<81") < isaac.index("./isaaclab.sh --install none")
+    assert isaac.index("./isaaclab.sh --install none") < isaac.index("torchaudio==2.11.0")
+    assert "https://download.pytorch.org/whl/cu130" in isaac
+    assert "libxt6" in isaac
+    assert "flatdict==4.0.1" in isaac
+    assert 'printf "%.0f\\n"' in isaac
+    assert "ISAACLAB_TAG=v3.0.0" in text
+    assert "e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4" in text
+    assert "OMNI_KIT_ACCEPT_EULA=YES" in text
+    assert "--install none" in text
+    check = (ROOT / "sceneagent/isaaclab_headless_check.py").read_text(encoding="utf-8")
+    assert "range(120)" in check
+    assert "flush=True" in check
+    assert "os._exit(0)" in check
+    assert "cube_height_m" in text
     assert 'env["LIDRA_SKIP_INIT"] = "true"' in text

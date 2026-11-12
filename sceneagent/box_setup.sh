@@ -28,6 +28,7 @@ set -uo pipefail
 
 MODE="${1:-}"
 OUT="${2:-/workspace/sf4-smoke/setup}"
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=/workspace/setup
 STATE="$ROOT/state"
 LOGS="$ROOT/logs"
@@ -59,7 +60,17 @@ SAM3D_ROOT=/root/sam-3d-objects
 SAM3D_ENV=/opt/conda/envs/sam3d10
 # HEAD of the checkout that finished s_sam3d on 60254439.
 SAM3D_COMMIT=f91db411c50efee93d8db7aeb323885650f6f722
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights"
+# Isaac Lab v3.0.0 documents Isaac Sim 6.2.0.0 from pip and Python 3.12.
+# The tag commit is pinned so a moved tag cannot change the install.
+# Pip Isaac Sim needs glibc 2.35; this image is Ubuntu 22.04. The driver
+# minimum that release documents is 580. The simfoundry conda env is a
+# different install and is not used here.
+ISAACSIM_PIP=6.2.0.0
+ISAACLAB_TAG=v3.0.0
+ISAACLAB_COMMIT=e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4
+ISAACLAB_ROOT=/workspace/IsaacLab
+ISAACLAB_ENV="$ENVS/isaaclab"
+STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -140,9 +151,12 @@ s_da3() {
   "$ENVS/sa/bin/pip" install -e "$DA3_ROOT"
   # DA3's pyproject asks for numpy<2 and pip downgrades it; CI's 2.4.6 still
   # imports DA3, and the pipeline is tested against it, so put it back.
-  "$ENVS/sa/bin/pip" install numpy==2.4.6
+  # The gs exporter imports addict, and the base install does not pull it.
+  # Association's depth worker hit that on 60254439 (run 43177596561).
+  "$ENVS/sa/bin/pip" install numpy==2.4.6 addict
   cd /tmp
-  PYTHONPATH="$DA3_ROOT/src" "$ENVS/sa/bin/python3" -c "import depth_anything_3"
+  PYTHONPATH="$DA3_ROOT/src" "$ENVS/sa/bin/python3" -c \
+    "import depth_anything_3; from depth_anything_3.utils.export.gs import export_to_gs_ply"
   # The weights bin_scale loads, into the cache it reads (HF_HUB_CACHE).
   HF_HUB_CACHE=/workspace/sf4-smoke/hf-cache "$ENVS/sa/bin/python3" -c \
     "from huggingface_hub import snapshot_download; snapshot_download('depth-anything/DA3METRIC-LARGE')"
@@ -236,6 +250,66 @@ s_sam3d_weights() {
   test -s checkpoints/hf/pipeline.yaml
 }
 
+s_isaaclab() {
+  local glibc
+  glibc=$(ldd --version | awk 'NR==1 {print $NF}')
+  echo "glibc $glibc"
+  awk -v v="$glibc" 'BEGIN {n=split(v,a,"."); if (n<2 || a[1]+0<2 || (a[1]+0==2 && a[2]+0<35)) exit 1}' \
+    || { echo "Isaac Sim pip needs glibc 2.35 or newer (found $glibc)" >&2; return 1; }
+  # Lab 3 refuses any interpreter other than 3.12. An env left from the
+  # 5.1 install is 3.11, so a version mismatch is replaced rather than reused.
+  if ! "$ISAACLAB_ENV/bin/python3" -c 'import sys; raise SystemExit(0 if sys.version_info[:2]==(3, 12) else 1)' 2>/dev/null; then
+    rm -rf "$ISAACLAB_ENV"
+    "$MAMBA" create -y -p "$ISAACLAB_ENV" python=3.12
+  fi
+  export PATH="$ISAACLAB_ENV/bin:$PATH"
+  export CONDA_PREFIX="$ISAACLAB_ENV"
+  # The installer prompts on first launch. This is the variable it documents.
+  export OMNI_KIT_ACCEPT_EULA=YES
+  export HEADLESS=1
+  # The box pip.conf adds pypi.ngc.nvidia.com, which does not resolve, so every
+  # package waits out retries (found on 60254439). Ignore that config.
+  # isaaclab.sh runs pip itself, so the variable has to be exported.
+  export PIP_CONFIG_FILE=/dev/null
+  "$ISAACLAB_ENV/bin/pip" install --upgrade pip
+  "$ISAACLAB_ENV/bin/pip" install "isaacsim[all,extscache]==${ISAACSIM_PIP}" \
+    --extra-index-url https://pypi.nvidia.com
+  clone https://github.com/isaac-sim/IsaacLab "$ISAACLAB_ROOT" "$ISAACLAB_TAG"
+  if [ "$(git -C "$ISAACLAB_ROOT" rev-parse HEAD)" != "$ISAACLAB_COMMIT" ]; then
+    git -C "$ISAACLAB_ROOT" fetch --depth 1 origin "$ISAACLAB_COMMIT"
+    git -C "$ISAACLAB_ROOT" checkout --detach "$ISAACLAB_COMMIT"
+  fi
+  cd "$ISAACLAB_ROOT"
+  # flatdict 4.0.1 builds with pkg_resources, which setuptools 82 removed.
+  # The installer keeps going when that build fails, so the core package is
+  # missing and the check cannot import it (found on 60254439).
+  "$ISAACLAB_ENV/bin/pip" install "setuptools>=69,<81"
+  "$ISAACLAB_ENV/bin/pip" install --no-build-isolation flatdict==4.0.1
+  # none: the headless check does not use a learning framework.
+  ./isaaclab.sh --install none
+  # The installer pins torch and torchvision from the cu130 index, uninstalls
+  # torchaudio, and does not put it back. isaacsim-core requires the matching
+  # wheel (found on 60254439).
+  if ! "$ISAACLAB_ENV/bin/python3" -c 'import torchaudio' >/dev/null 2>&1; then
+    "$ISAACLAB_ENV/bin/pip" install "torchaudio==2.11.0" \
+      --index-url https://download.pytorch.org/whl/cu130
+  fi
+  # MaterialX's render libraries need libXt. Kit logged three load errors for
+  # it at startup, and apt.ok is already written on a resumed box (found on
+  # 60254439).
+  if ! ldconfig -p | grep -q 'libXt\.so\.6'; then
+    apt-get update
+    apt-get install -y --no-install-recommends libxt6
+  fi
+  cd /tmp
+  "$ISAACLAB_ENV/bin/python3" "$HERE/isaaclab_headless_check.py" \
+    > "$ROOT/isaaclab_check.log" 2>&1
+  grep -q '^cube_height_m ' "$ROOT/isaaclab_check.log"
+  # mawk's %d saturates at 2^31-1, and this install is larger than that.
+  du -sb "$ISAACLAB_ENV" "$ISAACLAB_ROOT" | awk '{s+=$1} END {printf "%.0f\n", s}' \
+    > "$ROOT/isaaclab_disk_bytes"
+}
+
 run_stage() {
   local name="$1"
   if [ -f "$STATE/$name.ok" ]; then
@@ -276,6 +350,8 @@ do_report() {
     GSAM_ROOT="$GSAM_ROOT" DA3_ROOT="$DA3_ROOT" SAM3D_ROOT="$SAM3D_ROOT" \
     SAM3D_ENV="$SAM3D_ENV" SAM_WEIGHTS="$SAM_WEIGHTS" COLMAP_TAG="$COLMAP_TAG" \
     SAM2_CHECKPOINT="$SAM2_CHECKPOINT" SAM2_1_CHECKPOINT="$SAM2_1_CHECKPOINT" \
+    ISAACLAB_ROOT="$ISAACLAB_ROOT" ISAACLAB_ENV="$ISAACLAB_ENV" \
+    ISAACLAB_DISK="$ROOT/isaaclab_disk_bytes" \
     "$py" - <<'PY'
 import hashlib, json, os, pathlib, re, subprocess
 
@@ -379,6 +455,8 @@ versions = {
     "nerf": pyver(envs + "/nerf/bin/python3", ["torch", "torchvision", "nerfstudio", "gsplat"]),
     "gsam2": pyver(envs + "/gsam2/bin/python3", ["torch", "torchvision", "groundingdino", "sam2", "transformers"]),
     "sam3d10": pyver(sam3d_py, ["torch", "pytorch3d", "kaolin", "moge", "sam3d_objects", "gsplat"]),
+    # pip show, not import: importing isaaclab starts the simulator.
+    "isaaclab": run([env["ISAACLAB_ENV"] + "/bin/python3", "-m", "pip", "show", "isaaclab"]),
 }
 document = {
     "box_setup": "ours: sceneagent/box_setup.sh",
@@ -393,6 +471,7 @@ document = {
         "grounded_sam_2": commit(env["GSAM_ROOT"]),
         "depth_anything_3": commit(env["DA3_ROOT"]),
         "sam_3d_objects": commit(env["SAM3D_ROOT"]),
+        "isaac_lab": commit(env["ISAACLAB_ROOT"]),
     },
     "checksums": {
         "sam_vit_h_4b8939.pth": sha256(env["SAM_WEIGHTS"]),
@@ -402,6 +481,7 @@ document = {
         "pipeline.yaml": sha256(env["SAM3D_ROOT"] + "/checkpoints/hf/pipeline.yaml"),
     },
     "sam3d_pipeline_yaml": pathlib.Path(env["SAM3D_ROOT"], "checkpoints/hf/pipeline.yaml").is_file(),
+    "isaaclab_disk_bytes": int(pathlib.Path(env["ISAACLAB_DISK"]).read_text().strip()) if pathlib.Path(env["ISAACLAB_DISK"]).is_file() else None,
     "hf_token_present": pathlib.Path("/root/.cache/huggingface/token").is_file(),
 }
 out.mkdir(parents=True, exist_ok=True)
