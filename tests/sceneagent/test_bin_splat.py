@@ -1,0 +1,311 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+"""Bin splat orchestration with a fake nerfstudio: no GPU, no ns-* installed."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
+from sceneagent import bin_splat
+from sceneagent.bin_run import SCENE, SOURCE
+
+
+def _passing_bin(out: Path) -> None:
+    (out / "sparse" / "0").mkdir(parents=True)
+    (out / "sparse" / "0" / "cameras.bin").write_bytes(b"x")
+    (out / "images").mkdir()
+    (out / "bin_evidence.json").write_text(
+        json.dumps({"quality_bar": {"model": "0", "inputs": 13, "pass": True}})
+    )
+    (out / "ledger.json").write_text(
+        json.dumps(
+            {
+                "scene_name": f"{SOURCE} {SCENE}",
+                "source": SOURCE,
+                "entries": [
+                    {"item": "benchmark scene", "decision": "accept"},
+                    {"item": "COLMAP camera poses", "decision": "accept"},
+                ],
+            }
+        )
+    )
+
+
+class FakeNerfstudio:
+    """Writes what each ns tool would leave behind, and records every call."""
+
+    def __init__(self, fail: str | None = None, gaussians: int = 5) -> None:
+        self.calls: list[tuple[list[str], dict]] = []
+        self.fail = fail
+        self.gaussians = gaussians
+
+    def __call__(self, argv, **kwargs):
+        if argv[1:2] == ["-c"]:  # ns-eval / ns-export through SAFE_LOAD
+            assert argv[0] == f"{bin_splat.NS_BIN}/python"
+            argv = argv[3:]
+        self.calls.append((argv, kwargs))
+        tool = argv[0]
+        if tool == self.fail:
+            return SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        if tool == "ns-train":
+            run = Path(argv[argv.index("--output-dir") + 1]) / "processed/splatfacto/t1"
+            run.mkdir(parents=True)
+            (run / "config.yml").write_text("method_name: splatfacto\n")
+        elif tool == "ns-eval":
+            Path(argv[argv.index("--output-path") + 1]).write_text(
+                json.dumps({"results": {"psnr": 25.0, "ssim": 0.8, "lpips": 0.2}})
+            )
+        elif tool == "ns-export":
+            export = Path(argv[argv.index("--output-dir") + 1])
+            export.mkdir(parents=True)
+            header = f"ply\nformat binary_little_endian 1.0\nelement vertex {self.gaussians}\nend_header\n"
+            (export / "splat.ply").write_bytes(header.encode())
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+
+def _never_poses(out, data):
+    raise AssertionError("poses should have been reused")
+
+
+def test_reuses_passing_poses_and_accepts_a_nonempty_splat(tmp_path):
+    _passing_bin(tmp_path)
+    fake = FakeNerfstudio()
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake) == 0
+    tools = [argv[0] for argv, _ in fake.calls]
+    assert tools == ["ns-process-data", "ns-train", "ns-eval", "ns-export"]
+    process = fake.calls[0][0]
+    assert "--skip-colmap" in process
+    assert process[process.index("--colmap-model-path") + 1] == str(
+        (tmp_path / "sparse/0").resolve()
+    )
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert [e["item"] for e in ledger["entries"]] == [
+        "benchmark scene",
+        "COLMAP camera poses",
+        "full-scene splat",
+    ]
+    splat = ledger["entries"][-1]
+    assert splat["decision"] == "accept" and splat["gaussians"] == 5
+    assert splat["psnr"] == 25.0
+    evidence = json.loads((tmp_path / "splat_evidence.json").read_text())
+    assert evidence["poses_reused"] is True
+    assert json.loads((tmp_path / "ns_eval.json").read_text())["ok"] is True
+
+
+def test_ns_tools_run_from_the_nerf_env_without_our_pythonpath(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/workspace/sf4-smoke/repo")
+    _passing_bin(tmp_path)
+    fake = FakeNerfstudio()
+    bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake)
+    for _, kwargs in fake.calls:
+        env = kwargs["env"]
+        assert "PYTHONPATH" not in env
+        assert env["PATH"].split(":")[:2] == [
+            bin_splat.NS_BIN,
+            f"{bin_splat.CUDA_HOME}/bin",
+        ]
+        assert env["CUDA_HOME"] == bin_splat.CUDA_HOME
+
+
+def test_a_failed_train_stops_before_export_and_rejects(tmp_path):
+    _passing_bin(tmp_path)
+    fake = FakeNerfstudio(fail="ns-train")
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake) == 1
+    assert [argv[0] for argv, _ in fake.calls] == ["ns-process-data", "ns-train"]
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry == {
+        "item": "full-scene splat",
+        "method": "splatfacto",
+        "decision": "reject",
+        "failed_step": "train",
+        "reason": "boom",
+    }
+
+
+def test_an_empty_export_is_rejected(tmp_path):
+    _passing_bin(tmp_path)
+    fake = FakeNerfstudio(gaussians=0)
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake) == 1
+    evidence = json.loads((tmp_path / "splat_evidence.json").read_text())
+    assert evidence["failed_step"] == "export"
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["reason"].endswith("no Gaussians in " + evidence["ply"])
+
+
+def test_a_timeout_is_recorded_as_124(tmp_path):
+    _passing_bin(tmp_path)
+
+    def slow(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=slow) == 1
+    step = json.loads((tmp_path / "splat_evidence.json").read_text())["steps"][0]
+    assert step["returncode"] == 124 and step["step"] == "process-data"
+
+
+def test_runs_poses_when_the_ledger_belongs_to_another_pipeline(tmp_path):
+    _passing_bin(tmp_path)
+    (tmp_path / "ledger.json").write_text(
+        json.dumps({"scene_name": "Fruits", "entries": [{"item": "video"}]})
+    )
+    called = []
+
+    def poses(out, data):
+        called.append(out)
+        _rewrite = json.loads((out / "ledger.json").read_text())
+        _rewrite.update(
+            scene_name=f"{SOURCE} {SCENE}",
+            entries=[
+                {"item": "benchmark scene", "decision": "accept"},
+                {"item": "COLMAP camera poses", "decision": "accept"},
+            ],
+        )
+        (out / "ledger.json").write_text(json.dumps(_rewrite))
+        return 0
+
+    assert bin_splat.run_bin_splat(tmp_path, poses=poses, runner=FakeNerfstudio()) == 0
+    assert called == [tmp_path]
+    assert (
+        json.loads((tmp_path / "splat_evidence.json").read_text())["poses_reused"]
+        is False
+    )
+
+
+def test_failed_poses_reject_the_splat_without_running_nerfstudio(tmp_path):
+    fake = FakeNerfstudio()
+
+    def poses(out, data):
+        (out / "ledger.json").write_text(
+            json.dumps({"entries": [{"item": "benchmark scene", "decision": "reject"}]})
+        )
+        return 1
+
+    assert bin_splat.run_bin_splat(tmp_path, poses=poses, runner=fake) == 1
+    assert fake.calls == []
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["decision"] == "reject" and entry["reason"] == "bin poses did not pass"
+
+
+def test_ply_vertex_count_reads_only_the_header(tmp_path):
+    ply = tmp_path / "a.ply"
+    ply.write_bytes(b"ply\nformat ascii 1.0\nelement vertex 42\nend_header\n\x00\x01")
+    assert bin_splat.ply_vertex_count(ply) == 42
+    assert bin_splat.ply_vertex_count(tmp_path / "missing.ply") == 0
+
+
+def test_sceneagent_does_not_import_simfoundry():
+    # The GPU payload ships sceneagent alone (vast_smoke.rsync_invocations);
+    # run 42694109248 died on `from simfoundry...` in bin_splat.
+    root = Path(bin_splat.__file__).parent
+    for path in root.rglob("*.py"):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith(("from simfoundry", "import simfoundry")), (
+                path
+            )
+
+
+def test_eval_with_eval_mode_all_is_not_reported_as_held_out(tmp_path):
+    _passing_bin(tmp_path)
+
+    class AllViews(FakeNerfstudio):
+        def __call__(self, argv, **kwargs):
+            done = super().__call__(argv, **kwargs)
+            if argv[0] == "ns-train":
+                for config in Path(tmp_path).glob("splat/outputs/**/config.yml"):
+                    config.write_text("eval_mode: all\n")
+            return done
+
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=AllViews()) == 0
+    report = json.loads((tmp_path / "ns_eval.json").read_text())
+    assert report["ok"] is False and "eval_mode is all" in report["error"]
+
+
+def test_a_stale_ply_from_an_earlier_run_is_not_counted(tmp_path):
+    _passing_bin(tmp_path)
+    stale = tmp_path / "splat/export"
+    stale.mkdir(parents=True)
+    (stale / "splat.ply").write_bytes(b"ply\nelement vertex 9\nend_header\n")
+
+    class WritesNothing(FakeNerfstudio):
+        def __call__(self, argv, **kwargs):
+            if argv[1:2] == ["-c"] and argv[3] == "ns-export":
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+            return super().__call__(argv, **kwargs)
+
+    fake = WritesNothing()
+    assert bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=fake) == 1
+    assert not (stale / "splat.ply").exists()
+
+
+def test_other_pipelines_entries_in_the_shared_ledger_do_not_fail_a_good_splat(
+    tmp_path,
+):
+    _passing_bin(tmp_path)
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    ledger["entries"].append({"item": "SAM masks", "decision": "reject"})
+    (tmp_path / "ledger.json").write_text(json.dumps(ledger))
+    assert (
+        bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=FakeNerfstudio())
+        == 0
+    )
+
+
+def test_checkpoint_tools_allow_only_numpy_types_through_torch_load():
+    argv = bin_splat.checkpoint_tool("ns-export", ["gaussian-splat"])
+    assert argv[:2] == [f"{bin_splat.NS_BIN}/python", "-c"]
+    assert argv[3:] == ["ns-export", "gaussian-splat"]
+    code = bin_splat.SAFE_LOAD
+    compile(code, "<safe_load>", "exec")
+    assert "add_safe_globals" in code
+    assert "weights_only=False" not in code
+    assert "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD" not in code
+
+
+def test_poses_from_other_images_are_not_reused(tmp_path):
+    # The 58301075 bin evidence of run 42741443604: 313 inputs, 300 registered.
+    _passing_bin(tmp_path)
+    evidence = json.loads((tmp_path / "bin_evidence.json").read_text())
+    evidence["quality_bar"]["inputs"] = 313
+    (tmp_path / "bin_evidence.json").write_text(json.dumps(evidence))
+    assert bin_splat.poses_ready(tmp_path) is None
+
+
+def test_an_old_processed_dir_is_emptied_before_process_data(tmp_path):
+    _passing_bin(tmp_path)
+    stale = tmp_path / "splat" / "processed" / "images" / "frame_00300.jpg"
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"fruits")
+    bin_splat.run_bin_splat(tmp_path, poses=_never_poses, runner=FakeNerfstudio())
+    assert not stale.exists()
+
+
+def test_the_launcher_runs_on_a_torch_without_a_safe_list(tmp_path):
+    # 58301075's nerf env has torch 2.1.2, which has no add_safe_globals
+    # (run 42909583876 failed its export on that AttributeError).
+    import sys
+
+    (tmp_path / "torch").mkdir()
+    (tmp_path / "torch" / "__init__.py").write_text(
+        "import types\nserialization = types.SimpleNamespace()\n"
+    )
+    scripts = tmp_path / "nerfstudio" / "scripts"
+    scripts.mkdir(parents=True)
+    (tmp_path / "nerfstudio" / "__init__.py").write_text("")
+    (scripts / "__init__.py").write_text("")
+    (scripts / "exporter.py").write_text(
+        "import sys\ndef entrypoint():\n    print('started', sys.argv)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", bin_splat.SAFE_LOAD, "ns-export", "gaussian-splat"],
+        cwd=tmp_path,
+        env={"PYTHONPATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "started ['ns-export', 'gaussian-splat']" in done.stdout

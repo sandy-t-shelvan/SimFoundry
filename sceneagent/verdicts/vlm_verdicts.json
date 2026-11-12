@@ -1,0 +1,138 @@
+{
+  "source_run": "42939458339",
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "4b8cad46e12f7124b9fdc67303414ad31298d865f290fa317ad3ef55533e93b7",
+  "prompt_source": "ours",
+  "vlm_calls": 14,
+  "objects": [
+    {
+      "object": 0,
+      "decision": "sam3d_next_view",
+      "reason": "The reconstructed mesh has an incorrect bifurcated tubular shape that does not match the ketchup bottle."
+    },
+    {
+      "object": 1,
+      "decision": "keep",
+      "reason": "The box mesh dimensions align well with the reconstructed points and the projection matches the object segmentation tightly."
+    },
+    {
+      "object": 2,
+      "decision": "keep",
+      "reason": "The cylindrical mesh matches the object's shape and the blue point cloud tightly conforms to its surface across all views."
+    },
+    {
+      "object": 3,
+      "decision": "keep",
+      "reason": "The reconstructed 3D points match the pear-shaped mesh well across all axis views, so neither an ICP flip nor generating a new mesh would improve the fit."
+    },
+    {
+      "object": 4,
+      "decision": "sam3d_next_view",
+      "reason": "The reconstructed mesh is a thick rounded block that does not match the thin flat object in the mask, and its projection is completely misaligned."
+    },
+    {
+      "object": 5,
+      "decision": "keep",
+      "reason": "The cylindrical mesh closely matches the marker, and the multi-view points align tightly to the visible upper surface."
+    },
+    {
+      "object": 6,
+      "decision": "keep",
+      "reason": "The reconstructed 3D points conform closely to the pitcher mesh geometry across all views, and the silhouette aligns well with the segmentation."
+    },
+    {
+      "object": 7,
+      "decision": "keep",
+      "reason": "The reconstructed 3D points tightly conform to the apple mesh across all viewpoints, and the mesh overlays well in the scene."
+    },
+    {
+      "object": 8,
+      "decision": "sam3d_next_view",
+      "reason": "The segmentation mask and reconstructed mesh erroneously merge two distinct adjacent round objects into a double-lobed shape."
+    },
+    {
+      "object": 9,
+      "decision": "icp_flip",
+      "reason": "The mesh is oriented 180 degrees backwards, with its handle extending opposite the blue points and the projected silhouette reversed relative to the mask."
+    },
+    {
+      "object": 10,
+      "decision": "keep",
+      "reason": "The cylindrical mesh closely matches the point cloud and aligns accurately with the segmentation mask."
+    },
+    {
+      "object": 11,
+      "decision": "keep",
+      "reason": "The reconstructed points tightly coat the mesh surface and the red silhouette aligns well with the object mask."
+    },
+    {
+      "object": 12,
+      "decision": "keep",
+      "reason": "The fitted bin mesh aligns closely with the point cloud across all views and fits the registration silhouette well."
+    },
+    {
+      "object": 13,
+      "decision": "sam3d_next_view",
+      "reason": "The reconstructed mesh is a lemon with prominent end tips that is much larger than the target round red fruit, severely overextending beyond the segmentation outline."
+    }
+  ],
+  "failed": [],
+  "judged_placement": [
+    {
+      "object": 0,
+      "fit_total": 0.09243
+    },
+    {
+      "object": 1,
+      "fit_total": 0.03339
+    },
+    {
+      "object": 2,
+      "fit_total": 0.02745
+    },
+    {
+      "object": 3,
+      "fit_total": 0.05222
+    },
+    {
+      "object": 4,
+      "fit_total": 0.10697
+    },
+    {
+      "object": 5,
+      "fit_total": 0.03309
+    },
+    {
+      "object": 6,
+      "fit_total": 0.05975
+    },
+    {
+      "object": 7,
+      "fit_total": 0.04216
+    },
+    {
+      "object": 8,
+      "fit_total": 0.0367
+    },
+    {
+      "object": 9,
+      "fit_total": 0.03633
+    },
+    {
+      "object": 10,
+      "fit_total": 0.02427
+    },
+    {
+      "object": 11,
+      "fit_total": 0.02074
+    },
+    {
+      "object": 12,
+      "fit_total": 0.10984
+    },
+    {
+      "object": 13,
+      "fit_total": 0.16451
+    }
+  ]
+}

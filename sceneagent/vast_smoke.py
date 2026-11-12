@@ -3,7 +3,7 @@
 
 """Manual Vast smoke for ``python -m sceneagent`` on Fruits.mp4.
 
-The only instance this module will touch is ``59601312``. It may show that
+The only instance this module will touch is ``60254439``. It may show that
 instance when it is already running. It does not start or stop an instance.
 ``workflow_dispatch``, a label, and a request-file trigger all refuse a
 stopped, starting, or unknown instance, and they send no state PUT. Starting
@@ -72,14 +72,47 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
 
+from sceneagent.simfoundry_python import SIMFOUNDRY_PYTHON
+
 API_ORIGIN = "https://console.vast.ai"
-ALLOWED_INSTANCE_ID = 59601312
+ALLOWED_INSTANCE_ID = 60254439
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
-REMOTE_PYTHON = "/root/miniforge3/envs/simfoundry/bin/python3"
+REMOTE_PYTHON = SIMFOUNDRY_PYTHON
+# COLMAP 3.11.1 with CUDA on 58301075 (probe run 42908214934); /usr/bin/colmap
+# there is 3.6 without CUDA. Placed after the interpreter's bin on PATH, before
+# everything else.
+REMOTE_COLMAP_BIN = "/opt/colmap-cuda/bin"
+# py7zr goes here rather than into the shared ``sa`` env.
+REMOTE_PYDEPS = "/workspace/sf4-smoke/pydeps"
 FRUITS_RELATIVE = "docs/assets/example_videos/Fruits.mp4"
+# KAN-48 thin slice: the one video, besides Fruits, that the box receives.
+MAILBOX_RELATIVE = "docs/assets/example_videos/Mailbox.mp4"
 REMOTE_REPO = "/workspace/sf4-smoke/repo"
 REMOTE_OUT = "/workspace/sf4-smoke/run"
+# The GraspClutter6D pipelines' own run dir. Sharing REMOTE_OUT with run4 let
+# the bin's COLMAP pose run4's 300 Fruits frames beside its 13 views (bin
+# evidence of the 59601312 splat run 42741443604: 313 inputs, 300 registered).
+REMOTE_BIN_OUT = "/workspace/sf4-smoke/bin"
+REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
+# Isaac Lab render check (KAN-41). Its own run dir and its own interpreter:
+# the isaaclab env that box_setup.sh s_isaaclab installs, never the sa env.
+REMOTE_ISAACLAB_OUT = "/workspace/sf4-smoke/isaaclab"
+# The Mailbox slice's own run dir, so the bin's results are never overwritten.
+REMOTE_MAILBOX_OUT = "/workspace/sf4-smoke/mailbox"
+ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
+# The setup stages run detached on the box (setsid nohup), so a dropped
+# runner does not stop them; each run waits this long, then reports what is
+# done and what is running. A COLMAP CUDA build plus four envs takes longer
+# than one run, and the next dispatch resumes (each stage is skipped once it
+# has succeeded). 30 minutes, not 100: a stalled stage shows up sooner
+# (run 43107275324 sat idle with no way to see why).
+SETUP_WAIT_S = 1800
+# Where the runner writes the Hugging Face token for the `setup` pipeline only
+# (Sandeep, 2026-11-11: send it so SAM 3D's gated weights can be fetched).
+# It travels on ssh stdin, never in an argv, an environment or a log.
+REMOTE_HF_TOKEN = "/root/.cache/huggingface/token"
+HF_TOKEN_ENV = "HF_TOKEN"
 BOOT_TIMEOUT_S = 600.0
 # Room for run4.STEP_TIMEOUT_S["mapper"] (5400 s) inside the 120 min job.
 REMOTE_TIMEOUT_S = 6600.0
@@ -94,6 +127,182 @@ SSH_READY_BACKOFF_CAP_S = 8.0
 # operator removes it. This flag does not authorize a detach.
 DETACH_LEFTOVER_KEYS = False
 REQUIRED_LEDGER_ITEMS = ("video", "COLMAP camera poses")
+# What each pipeline must put in its ledger, and the input it records.
+PIPELINES = {
+    "sceneagent": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
+    "run4": (REQUIRED_LEDGER_ITEMS, FRUITS_RELATIVE),
+    "bin": (("benchmark scene", "COLMAP camera poses"), "GraspClutter6D 000091"),
+    "splat": (
+        ("benchmark scene", "COLMAP camera poses", "full-scene splat"),
+        "GraspClutter6D 000091",
+    ),
+    "masks": (("benchmark scene", "SAM masks"), "GraspClutter6D 000091"),
+    "association": (
+        (
+            "benchmark scene",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+        ),
+        "GraspClutter6D 000091",
+    ),
+    "sam3d": (
+        (
+            "benchmark scene",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+        ),
+        "GraspClutter6D 000091",
+    ),
+    "place": (
+        (
+            "benchmark scene",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+            "ICP residuals",
+            "bin score",
+        ),
+        "GraspClutter6D 000091",
+    ),
+    "review": (
+        (
+            "benchmark scene",
+            "SAM 3D meshes",
+            "reviewer views",
+            "reviewer retries",
+            "bin score (reviewed)",
+        ),
+        "GraspClutter6D 000091",
+    ),
+    "review_vlm": (
+        (
+            "benchmark scene",
+            "SAM 3D meshes",
+            "reviewer views",
+            "reviewer retries (VLM)",
+            "bin score (VLM reviewed)",
+        ),
+        "GraspClutter6D 000091",
+    ),
+    "review_candidates": (
+        ("benchmark scene", "SAM 3D meshes", "review candidates", "review pairs drawn"),
+        "GraspClutter6D 000091",
+    ),
+    "review_accept": (
+        (
+            "benchmark scene",
+            "SAM 3D meshes",
+            "reviewer retries (VLM accepted)",
+            "bin score (VLM accepted)",
+        ),
+        "GraspClutter6D 000091",
+    ),
+    "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
+    "probe": ((), "host inventory"),
+    "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
+    "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
+    "mailbox": (
+        (
+            "video",
+            "COLMAP camera poses",
+            "full-scene splat",
+            "SAM masks",
+            "Gaussian association",
+            "SAM 3D meshes",
+            "ICP residuals",
+        ),
+        MAILBOX_RELATIVE,
+    ),
+}
+# GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
+# judged on its own items only (a masks run must not fail on an earlier splat
+# entry), and they are the only ones that may fetch the dataset with py7zr.
+BIN_PIPELINES = frozenset(
+    {
+        "bin",
+        "splat",
+        "masks",
+        "association",
+        "sam3d",
+        "place",
+        "review",
+        "review_vlm",
+        "review_candidates",
+        "review_accept",
+        "mapper",
+    }
+)
+# The VLM verdicts reach the box as a committed file in the shipped checkout:
+# sceneagent.vlm_review writes it on a runner that holds GEMINI_API_KEY, and the
+# box never sees that key. rsync ships only sceneagent/ and Fruits.mp4, so the
+# file lives under sceneagent/ (run 42941668034 looked for ci/ and found
+# nothing); widening what is shipped would loosen that boundary.
+VLM_VERDICTS_RELATIVE = "sceneagent/verdicts/vlm_verdicts.json"
+# Round 2's pair verdicts travel the same way.
+ACCEPT_VERDICTS_RELATIVE = "sceneagent/verdicts/accept_verdicts.json"
+
+
+def remote_out(pipeline: str) -> str:
+    """The run dir on the box: the bin pipelines' own, else run4's."""
+    if pipeline == "setup":
+        return REMOTE_SETUP_OUT
+    if pipeline == "isaaclab_render":
+        return REMOTE_ISAACLAB_OUT
+    if pipeline == "mailbox":
+        return REMOTE_MAILBOX_OUT
+    return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
+
+
+# Read-only host inventory for a new or changed box. Plain shell, so it runs
+# before any SceneAgent environment exists. It never prints the environment
+# (no env/printenv), so no secret can land in the report.
+PROBE_SCRIPT = r"""
+section() { printf '\n## %s\n' "$1"; }
+# The inventory is uploaded as an Actions artifact, readable beyond the operator.
+# It lists tools, envs and model files only: no folder trees (one exposed a
+# file named after a local user path), no file contents, and any name that
+# looks like a credential is dropped.
+public() { grep -viE 'key|token|secret|cred|passw|\.pem|netrc|id_rsa|id_ed25519|\.env'; }
+section date; date -u
+section gpu; nvidia-smi --query-gpu=name,memory.total,memory.used,driver_version --format=csv 2>&1
+section os; head -3 /etc/os-release 2>&1; uname -r
+section cpu_ram; nproc; free -g 2>&1
+section disk; df -h / /workspace /root 2>&1
+section cuda; ls -d /usr/local/cuda* 2>&1; nvcc --version 2>&1 | tail -2
+section python; for t in python python3 conda mamba micromamba; do printf '%s: ' "$t"; command -v "$t" || echo missing; done; python3 --version 2>&1
+section conda_envs; for d in /root/miniforge3 /root/miniconda3 /opt/conda /root/anaconda3; do [ -d "$d/envs" ] && { echo "$d/envs:"; ls "$d/envs"; }; done; [ -x /root/miniforge3/envs/simfoundry/bin/python3 ] && echo "simfoundry env: present" || echo "simfoundry env: missing"
+section tools; for t in colmap colmap4 glomap ffmpeg ffprobe ns-train ns-eval git git-lfs rsync tmux 7z; do printf '%s: ' "$t"; command -v "$t" || echo missing; done
+section colmap; colmap -h 2>&1 | head -3
+section torch; python3 -c 'import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())' 2>&1 | tail -1
+# Globs over the usual conda and mamba roots, not find /: a full-disk walk takes
+# minutes on a hosted CI runner, where the probe test also runs.
+section interpreters; for d in /usr /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do [ -x "$d/bin/python3" ] && echo "$d/bin/python3"; done
+section colmap_binaries; for d in /usr /usr/local /opt/* /opt/conda/envs/* /root/.local/share/mamba/envs/* /root/miniforge3/envs/* /root/miniconda3/envs/*; do c="$d/bin/colmap"; [ -x "$c" ] && echo "$c: $(timeout 20 "$c" -h 2>&1 | head -2 | tr "\n" " ")"; done
+section python_imports; for py in /usr/bin/python3 /opt/*/bin/python3 /opt/conda/envs/*/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3 /root/miniconda3/envs/*/bin/python3; do [ -x "$py" ] || continue; echo "$py: $(timeout 60 "$py" -c 'import sys; v=[sys.version.split()[0]]
+for m in ("numpy","scipy","trimesh","PIL","py7zr","torch"):
+    try: v.append(m+"="+__import__(m).__version__)
+    except Exception as e: v.append(m+"=MISSING")
+print(" ".join(v))' 2>&1 | tail -1)"; done
+section phase2_packages; for py in /opt/conda/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3; do [ -x "$py" ] || continue; echo "$py:"; timeout 120 "$py" -m pip list 2>/dev/null | grep -iE '^(nerfstudio|gsplat|groundingdino|segment|sam-2|sam2|transformers|supervision|torch |opencv)' ; ls "$(dirname "$py")" 2>/dev/null | grep -E '^ns-(train|eval|export|process-data)$' | tr '\n' ' '; echo; done
+section checkpoints; find -L /root/SceneagentX/third_party /root/.cache/huggingface/hub /root/.cache/torch /workspace/models /root/sam-3d-objects/checkpoints /root/SimFoundry/checkpoints /root/miniforge3/envs/groundingdino -maxdepth 4 \( -name '*.pth' -o -name '*.pt' -o -name '*.safetensors' -o -name '*.ckpt' \) -size +1M 2>/dev/null | public | head -60
+section third_party; ls /root/SceneagentX/third_party /root/.cache/huggingface/hub 2>&1 | public | head -60
+section sam3d; for S in /root/software/sam-3d-objects /root/sam-3d-objects /root/SceneagentX/third_party/sam-3d-objects; do [ -d "$S" ] || continue; echo "root $S:"; ls "$S" "$S/notebook" 2>&1 | public | head -40; done; find -L /root/.cache/huggingface/hub/models--facebook--sam-3d-objects -maxdepth 6 -type f 2>/dev/null | public | head -40
+# Every SAM 3D interpreter against every checkout's notebook: which pair imports.
+section sam3d_import; for P in /root/miniforge3/envs/sam3d-objects/bin/python3 /opt/conda/envs/sam3d/bin/python3 /opt/conda/envs/sam3d10/bin/python3; do [ -x "$P" ] || continue; echo "interpreter $P:"; timeout 120 "$P" -m pip list 2>/dev/null | grep -iE '^(sam3d|sam-3d|pytorch3d|kaolin|gsplat|utils3d|moge|open3d|spconv|xformers|flash)'; for S in /root/software/sam-3d-objects /root/sam-3d-objects /root/SceneagentX/third_party/sam-3d-objects; do [ -d "$S/notebook" ] || continue; echo "notebook $S:"; (cd "$S/notebook" && timeout 300 "$P" -c 'import inference, inspect; print("inference import ok"); print(inspect.signature(inference.Inference.__init__))' 2>&1 | public | tail -3); done; done; for S in /root/software/sam-3d-objects /root/sam-3d-objects /root/SceneagentX/third_party/sam-3d-objects; do ls "$S"/checkpoints/*/pipeline.yaml 2>/dev/null; done
+# Depth Anything 3: which interpreter imports it, and any source checkout.
+section da3; for py in /opt/conda/bin/python3 /opt/conda/envs/*/bin/python3 /root/.local/share/mamba/envs/*/bin/python3 /root/miniforge3/envs/*/bin/python3; do [ -x "$py" ] || continue; r=$(timeout 120 "$py" -c 'import depth_anything_3 as d; print(list(d.__path__))' 2>/dev/null | tail -1); [ -n "$r" ] && echo "$py: $r"; done; ls -d /root/Depth-Anything-3/src /root/*/Depth-Anything-3/src /root/SceneagentX/third_party/Depth-Anything-3/src /workspace/Depth-Anything-3/src /workspace/*/Depth-Anything-3/src 2>/dev/null | public
+# Grounded-SAM-2's GroundingDINO imports itself as grounding_dino.*, so it needs its checkout root on the path.
+section gdino; G=/root/SceneagentX/third_party/Grounded-SAM-2; P=/root/.local/share/mamba/envs/gsam2/bin/python3; [ -x "$P" ] && (cd /tmp && PYTHONPATH="$G:/workspace/sf4-smoke/pydeps-gsam2" timeout 300 "$P" -c 'from groundingdino.util.inference import load_model; print("gdino import ok"); import segment_anything; print("segment_anything ok")' 2>&1 | public | tail -2)
+"""
+# gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
+PY7ZR_PIN = "py7zr==1.1.4"
 FETCH_NAMES = (
     "ledger.json",
     "plan.json",
@@ -103,6 +312,58 @@ FETCH_NAMES = (
     "tool_probe.json",
     "host_probe.json",
     "run4_evidence.json",
+    "bin_evidence.json",
+    "splat_evidence.json",
+    "ns_eval.json",
+    "masks_evidence.json",
+    "association_evidence.json",
+    "sam3d_evidence.json",
+    "bin_score.json",
+    "bin_review.json",
+    "bin_review_vlm.json",
+    "review_sheets.zip",
+    "candidates.json",
+    "review_pairs.zip",
+    "bin_review_accept.json",
+    "mapper_compare.json",
+    "inventory.txt",
+    "setup_evidence.json",
+    "isaaclab_render.png",
+    "isaaclab_render.log",
+    "video_run.json",
+    "scene.json",
+)
+# The fetched files that become the workflow artifact. One list, so a new
+# evidence file cannot be fetched and then silently dropped (run 42942342408
+# fetched bin_review_vlm.json and published nothing of it). The workflow's
+# upload list must name the same files; a test checks both.
+PUBLISHED_NAMES = frozenset(
+    {
+        "plan.json",
+        "ledger.json",
+        "manifest.json",
+        "run4_evidence.json",
+        "bin_evidence.json",
+        "splat_evidence.json",
+        "ns_eval.json",
+        "masks_evidence.json",
+        "association_evidence.json",
+        "sam3d_evidence.json",
+        "bin_score.json",
+        "bin_review.json",
+        "bin_review_vlm.json",
+        "review_sheets.zip",
+        "candidates.json",
+        "review_pairs.zip",
+        "bin_review_accept.json",
+        "mapper_compare.json",
+        "inventory.txt",
+        "setup_evidence.json",
+        "isaaclab_render.png",
+        "isaaclab_render.log",
+        "video_run.json",
+        "scene.json",
+    }
 )
 PUBLIC_FIELDS = (
     "id",
@@ -128,7 +389,7 @@ RequestFn = Callable[..., tuple[int, dict[str, Any]]]
 
 
 class InstanceNotApproved(ValueError):
-    """The call is outside the SF-4 allowlist for instance 59601312."""
+    """The call is outside the SF-4 allowlist for instance 60254439."""
 
 
 class SmokeError(RuntimeError):
@@ -136,7 +397,7 @@ class SmokeError(RuntimeError):
 
 
 def parse_instance_id(value: object) -> int:
-    """Return 59601312. Any other id, including 58301075, is refused."""
+    """Return 60254439. Any other id, including 58301075, is refused."""
     parsed: int | None
     if isinstance(value, bool):
         parsed = None
@@ -155,7 +416,7 @@ def parse_instance_id(value: object) -> int:
             shown = type(value).__name__
         raise InstanceNotApproved(
             f"Refusing instance {shown!r}. "
-            f"SF-4 may use only the existing Texas instance {ALLOWED_INSTANCE_ID}."
+            f"SF-4 may use only the existing United Kingdom instance {ALLOWED_INSTANCE_ID}."
         )
     return ALLOWED_INSTANCE_ID
 
@@ -278,7 +539,7 @@ def unwrap_instance(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the instance when it is 59601312 in Texas."""
+    """Return the instance when it is 60254439 in the United Kingdom."""
     row = unwrap_instance(payload)
     if row is None:
         raise InstanceNotApproved(
@@ -293,9 +554,9 @@ def require_approved_instance(payload: dict[str, Any]) -> dict[str, Any]:
     if geo is None:
         geo = row.get("geolocode")
     geo_text = "" if geo is None else str(geo)
-    if "texas" not in geo_text.lower():
+    if "united kingdom" not in geo_text.lower():
         raise InstanceNotApproved(
-            f"instance {ALLOWED_INSTANCE_ID} geolocation is {geo_text!r}, not Texas."
+            f"instance {ALLOWED_INSTANCE_ID} geolocation is {geo_text!r}, not the United Kingdom."
         )
     return row
 
@@ -391,7 +652,7 @@ def assert_request_allowed(method: str, url: str, body: dict[str, Any] | None) -
     method = method.upper()
     if method == "GET" and not is_ssh and query == [("owner", "me")] and body is None:
         return
-    # One added read: GET /api/v0/instances/59601312/ssh/ and nothing else.
+    # One added read: GET /api/v0/instances/60254439/ssh/ and nothing else.
     # The id is the constant, not a caller-supplied template. No query, no
     # body, no sub-path, and no other method on this path. No state PUT.
     if (
@@ -529,6 +790,79 @@ def build_remote_command(
     fruits = f"{repo}/{FRUITS_RELATIVE}"
     if pipeline == "sceneagent":
         return [REMOTE_PYTHON, "-m", "sceneagent", fruits, "--out", out]
+    if pipeline == "bin":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_run", "--out", out]
+    if pipeline == "splat":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_splat", "--out", out]
+    if pipeline == "masks":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_masks", "--out", out]
+    if pipeline == "association":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_association", "--out", out]
+    if pipeline == "sam3d":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_sam3d", "--out", out]
+    if pipeline == "place":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_place", "--out", out]
+    if pipeline == "review":
+        return [REMOTE_PYTHON, "-m", "sceneagent.bin_review", "--out", out]
+    if pipeline == "review_vlm":
+        verdicts = f"{repo}/{VLM_VERDICTS_RELATIVE}"
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.bin_review",
+            "--out",
+            out,
+            "--verdicts",
+            verdicts,
+        ]
+    if pipeline == "review_candidates":
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.bin_review_pairs",
+            "build",
+            "--out",
+            out,
+            "--verdicts",
+            f"{repo}/{VLM_VERDICTS_RELATIVE}",
+        ]
+    if pipeline == "review_accept":
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.bin_review_pairs",
+            "apply",
+            "--out",
+            out,
+            "--accept",
+            f"{repo}/{ACCEPT_VERDICTS_RELATIVE}",
+        ]
+    if pipeline == "mapper":
+        return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
+    if pipeline == "probe":
+        return ["/bin/sh", "-c", "host inventory", "--out", out]
+    if pipeline == "setup":
+        return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
+    if pipeline == "mailbox":
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.video_run",
+            f"{repo}/{MAILBOX_RELATIVE}",
+            "--out",
+            out,
+        ]
+    if pipeline == "isaaclab_render":
+        # The repo on PYTHONPATH must not shadow packages in the isaaclab env.
+        return [
+            "env",
+            "-u",
+            "PYTHONPATH",
+            ISAACLAB_PYTHON,
+            f"{repo}/sceneagent/isaaclab_headless_check.py",
+            "--render",
+            out,
+        ]
     if pipeline != "run4":
         raise InstanceNotApproved("refusing pipeline")
     argv = [REMOTE_PYTHON, "-m", "sceneagent.run4", fruits, "--out", out]
@@ -586,8 +920,45 @@ def build_remote_shell(
     """
     repo = require_remote_dir(repo_dir)
     out = require_remote_dir(out_dir)
+    if pipeline == "probe":
+        # No pinned interpreter yet on a new box; the probe is plain shell.
+        script = (
+            f"mkdir -p {shlex.quote(out)}\n{{\n{PROBE_SCRIPT}\n}} > "
+            f"{shlex.quote(out + '/inventory.txt')} 2>&1\necho inventory written\n"
+        )
+        _reject_secret_text(script)
+        return script
+    if pipeline == "setup":
+        # Plain shell: no pinned interpreter exists until setup makes one.
+        setup = shlex.quote(repo + "/sceneagent/box_setup.sh")
+        q_out = shlex.quote(out)
+        script = "\n".join(
+            [
+                "set -u",
+                f"mkdir -p {q_out} /workspace/setup/state",
+                # A finished earlier run must not end this wait at once.
+                "rm -f /workspace/setup/state/done",
+                (
+                    f"setsid nohup bash {setup} run {q_out} "
+                    "> /workspace/setup/run.log 2>&1 < /dev/null &"
+                ),
+                "waited=0",
+                (
+                    "while [ ! -f /workspace/setup/state/done ] && "
+                    f"[ $waited -lt {SETUP_WAIT_S} ]; do sleep 30; "
+                    "waited=$((waited + 30)); done"
+                ),
+                f"bash {setup} report {q_out}",
+            ]
+        )
+        script += "\n"
+        _reject_secret_text(script)
+        return script
     argv = build_remote_command(repo, out, pipeline=pipeline, commit_sha=commit_sha)
     quoted = " ".join(shlex.quote(part) for part in argv)
+    # Only dataset pipelines see py7zr's install dir; its dependencies would
+    # otherwise shadow same-named packages in the pinned env.
+    pythonpath = repo + (":" + REMOTE_PYDEPS if pipeline in BIN_PIPELINES else "")
     py = shlex.quote(REMOTE_PYTHON)
     missing = shlex.quote("pinned interpreter missing: " + REMOTE_PYTHON)
     lines = [
@@ -597,9 +968,19 @@ def build_remote_shell(
         "  exit 127",
         "fi",
         f"cd {shlex.quote(repo)}",
-        f"export PYTHONPATH={shlex.quote(repo)}",
+        f"export PYTHONPATH={shlex.quote(pythonpath)}",
+        f'export PATH={shlex.quote(str(Path(REMOTE_PYTHON).parent) + ":" + REMOTE_COLMAP_BIN)}:"$PATH"',
         f"mkdir -p {shlex.quote(out)}",
+        # Only a probe run may publish an inventory; never fetch a stale one.
+        f"rm -f {shlex.quote(out + '/inventory.txt')}",
         host_probe_command(out),
+    ]
+    if pipeline in BIN_PIPELINES:
+        lines.append(
+            f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet "
+            f"--target {shlex.quote(REMOTE_PYDEPS)} {PY7ZR_PIN}"
+        )
+    lines += [
         quoted,
     ]
     script = "\n".join(lines) + "\n"
@@ -723,20 +1104,24 @@ def rsync_invocations(
     known_hosts: str,
     repo_dir: str,
 ) -> list[tuple[list[str], Path]]:
-    """Copy ``sceneagent`` and Fruits.mp4. The rest of the checkout stays home."""
+    """Copy ``sceneagent``, Fruits.mp4 and Mailbox.mp4. The rest stays home."""
     repo = require_remote_dir(repo_dir)
     remote = f"root@{host}:{repo}/"
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
     scene = checkout / "sceneagent"
     excludes = _rsync_exclude_args()
-    # --mkpath: a fresh box has no /workspace/sf4-smoke, and rsync otherwise
-    # creates only the last path component (run4, 2026-11-07).
+    # A fresh box has no /workspace/sf4-smoke, and rsync creates only the last
+    # path component (run4, 2026-11-07). --mkpath needs rsync 3.2.3 on both
+    # ends and instance 58301075 had 3.1.3, so the remote side runs mkdir -p
+    # first; every rsync version accepts --rsync-path. ``repo`` is a checked
+    # absolute path with no shell metacharacters (require_remote_dir).
+    make_parent = f"--rsync-path=mkdir -p {repo} && rsync"
     return [
         (
             [
                 "rsync",
                 "-a",
-                "--mkpath",
+                make_parent,
                 *excludes,
                 "-e",
                 ssh_e,
@@ -750,11 +1135,12 @@ def rsync_invocations(
                 "rsync",
                 "-a",
                 "-R",
-                "--mkpath",
+                make_parent,
                 *excludes,
                 "-e",
                 ssh_e,
                 FRUITS_RELATIVE,
+                *[m for m in (MAILBOX_RELATIVE,) if (checkout / m).is_file()],
                 remote,
             ],
             checkout,
@@ -791,9 +1177,10 @@ def iter_shipped_files(checkout: Path) -> list[Path]:
             if _ship_excluded(relative):
                 continue
             shipped.append(path)
-    fruits = root / FRUITS_RELATIVE
-    if fruits.is_file() and not _ship_excluded(FRUITS_RELATIVE):
-        shipped.append(fruits)
+    for relative in (FRUITS_RELATIVE, MAILBOX_RELATIVE):
+        video = root / relative
+        if video.is_file() and not _ship_excluded(relative):
+            shipped.append(video)
     return shipped
 
 
@@ -1609,6 +1996,7 @@ def collect_artifact_manifest(
     own_key: dict[str, Any] | None = None,
     run_context: dict[str, str] | None = None,
     secret_forwarding: SecretForwarding | None = None,
+    pipeline: str = "sceneagent",
 ) -> dict[str, Any]:
     """Record the run. Never rewrite ``ledger.json`` or invent ``plan.json``.
 
@@ -1638,9 +2026,12 @@ def collect_artifact_manifest(
             for entry in _ledger_entries(ledger)
             if isinstance(entry, dict)
         ]
+    judged = stages
+    if pipeline in BIN_PIPELINES:
+        judged = [s for s in stages if s["item"] in PIPELINES[pipeline][0]]
     present_items = {stage["item"] for stage in stages}
     missing_items = [
-        name for name in REQUIRED_LEDGER_ITEMS if name not in present_items
+        name for name in PIPELINES[pipeline][0] if name not in present_items
     ]
     missing_files: list[str] = []
     if ledger_bytes is None:
@@ -1648,19 +2039,24 @@ def collect_artifact_manifest(
     if not plan_path.is_file():
         missing_files.append("plan")
     reason = _failure_reason(
-        stages, missing_items if ledger is not None else [], missing_files
+        judged, missing_items if ledger is not None else [], missing_files
     )
-    passed = (
+    if pipeline == "probe":
+        # A probe has no plan or ledger; its result is the inventory file.
+        inventory = run_dir / "inventory.txt"
+        missing_files = [] if inventory.is_file() else ["inventory"]
+        reason = None if inventory.is_file() else "inventory.txt was not written"
+    passed = (pipeline == "probe" and reason is None) or (
         ledger_bytes is not None
         and plan_path.is_file()
         and not missing_items
-        and bool(stages)
-        and all(stage["counts_as_pass"] for stage in stages)
+        and bool(judged)
+        and all(stage["counts_as_pass"] for stage in judged)
         and reason is None
     )
     manifest = {
         "instance_id": approved,
-        "video": FRUITS_RELATIVE,
+        "video": PIPELINES[pipeline][1],
         "command": command,
         "plan": "plan.json" if plan_path.is_file() else None,
         "ledger": "ledger.json" if ledger_bytes is not None else None,
@@ -1689,7 +2085,10 @@ def collect_artifact_manifest(
         manifest["own_key"] = own
     if ssh is not None:
         manifest["ssh"] = _public_ssh_report(ssh)
-    manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
+    if pipeline == "probe":
+        manifest["complete"] = (run_dir / "inventory.txt").is_file()
+    else:
+        manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
     if not manifest["complete"]:
         manifest["passed"] = False
     _apply_run_record(manifest, run_context, secret_forwarding)
@@ -1726,6 +2125,8 @@ def publish_artifacts(
     run_dir = Path(run_dir)
     artifact_dir = Path(artifact_dir)
     secret = api_key.encode("utf-8") if api_key else b""
+    # The setup pipeline's Hugging Face token: no published file may hold it.
+    hf_token = os.environ.get(HF_TOKEN_ENV, "").encode("utf-8")
     prepared: list[tuple[str, bytes]] = []
     hits: list[str] = []
     for path in sorted(p for p in run_dir.rglob("*") if p.is_file()):
@@ -1740,7 +2141,7 @@ def publish_artifacts(
                 hits.append(rel)
             prepared.append((rel, data))
             continue
-        if secret and secret in data:
+        if (secret and secret in data) or (hf_token and hf_token in data):
             hits.append(rel)
             continue
         prepared.append((rel, data))
@@ -1755,12 +2156,7 @@ def publish_artifacts(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
     for rel, data in prepared:
-        if Path(rel).name not in {
-            "plan.json",
-            "ledger.json",
-            "manifest.json",
-            "run4_evidence.json",
-        }:
+        if Path(rel).name not in PUBLISHED_NAMES:
             continue
         target = artifact_dir / rel
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1978,16 +2374,18 @@ class SshRemote:
             pipeline = "sceneagent"
         if not isinstance(commit_sha, str):
             commit_sha = ""
+        if pipeline == "setup":
+            self.hf_token_sent = self._send_hf_token(os.environ.get(HF_TOKEN_ENV, ""))
         code = self._bash(
             build_remote_shell(
                 REMOTE_REPO,
-                REMOTE_OUT,
+                remote_out(pipeline),
                 pipeline=pipeline,
                 commit_sha=commit_sha,
             ),
             timeout_s=REMOTE_TIMEOUT_S,
         )
-        self._fetch(local_run)
+        self._fetch(local_run, pipeline)
         return code
 
     def _probe_ssh(self) -> tuple[int, str]:
@@ -2050,6 +2448,34 @@ class SshRemote:
                 tail = redact(redact(tail, self.api_key), self._private_material)
                 raise SmokeError(f"rsync failed ({completed.returncode}): {tail}")
 
+    def _send_hf_token(self, token: str) -> bool:
+        """Write the Hugging Face token to the box for the setup pipeline.
+
+        Sandeep's call (2026-11-11): SAM 3D's weights are gated, so the setup
+        step needs the token on the box. It goes on ssh stdin into a mode-0600
+        file; the argv names only the path, and nothing echoes it back.
+        """
+        if not token or any(ch.isspace() for ch in token):
+            return False
+        mask_secret(token)
+        target = shlex.quote(REMOTE_HF_TOKEN)
+        folder = shlex.quote(str(Path(REMOTE_HF_TOKEN).parent))
+        argv = [
+            *ssh_base_argv(str(self.private), self.known_hosts, self.port),
+            f"root@{self.host}",
+            f"umask 077 && mkdir -p {folder} && cat > {target}.tmp && mv {target}.tmp {target}",
+        ]
+        _reject_secret_text(" ".join(argv))
+        completed = subprocess.run(
+            argv,
+            check=False,
+            input=token.encode("utf-8"),
+            capture_output=True,
+            env=child_env(),
+            timeout=60,
+        )
+        return completed.returncode == 0
+
     def _bash(self, script: str, timeout_s: float) -> int:
         argv = [
             *ssh_base_argv(str(self.private), self.known_hosts, self.port),
@@ -2081,7 +2507,7 @@ class SshRemote:
             return last_code
         return last_code
 
-    def _fetch(self, local_run: Path) -> None:
+    def _fetch(self, local_run: Path, pipeline: str = "sceneagent") -> None:
         argv = [
             *ssh_base_argv(str(self.private), self.known_hosts, self.port),
             f"root@{self.host}",
@@ -2092,7 +2518,7 @@ class SshRemote:
             completed = subprocess.run(
                 argv,
                 check=False,
-                input=build_fetch_script(REMOTE_OUT).encode("utf-8"),
+                input=build_fetch_script(remote_out(pipeline)).encode("utf-8"),
                 capture_output=True,
                 env=child_env(),
                 timeout=180,
@@ -2162,7 +2588,7 @@ def load_ssh_key_fingerprints(
     api_key: str,
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    """GET ``/api/v0/instances/59601312/ssh/``. Return count and local fingerprints.
+    """GET ``/api/v0/instances/60254439/ssh/``. Return count and local fingerprints.
 
     This does not detach, and it does not return key material.
     """
@@ -2262,7 +2688,7 @@ def run_smoke(
     commit_sha: str = "",
     pipeline: str = "sceneagent",
 ) -> int:
-    """Run the Fruits smoke on 59601312 when that instance is already running.
+    """Run the Fruits smoke on 60254439 when that instance is already running.
 
     Exit 0 is a GPU accept. Exit 2 is a refusal before the instance is changed.
     Exit 1 is a smoke that ran and did not pass, including a ledger
@@ -2275,7 +2701,7 @@ def run_smoke(
     except InstanceNotApproved as exc:
         _emit(str(exc), "")
         return 2
-    if pipeline not in {"sceneagent", "run4"}:
+    if pipeline not in PIPELINES:
         _emit("refusing pipeline", "")
         return 2
     try:
@@ -2386,7 +2812,7 @@ def run_smoke(
                 local_run,
                 command=build_remote_command(
                     REMOTE_REPO,
-                    REMOTE_OUT,
+                    remote_out(pipeline),
                     pipeline=pipeline,
                     commit_sha=commit_sha,
                 ),
@@ -2398,6 +2824,7 @@ def run_smoke(
                 own_key=own_key,
                 run_context=context,
                 secret_forwarding=forwarding,
+                pipeline=pipeline,
             )
             publish_artifacts(local_run, Path(artifact_dir), api_key=key)
             published = True
@@ -2474,7 +2901,7 @@ def main(argv: list[str] | None = None) -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="SceneAgent Fruits GPU smoke on Vast instance 59601312"
+        description="SceneAgent Fruits GPU smoke on Vast instance 60254439"
     )
     parser.add_argument("--instance-id", required=True)
     parser.add_argument("--checkout", type=Path, required=True)
@@ -2482,9 +2909,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trigger", choices=sorted(_TRIGGER_NAMES), default="")
     parser.add_argument("--actor", default="")
     parser.add_argument("--commit-sha", default="")
-    parser.add_argument(
-        "--pipeline", choices=("sceneagent", "run4"), default="sceneagent"
-    )
+    parser.add_argument("--pipeline", choices=sorted(PIPELINES), default="sceneagent")
     args = parser.parse_args(argv)
     return run_smoke(
         args.instance_id,

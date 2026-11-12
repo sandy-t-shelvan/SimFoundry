@@ -68,7 +68,6 @@ from sceneagent.sf5_colmap_evidence import (
     gpu_query_is_aggregate,
     memory_meets_budget,
     parse_gpu_memory_csv,
-    launch_ready,
     main,
     output_allowed,
     parse_colmap_banner,
@@ -400,10 +399,10 @@ def test_gpu_budget_is_explicit_and_fail_closed():
     assert summary["sample_interval_s"] == 10
 
 
-def test_launch_command_is_exact_and_blocked():
-    assert launch_ready() is False
+def test_launch_command_is_exact():
     text = render_launch_command(CODE_SHA)
-    assert text.startswith("STATUS: BLOCKED\nready_for_execution: false\n")
+    assert "BLOCKED" not in text
+    assert INSTANCE_ID == "60254439"
     assert APPROVED_RELATIVE in text
     assert APPROVED_SHA256 in text
     assert CODE_SHA in text
@@ -429,7 +428,7 @@ def test_manifest_has_no_self_hash(tmp_path):
     blob = b"package-bytes\n"
     (tmp_path / "runner.py").write_bytes(blob)
     manifest = build_manifest({"runner.py": blob}, code_sha=CODE_SHA)
-    assert manifest["ready_for_execution"] is False
+    assert "ready_for_execution" not in manifest
     assert manifest["instance_id"] == INSTANCE_ID
     assert manifest["code_sha"] == CODE_SHA
     assert manifest["code_short_sha"] == "aaaaaaa"

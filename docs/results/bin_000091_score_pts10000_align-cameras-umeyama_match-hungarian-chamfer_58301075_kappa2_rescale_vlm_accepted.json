@@ -1,0 +1,89 @@
+{
+ "scores": {
+  "no_review": {
+   "f1_mean": 0.32679104780321827,
+   "chamfer_mean_matched_m": 0.021086974411052034
+  },
+  "test_accepted": {
+   "f1_mean": 0.327217763464792,
+   "chamfer_mean_matched_m": 0.021067746266248837
+  },
+  "vlm_accepted": {
+   "f1_mean": 0.327217763464792,
+   "chamfer_mean_matched_m": 0.021067746266248837
+  },
+  "oracle_upper_bound": {
+   "f1_mean": 0.3291143459388953,
+   "chamfer_mean_matched_m": 0.020828627050932077
+  }
+ },
+ "agreement_with_oracle": {
+  "vlm": 1,
+  "test": 1,
+  "judged": 3
+ },
+ "oracle_rule": "ours, evaluation only: a retry is better when keeping it alone raises the scene F1@1cm; computed after the VLM judged",
+ "objects": [
+  {
+   "object": 0,
+   "decision": "sam3d_next_view",
+   "kind": "sam3d_next_view",
+   "vlm": "after",
+   "vlm_reason": "The reconstructed blue points conform closely to the mesh surface in B, whereas the mesh in A has an extraneous handle with no supporting points and misaligns with the mask.",
+   "vlm_source": "VLM",
+   "test": "after",
+   "oracle": "before",
+   "f1_delta_if_kept": -0.0016324793906462576
+  },
+  {
+   "object": 4,
+   "decision": "sam3d_next_view",
+   "kind": "sam3d_next_view",
+   "vlm": "after",
+   "vlm_reason": "In fit A, the projected silhouette in the registration overlay properly covers the green mask, whereas in fit B it is severely shifted to the left.",
+   "vlm_source": "VLM",
+   "test": "after",
+   "oracle": "before",
+   "f1_delta_if_kept": -0.0002641030834572011
+  },
+  {
+   "object": 8,
+   "decision": "sam3d_next_view",
+   "kind": "sam3d_next_view",
+   "vlm": "after",
+   "vlm_reason": "Fit B correctly reconstructs a single fruit rather than an erroneous double-lobed mesh, matching the segmentation outline tightly in the registration overlay.",
+   "vlm_source": "VLM",
+   "test": "after",
+   "oracle": "after",
+   "f1_delta_if_kept": 0.0023232981356770543
+  },
+  {
+   "object": 9,
+   "decision": "icp_flip",
+   "kind": "icp_flip",
+   "vlm": "before",
+   "vlm_reason": "retry moved nothing; not judged",
+   "vlm_source": "retry moved nothing; not judged",
+   "test": "before",
+   "oracle": "tie",
+   "f1_delta_if_kept": 0.0
+  }
+ ],
+ "vlm": {
+  "candidates_hash": "e03b08b885c5cc5c4d8e9788ac2b8152af728929d53bb391633491209a4df2ab",
+  "source_run": "42963190714",
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "b3c45aa98860ef97909c901c8241052a3853620735cdc8bd4a551c428b721337",
+  "vlm_calls": 3
+ },
+ "run": {
+  "box": "vast instance 58301075",
+  "retry_verdict_run": 42947401149,
+  "candidates_run": 42963190714,
+  "candidates_hash": "e03b08b885c5cc5c4d8e9788ac2b8152af728929d53bb391633491209a4df2ab",
+  "pair_verdict_run": 42964570514,
+  "apply_run": 42965157633,
+  "placement": "kappa=2 + SAM 3D pose rescale (PR #48); judged on review run 42939458339",
+  "note": "ours: Gemini picks retries, the box saves each retry once, Gemini judges blind A/B before/after pairs, the box keeps Gemini's side; n=3 judged pairs, indicative only"
+ }
+}

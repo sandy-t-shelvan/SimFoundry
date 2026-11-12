@@ -1,0 +1,262 @@
+{
+ "score": {
+  "f1_mean": 0.32347208845317044,
+  "chamfer_mean_matched_m": 0.023652485842162254,
+  "matches": [
+   {
+    "reference": "obj_000003",
+    "delivered": "object_3",
+    "chamfer_m": 0.025823275138577642,
+    "f1": 0.2507260819483298
+   },
+   {
+    "reference": "obj_000006",
+    "delivered": "object_8",
+    "chamfer_m": 0.012917775602039168,
+    "f1": 0.5251294311624073
+   },
+   {
+    "reference": "obj_000007",
+    "delivered": "object_7",
+    "chamfer_m": 0.012832093433819698,
+    "f1": 0.397287230636621
+   },
+   {
+    "reference": "obj_000008",
+    "delivered": "object_13",
+    "chamfer_m": 0.026567463806870525,
+    "f1": 0.20669435586734694
+   },
+   {
+    "reference": "obj_000009",
+    "delivered": "object_2",
+    "chamfer_m": 0.005332729372684887,
+    "f1": 0.9472255146205003
+   },
+   {
+    "reference": "obj_000010",
+    "delivered": "object_1",
+    "chamfer_m": 0.008184292868141109,
+    "f1": 0.6858788734433826
+   },
+   {
+    "reference": "obj_000013",
+    "delivered": "object_10",
+    "chamfer_m": 0.006669906489939287,
+    "f1": 0.7715924799378722
+   },
+   {
+    "reference": "obj_000017",
+    "delivered": "object_11",
+    "chamfer_m": 0.004967008258359747,
+    "f1": 0.951560443370456
+   },
+   {
+    "reference": "obj_000019",
+    "delivered": "object_4",
+    "chamfer_m": 0.044891860662414886,
+    "f1": 0.17268423091824875
+   },
+   {
+    "reference": "obj_000029",
+    "delivered": "object_0",
+    "chamfer_m": 0.021612644953829703,
+    "f1": 0.3329632473944048
+   },
+   {
+    "reference": "obj_000024",
+    "delivered": "object_12",
+    "chamfer_m": 0.09435283857140053,
+    "f1": 0.005412413793103448
+   },
+   {
+    "reference": "obj_000028",
+    "delivered": "object_6",
+    "chamfer_m": 0.02734599022787349,
+    "f1": 0.36506311507676154
+   },
+   {
+    "reference": "obj_000038",
+    "delivered": "object_5",
+    "chamfer_m": 0.027033030778869174,
+    "f1": 0.3720049966420417
+   },
+   {
+    "reference": "obj_000040",
+    "delivered": "object_9",
+    "chamfer_m": 0.012603891625451707,
+    "f1": 0.48521935425193274
+   }
+  ],
+  "f1_by_reference": {
+   "obj_000001": 0.0,
+   "obj_000003": 0.2507260819483298,
+   "obj_000006": 0.5251294311624073,
+   "obj_000007": 0.397287230636621,
+   "obj_000008": 0.20669435586734694,
+   "obj_000009": 0.9472255146205003,
+   "obj_000010": 0.6858788734433826,
+   "obj_000013": 0.7715924799378722,
+   "obj_000017": 0.951560443370456,
+   "obj_000019": 0.17268423091824875,
+   "obj_000029": 0.3329632473944048,
+   "obj_000030": 0.0,
+   "obj_000018": 0.0,
+   "obj_000024": 0.005412413793103448,
+   "obj_000026": 0.0,
+   "obj_000037": 0.0,
+   "obj_000028": 0.36506311507676154,
+   "obj_000038": 0.3720049966420417,
+   "obj_000039": 0.0,
+   "obj_000040": 0.48521935425193274
+  },
+  "tau_m": 0.01,
+  "protocol": {
+   "benchmark": "GraspClutter6D",
+   "similarity": {
+    "scale": 0.2068534897207129,
+    "rotation": [
+     [
+      0.9851961169002733,
+      0.17116086110313275,
+      0.009621375736185942
+     ],
+     [
+      0.010024410147719353,
+      -0.0014905763813325094,
+      -0.999948643372869
+     ],
+     [
+      -0.17113772946318145,
+      0.9852419691672121,
+      -0.0031842967357668646
+     ]
+    ],
+    "translation": [
+     0.0025316348352189847,
+     0.0012500350711640705,
+     0.18200234939180548
+    ]
+   },
+   "per_object_refit": false,
+   "reference_objects": 20,
+   "points_per_reference": [
+    10000
+   ]
+  },
+  "alignment": {
+   "rule": "one similarity for the scene: Umeyama from the 13 COLMAP camera centers (splat frame) to the same cameras' metric centers in image 1's camera frame",
+   "cameras": 13,
+   "camera_rms_m": 0.0035335393812174205,
+   "camera_max_m": 0.01041639731332956,
+   "scale": 0.2068534897207129
+  },
+  "matcher": "Hungarian on symmetric Chamfer",
+  "delivered_objects": 14,
+  "reference_objects": 20,
+  "points_per_delivered": 10000,
+  "file_name": "bin_000091_score_pts10000_align-cameras-umeyama_match-hungarian-chamfer_reviewed.json"
+ },
+ "score_before_review": {
+  "f1_mean": 0.32679104780321827,
+  "chamfer_mean_matched_m": 0.021086974411052034,
+  "matches": [
+   {
+    "reference": "obj_000003",
+    "delivered": "object_3",
+    "chamfer_m": 0.025823275138577642,
+    "f1": 0.2507260819483298
+   },
+   {
+    "reference": "obj_000006",
+    "delivered": "object_8",
+    "chamfer_m": 0.012917775602039168,
+    "f1": 0.5251294311624073
+   },
+   {
+    "reference": "obj_000007",
+    "delivered": "object_7",
+    "chamfer_m": 0.012832093433819698,
+    "f1": 0.397287230636621
+   },
+   {
+    "reference": "obj_000008",
+    "delivered": "object_13",
+    "chamfer_m": 0.026567463806870525,
+    "f1": 0.20669435586734694
+   },
+   {
+    "reference": "obj_000009",
+    "delivered": "object_2",
+    "chamfer_m": 0.004832993904011058,
+    "f1": 0.9381999040716266
+   },
+   {
+    "reference": "obj_000010",
+    "delivered": "object_1",
+    "chamfer_m": 0.008391139996320844,
+    "f1": 0.6695239455379606
+   },
+   {
+    "reference": "obj_000013",
+    "delivered": "object_10",
+    "chamfer_m": 0.006669906489939287,
+    "f1": 0.7715924799378722
+   },
+   {
+    "reference": "obj_000017",
+    "delivered": "object_11",
+    "chamfer_m": 0.0048055469769214,
+    "f1": 0.943357928768285
+   },
+   {
+    "reference": "obj_000019",
+    "delivered": "object_4",
+    "chamfer_m": 0.044891860662414886,
+    "f1": 0.17268423091824875
+   },
+   {
+    "reference": "obj_000029",
+    "delivered": "object_0",
+    "chamfer_m": 0.021612644953829703,
+    "f1": 0.3329632473944048
+   },
+   {
+    "reference": "obj_000024",
+    "delivered": "object_12",
+    "chamfer_m": 0.05931803623557548,
+    "f1": 0.0827797518610422
+   },
+   {
+    "reference": "obj_000028",
+    "delivered": "object_6",
+    "chamfer_m": 0.02734599022787349,
+    "f1": 0.36506311507676154
+   },
+   {
+    "reference": "obj_000038",
+    "delivered": "object_5",
+    "chamfer_m": 0.026605022701083562,
+    "f1": 0.3945998986315256
+   },
+   {
+    "reference": "obj_000040",
+    "delivered": "object_9",
+    "chamfer_m": 0.012603891625451707,
+    "f1": 0.48521935425193274
+   }
+  ]
+ },
+ "decisions": {
+  "icp_flip": 12,
+  "keep": 2
+ },
+ "retries_kept": 5,
+ "run": {
+  "box": "vast instance 58301075",
+  "review_run": 42934419274,
+  "commit": "7fb73310127fcf4518a8936f8518d126813a4cae",
+  "kappa": 2,
+  "note": "ours: kappa=2 placement with the SAM 3D pose rescale (PR #48), then the rule-based SF-19 reviewer (no VLM yet)"
+ }
+}

@@ -1,0 +1,27 @@
+{
+  "mode": "accept",
+  "candidates_hash": "e6f608993abdb59c305582545ceef117b562398a09e73ebd6bc95e7c3d7231d7",
+  "source_run": "42976670426",
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "0df7449c022b562ef14444c2ed0c954647acba276c36e9fc8c76e243cceb0bc8",
+  "prompt_source": "ours",
+  "vlm_calls": 3,
+  "objects": [
+    {
+      "object": 0,
+      "better": "B",
+      "reason": "In fit B, the mesh shape matches the object correctly and the red silhouette aligns much more accurately with the green segmentation outlines in the registration overlays."
+    },
+    {
+      "object": 4,
+      "better": "B",
+      "reason": "Fit B uses the complete object model with its cap on, allowing the reconstructed 3D points to align much more accurately with the mesh surfaces across all axis views."
+    },
+    {
+      "object": 8,
+      "better": "B",
+      "reason": "Fit B uses a single-fruit mesh that matches the actual object, whereas Fit A incorrectly fits a double-lobed mesh."
+    }
+  ],
+  "failed": []
+}

@@ -11,7 +11,6 @@ from sceneagent.gpu_smoke_trigger import (
     LABEL_ACTORS,
     REQUEST_FIELDS,
     REQUEST_FILE,
-    REQUIRE_QA_PM_PASS,
     check_push_diff,
     classify_push_diff,
     _job_if,
@@ -62,7 +61,6 @@ def _label(**overrides: object) -> tuple[bool, str]:
         "head_repo": THIS_REPO,
         "repository": THIS_REPO,
         "actor": "cursor[bot]",
-        "pr_labels": ["run-gpu-smoke"],
     }
     payload.update(overrides)
     return label_trigger_allowed(**payload)  # type: ignore[arg-type]
@@ -92,19 +90,6 @@ def test_label_requires_the_exact_name_and_an_allowlisted_actor():
     assert _label(event_name="pull_request")[0] is False
     allowed, reason = _label()
     assert reason == "gpu-smoke actor=cursor[bot]"
-
-
-def test_qa_pm_gate_defaults_off_and_can_be_required():
-    assert REQUIRE_QA_PM_PASS is False
-    assert _label(pr_labels=["run-gpu-smoke"])[0] is True
-    refused, reason = _label(pr_labels=["run-gpu-smoke"], require_qa_pm_pass=True)
-    assert refused is False
-    assert "QA and PM PASS" in reason
-    allowed, _reason = _label(
-        pr_labels=["run-gpu-smoke", "qa-pass", "pm-pass"],
-        require_qa_pm_pass=True,
-    )
-    assert allowed is True
 
 
 def test_near_miss_request_paths_are_refused():
@@ -239,7 +224,7 @@ def test_request_file_only_commit_is_allowed(tmp_path, monkeypatch, capsys):
     request = repo / "ci"
     request.mkdir()
     (request / "gpu-run-request.json").write_text(
-        '{"ticket_id":"KAN-14","reason":"standing GPU approval for 58301075"}\n',
+        '{"ticket_id":"KAN-14","reason":"standing GPU approval for 59601312"}\n',
         encoding="utf-8",
     )
     _git(repo, "add", "ci/gpu-run-request.json")
@@ -257,7 +242,7 @@ def test_request_file_only_commit_is_allowed(tmp_path, monkeypatch, capsys):
 
 def test_request_file_rejects_instance_id_and_invalid_json():
     errors = validate_request_document(
-        {"ticket_id": "SF-14", "reason": "because", "instance_id": 58301075}
+        {"ticket_id": "SF-14", "reason": "because", "instance_id": 59601312}
     )
     assert any("instance_id" in error for error in errors)
     assert validate_request_text("{") == ["request file is not JSON"]
@@ -401,27 +386,27 @@ def test_label_cleanup_does_not_run_for_a_different_label():
     assert not label_cleanup_runs(
         expression,
         smoke_result="cancelled",
-        event_label="qa-pass",
+        event_label="some-other-label",
     )
 
 
 def test_workflow_checker_rejects_retired_id_and_lifecycle_puts():
     text = WORKFLOW.read_text(encoding="utf-8")
-    retired = text.replace("--instance-id 59601312", "--instance-id 58301075", 1)
+    retired = text.replace("--instance-id 60254439", "--instance-id 58301075", 1)
     findings = workflow_safety_findings(retired)
     assert "workflow must not name retired instance 58301075" in findings
-    assert "instance id must be the literal 59601312" in findings
+    assert "instance id must be the literal 60254439" in findings
     started = text.replace(
-        "--instance-id 59601312",
-        '--instance-id 59601312 \'{"state": "running"}\'',
+        "--instance-id 60254439",
+        '--instance-id 60254439 \'{"state": "running"}\'',
         1,
     )
     assert "workflow must not send a Vast state running" in workflow_safety_findings(
         started
     )
     stopped = text.replace(
-        "--instance-id 59601312",
-        '--instance-id 59601312 \'{"state": "stopped"}\'',
+        "--instance-id 60254439",
+        '--instance-id 60254439 \'{"state": "stopped"}\'',
         1,
     )
     assert "workflow must not send a Vast state stopped" in workflow_safety_findings(

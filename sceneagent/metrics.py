@@ -53,8 +53,13 @@ def _as_points(points):
 
 
 def _min_distances(source, target):
-    delta = source[:, None, :] - target[None, :, :]
-    return np.linalg.norm(delta, axis=2).min(axis=1)
+    # Exact nearest-neighbour distances through a KD-tree. Section 4.1 samples
+    # 10,000 points per object, and the bin matches 20 x 20 objects; the
+    # all-pairs difference array was about 2.4 GB and 7 s per pair.
+    from scipy.spatial import cKDTree
+
+    distances, _ = cKDTree(target).query(source, k=1)
+    return np.asarray(distances, dtype=float)
 
 
 def symmetric_chamfer(points_x, points_y):

@@ -103,7 +103,7 @@ def _analyzer_text(
 
 
 def test_pinned_interpreter_is_the_simfoundry_env_and_names_a_missing_file(tmp_path):
-    assert SIMFOUNDRY_PYTHON == "/root/miniforge3/envs/simfoundry/bin/python3"
+    assert SIMFOUNDRY_PYTHON == "/root/.local/share/mamba/envs/sa/bin/python3"
     assert REMOTE_PYTHON == SIMFOUNDRY_PYTHON
     missing = tmp_path / "missing-python"
     with pytest.raises(PinnedInterpreterMissing, match=f"pinned interpreter missing: {missing}"):
@@ -535,7 +535,7 @@ def test_remote_run4_command_keeps_the_pinned_interpreter(tmp_path):
             commit_sha="nope",
         )
     code = run_smoke(
-        59601312,
+        60254439,
         tmp_path,
         tmp_path / "artifacts",
         "",
@@ -549,7 +549,8 @@ def test_workflow_runs_run4_and_records_the_checked_out_commit():
     assert workflow_safety_findings(text) == []
     assert text.count("secrets.VAST_SSH_PRIVATE_KEY") == 1
     assert "git rev-parse HEAD" in text
-    assert "--pipeline run4" in text
+    assert '--pipeline "$SMOKE_PIPELINE"' in text
+    assert "inputs.pipeline || 'run4'" in text
     assert "--commit-sha \"$CHECKED_OUT_SHA\"" in text
     assert "StrictHostKeyChecking" not in text
     keyed = text.split("name: Vast GPU smoke on Fruits.mp4", 1)[1].split("name: Upload", 1)[0]

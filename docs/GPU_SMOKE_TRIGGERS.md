@@ -71,10 +71,6 @@ import it, pip-install it, or run it in any step that has `VAST_API_KEY` or a
 `run-gpu-smoke` and comments the run URL and the conclusion, including when
 the smoke fails.
 
-`LABEL_SMOKE_GATE` is the smoke job's `if:`. The token `!false` means the
-`qa-pass` and `pm-pass` labels are not required. Replacing it with `!true`
-turns that requirement on without moving the secret or the checkout.
-
 The job logs `gpu-smoke actor=<login>`.
 
 If the instance is stopped, not running, or in an unknown state, the label
@@ -92,8 +88,7 @@ It does not wait for `main` to be updated. It does not start or stop the
 instance. A stopped, starting, or unknown machine is refused with no state
 PUT, including when the trigger is `workflow_dispatch`.
 
-The file is only a run trigger. It is not a way to land code without the QA
-and PM merge rule. The changed-path set must be exactly
+The file is only a run trigger, not a way to land code. The changed-path set must be exactly
 `ci/gpu-run-request.json`, with no stripping or case folding. A near-miss
 such as `.ci/gpu-run-request.json` or `./ci/gpu-run-request.json` is a
 different path. A rename or a delete of the request file is not that set

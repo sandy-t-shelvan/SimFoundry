@@ -3,7 +3,7 @@
 
 """Decide which GPU-smoke triggers may run. This module never calls Vast.
 
-The instance id is not a parameter here. ``59601312`` is fixed in the
+The instance id is not a parameter here. ``60254439`` is fixed in the
 workflow and in ``sceneagent.vast_smoke``. A request file that names any
 other field, including an instance id, is rejected. No trigger starts or
 stops that instance.
@@ -11,10 +11,6 @@ stops that instance.
 The label path is ``pull_request_target``. GitHub loads that workflow from
 the repository default branch. The request-file path is a plain ``push`` to
 ``Main_duplicate``, so it uses the workflow on that branch.
-
-``REQUIRE_QA_PM_PASS`` mirrors the workflow's ``LABEL_SMOKE_GATE``. It is
-false: ``qa-pass`` and ``pm-pass`` are not required. The workflow writes the
-same default as ``!false`` so one token can turn the requirement on.
 """
 
 from __future__ import annotations
@@ -28,11 +24,19 @@ import subprocess
 RUN_GPU_SMOKE_LABEL = "run-gpu-smoke"
 REQUEST_FILE = "ci/gpu-run-request.json"
 LABEL_ACTORS = ("sandy-t-shelvan", "cursor[bot]")
-REQUIRE_QA_PM_PASS = False
-QA_PASS_LABEL = "qa-pass"
-PM_PASS_LABEL = "pm-pass"
 REQUEST_FIELDS = ("ticket_id", "reason")
 _ZERO_SHA = "0" * 40
+DISPATCH_INPUTS = """    inputs:
+      pipeline:
+        description: GPU pipeline to run
+        type: choice
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox]
+        default: run4
+"""
+HF_TOKEN_LINE = (
+    "HF_TOKEN: ${{ github.event_name == 'workflow_dispatch' && "
+    "inputs.pipeline == 'setup' && secrets.HF_TOKEN || '' }}"
+)
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _TICKET_RE = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 _REASON_RE = re.compile(r"(?=.*\S)[^\n\r]+")
@@ -61,9 +65,7 @@ def label_trigger_allowed(
     head_repo: str,
     repository: str,
     actor: str,
-    pr_labels: list[str] | None = None,
     base_ref: str = "Main_duplicate",
-    require_qa_pm_pass: bool = REQUIRE_QA_PM_PASS,
     allowed_actors: tuple[str, ...] = LABEL_ACTORS,
 ) -> tuple[bool, str]:
     """Return whether a label event may start a run, and the log line.
@@ -74,7 +76,6 @@ def label_trigger_allowed(
     ``Main_duplicate``. Any other base would run unreviewed Python with
     the Vast secret.
     """
-    labels = list(pr_labels or [])
     if event_name != "pull_request_target" or action != "labeled":
         return False, "gpu-smoke label refused: not a pull_request_target labeled event"
     if label != RUN_GPU_SMOKE_LABEL:
@@ -85,8 +86,6 @@ def label_trigger_allowed(
         return False, "gpu-smoke label refused: base is not an integration branch"
     if actor not in allowed_actors:
         return False, "gpu-smoke label refused: actor is not allowlisted"
-    if require_qa_pm_pass and not {QA_PASS_LABEL, PM_PASS_LABEL} <= set(labels):
-        return False, "gpu-smoke label refused: QA and PM PASS labels are required"
     return True, f"gpu-smoke actor={actor}"
 
 
@@ -598,8 +597,16 @@ def workflow_safety_findings(text: str) -> list[str]:
     for forbidden in ("pull_request:", "schedule:", "issue_comment:", "workflow_run:"):
         if forbidden in on_lines:
             findings.append(f"{forbidden} is not a gpu-smoke trigger")
-    if "inputs:" in text or "inputs." in text:
-        findings.append("workflow_dispatch must stay free of inputs")
+    # The one allowed input is a fixed pipeline choice. It cannot carry an
+    # instance id, a ref or a secret; vast_smoke's argparse re-checks it.
+    dispatch = text.split("  workflow_dispatch:\n", 1)[-1].split(
+        "  pull_request_target:", 1
+    )[0]
+    rest = text.replace(DISPATCH_INPUTS, "", 1).replace("inputs.pipeline", "")
+    if dispatch != DISPATCH_INPUTS or "inputs:" in rest or "inputs." in rest:
+        findings.append(
+            "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox pipeline choice"
+        )
     if "- Main_duplicate" not in on_block:
         findings.append("request-file push must be limited to Main_duplicate")
     if "- main" in on_lines:
@@ -612,25 +619,27 @@ def workflow_safety_findings(text: str) -> list[str]:
         findings.append("workflow must not send a Vast state running")
     if re.search(r"""["']state["']\s*:\s*["']stopped["']""", text):
         findings.append("workflow must not send a Vast state stopped")
-    if "group: gpu-smoke-59601312" not in text:
-        findings.append("concurrency group gpu-smoke-59601312 is missing")
+    if "group: gpu-smoke-60254439" not in text:
+        findings.append("concurrency group gpu-smoke-60254439 is missing")
     if "cancel-in-progress: false" not in text:
         findings.append("cancel-in-progress must be false")
     before_jobs = text.split("jobs:", 1)[0]
-    if "group: gpu-smoke-59601312" in before_jobs:
+    if "group: gpu-smoke-60254439" in before_jobs:
         findings.append(
             "concurrency must be on the smoke job so an unrelated label does not take the group"
         )
     if text.count("secrets.VAST_API_KEY") != 1:
         findings.append("VAST_API_KEY must appear in exactly one step")
+    # The Hugging Face token (Sandeep, 2026-11-11) reaches only a manual
+    # `setup` run, and only through this one line; every other run gets ''.
+    if text.count("secrets.HF_TOKEN") != 1 or HF_TOKEN_LINE not in text:
+        findings.append("HF_TOKEN must appear once, gated to the setup pipeline")
     if text.count("secrets.VAST_SSH_PRIVATE_KEY") != 1:
         findings.append(
             "VAST_SSH_PRIVATE_KEY must be passed from the Actions secret in exactly one step"
         )
-    if "--instance-id 59601312" not in text:
-        findings.append("instance id must be the literal 59601312")
-    if "LABEL_SMOKE_GATE" not in text:
-        findings.append("LABEL_SMOKE_GATE comment is missing")
+    if "--instance-id 60254439" not in text:
+        findings.append("instance id must be the literal 60254439")
     actors = workflow_label_actors(text)
     if tuple(actors) != LABEL_ACTORS:
         findings.append(
@@ -647,12 +656,6 @@ def workflow_safety_findings(text: str) -> list[str]:
         )
         return findings
     smoke_if = _job_if(smoke)
-    if "!false" not in smoke_if:
-        findings.append(
-            "LABEL_SMOKE_GATE must default to !false so QA and PM PASS stay off"
-        )
-    if "!true" in smoke_if:
-        findings.append("LABEL_SMOKE_GATE expression must not require QA and PM PASS")
     for needle in (
         "github.event_name == 'pull_request_target'",
         "github.event.label.name == 'run-gpu-smoke'",
@@ -667,8 +670,8 @@ def workflow_safety_findings(text: str) -> list[str]:
         findings.append("the smoke job must not hold pull-requests: write")
     if "contents: read" not in smoke:
         findings.append("the smoke job needs contents: read")
-    if "group: gpu-smoke-59601312" not in smoke:
-        findings.append("the smoke job must use concurrency group gpu-smoke-59601312")
+    if "group: gpu-smoke-60254439" not in smoke:
+        findings.append("the smoke job must use concurrency group gpu-smoke-60254439")
     if "cancel-in-progress: false" not in smoke:
         findings.append("the smoke job must set cancel-in-progress false")
     guard_run = "\n".join(_step_run(step) for step in _steps(guard))
@@ -693,8 +696,8 @@ def workflow_safety_findings(text: str) -> list[str]:
             findings.append("the keyed step must run in the orchestrator checkout")
         if "python -m sceneagent.vast_smoke" not in run:
             findings.append("the keyed step must run sceneagent.vast_smoke")
-        if "--instance-id 59601312" not in run:
-            findings.append("the keyed step must pass instance 59601312 as a literal")
+        if "--instance-id 60254439" not in run:
+            findings.append("the keyed step must pass instance 60254439 as a literal")
         if "VAST_SSH_PRIVATE_KEY" in run:
             findings.append(
                 "keyed run script must not print or interpolate the ssh private key"
