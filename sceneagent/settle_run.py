@@ -48,14 +48,12 @@ WINDOW_S = 0.5
 # rocked at 0.33 rad/s, 0.6 mm net in 0.5 s). Only the scene as exported is
 # judged. physics_export writes one export/scene_settle_<name>.usda for each.
 VARIANTS: dict[str, dict] = {
-    # The old default collider, kept beside the scene so a regression shows:
-    # it rocked the Mailbox body at 0.056 m/s where convexDecomposition held
-    # it at 0.0015 m/s (run 43342519758).
+    # Both colliders beside every scene, one of them its own default, so a
+    # change in either shows (physics_export.BIN_DYNAMIC_APPROXIMATION).
+    # Angular damping 0.5 and 2.0 were tried and did not help (run
+    # 43344435313).
     "hull": {"approximation": "convexHull"},
-    # PhysX has no rolling resistance: on convexDecomposition a bin can kept
-    # rolling at 0.053 m/s (run 43343374361). Angular damping stands in for it.
-    "damped_0_5": {"angular_damping": 0.5},
-    "damped_2": {"angular_damping": 2.0},
+    "decomposition": {"approximation": "convexDecomposition"},
 }
 VARIANT_SPACING_M = 3.0
 ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
@@ -164,8 +162,7 @@ def context(out: Path, result: dict) -> str:
                 f"m/s, excursion {_num(w2.get('max_excursion_m'), '.4f')} m "
                 f"(to {RECORD_S:.0f} s: {_num(we.get('max_speed_m_s'), '.4f')} m/s); "
                 f"applied {applied.get('approximation')} "
-                f"iters {applied.get('solver_position_iterations')} "
-                f"damping {applied.get('angular_damping')}"
+                f"iters {applied.get('solver_position_iterations')}"
             )
         if record.get("skipped"):
             parts.append(f"variant {variant} skipped: {record['skipped']}")
@@ -357,12 +354,10 @@ def _readback(stage, path: str) -> dict:
         geometry = stage.GetPrimAtPath(path + "/geometry")
         approximation = geometry.GetAttribute("physics:approximation")
         iterations = prim.GetAttribute("physxRigidBody:solverPositionIterationCount")
-        damping = prim.GetAttribute("physxRigidBody:angularDamping")
         return {
             "schemas": [str(s) for s in prim.GetAppliedSchemas()],
             "approximation": approximation.Get() if approximation else None,
             "solver_position_iterations": iterations.Get() if iterations else None,
-            "angular_damping": damping.Get() if damping else None,
         }
     except Exception as exc:  # diagnostic only
         return {"error": f"{type(exc).__name__}: {exc}"[:200]}

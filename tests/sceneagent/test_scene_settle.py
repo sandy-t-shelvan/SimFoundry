@@ -119,15 +119,14 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
         assert (tmp_path / "export" / name).is_file()
     settle = (tmp_path / "export" / "scene_settle.usda").read_text()
     assert "PhysicsScene" not in settle and 'def Cube "ground"' not in settle
-    assert 'physics:approximation = "convexDecomposition"' in settle  # the default
+    # No scene.json: the bin, a pile of overlapping bodies, keeps the hull.
+    assert 'physics:approximation = "convexHull"' in settle
     # The old default, settled beside it so a regression shows.
     hull = (tmp_path / "export" / "scene_settle_hull.usda").read_text()
     assert 'physics:approximation = "convexHull"' in hull
     assert "PhysxRigidBodyAPI" not in hull
-    damped = (tmp_path / "export" / "scene_settle_damped_2.usda").read_text()
-    assert '"PhysxRigidBodyAPI"' in damped
-    assert "float physxRigidBody:angularDamping = 2.0" in damped
-    assert 'physics:approximation = "convexDecomposition"' in damped
+    decomposed = (tmp_path / "export" / "scene_settle_decomposition.usda").read_text()
+    assert 'physics:approximation = "convexDecomposition"' in decomposed
     evidence = json.loads((tmp_path / "export_evidence.json").read_text())
     # Resting on the table, which is now z = 0, in metres (0.5 m per unit).
     assert abs(evidence["lowest_point_z_m"]["object_0"]) < 0.01
@@ -136,6 +135,26 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
     assert abs(box["bottom_z_m"]) < 0.01 and min(box["size_m"]) > 0
     assert evidence["overlapping_boxes"] == []
     assert evidence["settle_variants"] == list(settle_run.VARIANTS)
+    assert evidence["default_dynamic_approximation"] == "convexHull"
+    # A video scene is decomposed (Mailbox: 0.001 m/s against the hull's 0.078).
+    from sceneagent.bin_run import Scene, write_scene
+
+    write_scene(
+        tmp_path,
+        Scene(
+            source="video",
+            name="clip",
+            ledger_name="clip",
+            views=30,
+            input_item="video",
+            view_dir="mask_views",
+            min_masked_views=24,
+            ground_truth=False,
+        ),
+    )
+    assert physics_export.export_run(tmp_path) == 0
+    video = (tmp_path / "export" / "scene_settle.usda").read_text()
+    assert 'physics:approximation = "convexDecomposition"' in video
     # A gate reject never reaches physics, but is listed with what failed.
     assert evidence["excluded_gate_rejects"] == {"object_1": ["coverage"]}
     assert "object_1" not in evidence["object_boxes"]
@@ -419,6 +438,6 @@ def test_a_settle_reject_lists_each_variant_and_what_was_applied(tmp_path):
     line = settle_run.context(tmp_path, result)
     assert (
         "variant decomposition object_1: max 0.0040 m/s, excursion 0.0002 m "
-        "(to 4 s: 0.0010 m/s); applied convexDecomposition iters None damping None"
+        "(to 4 s: 0.0010 m/s); applied convexDecomposition iters None"
     ) in line
     assert "variant iters skipped: TypeError: no translation" in line
