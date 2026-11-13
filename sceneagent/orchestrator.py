@@ -24,8 +24,8 @@ from sceneagent.agent_loop import (
     append_step,
     default_plan,
 )
-from sceneagent.gemini_client import redact
-from sceneagent.harness import GEMINI_MODEL_ID, PlanHarness, request_plan
+from sceneagent.gemini_client import active_model_id, redact
+from sceneagent.harness import PlanHarness, request_plan
 
 # Our inference, not a list the paper prints. The edges are the predecessors
 # this tree already refuses to skip: PartSAM rejects a run with no SAM 3D
@@ -301,10 +301,10 @@ def run_harness_plan(
         "section": "3.1",
         "order_source": PLAN_SOURCE_HARNESS,
         "plan_source": PLAN_SOURCE_HARNESS,
-        "harness": GEMINI_MODEL_ID,
-        "model_id": getattr(impl, "model_id", GEMINI_MODEL_ID)
+        "harness": active_model_id(),
+        "model_id": getattr(impl, "model_id", active_model_id())
         if impl is not None
-        else GEMINI_MODEL_ID,
+        else active_model_id(),
         "forced": False,
         "steps": [
             {"id": step_id, "section": STEP_SECTION[step_id]} for step_id in steps
@@ -315,7 +315,7 @@ def run_harness_plan(
         out / "transcript.json",
         {
             "section": "3.1",
-            "harness": GEMINI_MODEL_ID,
+            "harness": active_model_id(),
             "model_id": plan_body["model_id"],
             "call_count": call_count,
             "reply": reply,
@@ -327,7 +327,7 @@ def run_harness_plan(
         out / "manifest.json",
         {
             "section": "3.1",
-            "harness": GEMINI_MODEL_ID,
+            "harness": active_model_id(),
             "model_id": plan_body["model_id"],
             "plan_source": PLAN_SOURCE_HARNESS,
             "call_count": call_count,

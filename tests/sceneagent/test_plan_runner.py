@@ -13,7 +13,7 @@ import pytest
 
 from sceneagent import plan_runner as pr
 from sceneagent.agent_loop import ALLOWED_STEPS, default_plan
-from sceneagent.harness import GEMINI_MODEL_ID
+from sceneagent.gemini_client import active_model_id
 from sceneagent.orchestrator import InvalidPlanError, later_conversion
 
 # A valid order that is not default_plan(): reconstruction before the vote.
@@ -27,13 +27,12 @@ def _reply(steps=ORDER, procedures=None):
 
 
 class FakeHarness:
-    name = GEMINI_MODEL_ID
-    model_id = GEMINI_MODEL_ID
-
     def __init__(self, text):
         self.text = text
         self.call_count = 0
         self.calls = []
+        self.name = active_model_id()
+        self.model_id = self.name
 
     def complete(self, prompt, images=(), response_schema=None):
         self.call_count += 1

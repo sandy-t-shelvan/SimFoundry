@@ -20,9 +20,8 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from sceneagent.gemini_client import GeminiClient
+from sceneagent.gemini_client import GeminiClient, active_model_id
 from sceneagent.material_vote import (
-    GEMINI_FLASH_MODEL_ID,
     GeminiFlashMaterialClient,
     MaterialVlmError,
     MissingGeminiKeyError,
@@ -425,7 +424,7 @@ def test_gemini_flash_client_sends_crops_to_gemini_3_8_flash(monkeypatch):
     monkeypatch.setattr(GeminiClient, "generate", _fake)
     client = GeminiFlashMaterialClient(FAKE_KEY)
     parsed = client.classify_crops([b"one", b"two"])
-    assert sent["model_id"] == GEMINI_FLASH_MODEL_ID == "gemini-3.8-flash"
+    assert sent["model_id"] == active_model_id()
     assert sent["images"] == (b"one", b"two")
     assert "Section 3.4" in sent["prompt"]
     assert FAKE_KEY not in sent["prompt"]

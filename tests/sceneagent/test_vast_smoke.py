@@ -821,7 +821,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         1,
     )
     assert (
-        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup pipeline choice"
+        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate pipeline choice"
         in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
@@ -2851,3 +2851,42 @@ def test_non_probe_runs_remove_a_stale_inventory_before_running():
         assert "rm -f /workspace/o/inventory.txt" in script
     probe = build_remote_shell("/workspace/r", "/workspace/o", pipeline="probe")
     assert "rm -f" not in probe
+
+
+def test_articulate_writes_the_proposal_before_sync(tmp_path, monkeypatch):
+    order = []
+
+    def prepare(checkout):
+        path = checkout / "sceneagent" / "articulate_proposal.json"
+        path.write_text("{}\n", encoding="utf-8")
+        order.append("prepare")
+        return path
+
+    monkeypatch.setattr("sceneagent.articulate_run.prepare_for_box", prepare)
+    pin = _host_pin(tmp_path)
+    remote = SshRemote(
+        _uk("running"),
+        "test-key",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("api")),
+        private_key=_FAKE_PRIVATE,
+        known_host_file=pin,
+        sleep=lambda _s: None,
+    )
+    checkout = _checkout(tmp_path)
+    local_run = tmp_path / "out"
+    local_run.mkdir()
+    remote.pipeline = "articulate"
+
+    def sync(path):
+        order.append(
+            "sync" if (path / "sceneagent" / "articulate_proposal.json").is_file() else "sync-missing"
+        )
+
+    remote._sync = sync
+    remote._bash = lambda *args, **kwargs: 0
+    remote._fetch = lambda *args, **kwargs: None
+    try:
+        remote.run(checkout, local_run)
+    finally:
+        remote.close()
+    assert order == ["prepare", "sync"]

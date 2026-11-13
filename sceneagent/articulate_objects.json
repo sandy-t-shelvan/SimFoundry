@@ -1,0 +1,21 @@
+{
+  "source_run": "43384974056",
+  "note": "object_1 is the accepted Mailbox mesh. The body and lid boxes split that export extent so the proposal has two part names. The joint itself is not in this file.",
+  "objects": [
+    {
+      "name": "object_1",
+      "parts": [
+        {
+          "name": "body",
+          "bbox_min": [0.0, 0.0, 0.0],
+          "bbox_max": [0.163, 0.189, 0.17]
+        },
+        {
+          "name": "lid",
+          "bbox_min": [0.0, 0.0, 0.17],
+          "bbox_max": [0.163, 0.189, 0.218]
+        }
+      ]
+    }
+  ]
+}

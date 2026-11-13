@@ -8,8 +8,8 @@ them uncalled. Grok CLI is on that list and is not selected: the vendor pages
 do not show it running headless in CI on the existing Cursor plan without a
 new paid credential. See ``docs/sf24-harness-finding.md``.
 
-The callable adapter is the Gemini fallback, model ``gemini-3.8-flash``. The
-key is read only from ``GEMINI_API_KEY`` (the GitHub secret of that name). A
+The callable adapter is the Gemini fallback from :func:`sceneagent.gemini_client.active_model_id`.
+The key is read only from ``GEMINI_API_KEY`` (the GitHub secret of that name). A
 missing key raises ``MissingGeminiApiKeyError`` before any HTTP call.
 """
 
@@ -19,15 +19,12 @@ import base64
 import json
 import logging
 import os
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
 from typing import Any, Protocol
 
 from sceneagent.agent_loop import harness_status
-from sceneagent.gemini_client import API_ROOT, redact
+from sceneagent.gemini_client import API_ROOT, active_model_id, redact
 
-GEMINI_MODEL_ID = "gemini-3.8-flash"
 API_KEY_ENV = "GEMINI_API_KEY"
 logger = logging.getLogger("sceneagent.harness")
 
@@ -100,37 +97,27 @@ def _candidate_text(raw: str) -> str:
 
 
 def _default_transport(url: str, key: str, payload: dict[str, Any]) -> tuple[int, str]:
-    """POST generateContent. The key travels in a header, not the URL."""
+    """POST generateContent through the shared request, which retries."""
 
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json", "x-goog-api-key": key},
-        method="POST",
-    )
+    from sceneagent.gemini_client import _request
+
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            body = response.read().decode("utf-8")
-            return int(response.status), redact(body, key)
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        return int(exc.code), redact(body, key)
+        status, body = _request(url, key, payload)
     except Exception as exc:
         raise HarnessCallError(
             redact(f"Gemini harness call failed: {exc}", key)
         ) from None
+    return int(status), redact("" if body is None else str(body), key)
 
 
 class GeminiHarness:
-    """Gemini ``gemini-3.8-flash`` adapter. Tests pass a fake ``transport``."""
-
-    name = GEMINI_MODEL_ID
-    model_id = GEMINI_MODEL_ID
+    """Gemini adapter. The id is :func:`active_model_id`. Tests pass a fake ``transport``."""
 
     def __init__(self, transport: Any = None) -> None:
         self._transport = transport or _default_transport
         self.call_count = 0
+        self.model_id = active_model_id()
+        self.name = self.model_id
 
     def __repr__(self) -> str:
         return (
@@ -151,7 +138,7 @@ class GeminiHarness:
         """
 
         key = load_gemini_api_key()
-        url = f"{API_ROOT}/models/{GEMINI_MODEL_ID}:generateContent"
+        url = f"{API_ROOT}/models/{self.model_id}:generateContent"
         parts: list[dict[str, Any]] = [{"text": prompt}]
         for blob, mime_type in images:
             parts.append(
@@ -187,7 +174,7 @@ class GeminiHarness:
                 raw = redact("" if raw is None else str(raw), key)
                 logger.info(
                     "harness call model=%s http=%s count=%s",
-                    GEMINI_MODEL_ID,
+                    self.model_id,
                     status,
                     self.call_count,
                 )

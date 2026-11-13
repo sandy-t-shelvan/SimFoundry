@@ -45,7 +45,8 @@ from sceneagent.agent_loop import (
     consider_repair,
     harness_status,
 )
-from sceneagent.harness import GEMINI_MODEL_ID, HarnessCallError
+from sceneagent.gemini_client import active_model_id
+from sceneagent.harness import HarnessCallError
 from sceneagent.orchestrator import (
     PLAN_SOURCE_HARNESS,
     STAGE_REQUIRES,
@@ -180,7 +181,7 @@ def make_plan(
     if calls < 1:
         raise RuntimeError("the harness was not called")
     steps, procedures = parse_plan_reply(reply)
-    model = getattr(harness, "model_id", GEMINI_MODEL_ID)
+    model = getattr(harness, "model_id", active_model_id())
     plan = {
         "mode": PLAN_MODE,
         "section": "3.1",

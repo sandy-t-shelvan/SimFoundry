@@ -15,7 +15,7 @@ from sceneagent.agent_loop import (
     parse_plan,
     run_agent_loop,
 )
-from sceneagent.gemini_client import PAPER_MODEL_ID
+from sceneagent.gemini_client import active_model_id
 from sceneagent.mjcf_contract import write_physics_mjcf
 from sceneagent.orchestrator import plan_source_name, stamp_plan_source
 from sceneagent.taxonomy import MATERIAL_CLASSES
@@ -98,7 +98,7 @@ def make_tools(client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=
         vote_path.write_text(
             json.dumps(
                 {
-                    "paper_model_id": result.get("paper_model_id") or PAPER_MODEL_ID,
+                    "paper_model_id": result.get("paper_model_id") or active_model_id(),
                     "model_id": result.get("model_id"),
                     "http_status": result.get("http_status"),
                     "paper_http_status": result.get("paper_http_status"),
@@ -123,7 +123,7 @@ def make_tools(client, paths, disk_free_gb, loader=load_mujoco_xml, start_sam3d=
             else (result.get("error_body") or "no published class in the reply"),
             "detail": {
                 "model_id": result.get("model_id"),
-                "paper_model_id": result.get("paper_model_id") or PAPER_MODEL_ID,
+                "paper_model_id": result.get("paper_model_id") or active_model_id(),
                 "http_status": result.get("http_status"),
                 "paper_http_status": result.get("paper_http_status"),
                 "material_class": material,
@@ -249,7 +249,7 @@ def plan_with_client(client):
         "model_id": result.get("model_id"),
         "http_status": result.get("http_status"),
         "used_paper_model": bool(result.get("used_paper_model")),
-        "paper_model_id": result.get("paper_model_id") or PAPER_MODEL_ID,
+        "paper_model_id": result.get("paper_model_id") or active_model_id(),
         "paper_http_status": result.get("paper_http_status"),
         "error_body": result.get("error_body") or result.get("paper_error_body") or "",
         "text": text,

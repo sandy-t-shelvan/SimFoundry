@@ -227,6 +227,7 @@ PIPELINES = {
     "probe": ((), "host inventory"),
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
     "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
+    "articulate": (("articulated motion",), "proposed joints"),
     **{
         name: (
             (
@@ -283,6 +284,8 @@ def remote_out(pipeline: str) -> str:
         return REMOTE_SETUP_OUT
     if pipeline == "isaaclab_render":
         return REMOTE_ISAACLAB_OUT
+    if pipeline == "articulate":
+        return "/workspace/sf4-smoke/articulate"
     if pipeline == "mailbox":
         return REMOTE_MAILBOX_OUT
     if pipeline in VIDEO_PIPELINES:
@@ -369,6 +372,9 @@ FETCH_NAMES = (
     "inspection_views.zip",
     "settle_summary.json",
     "prior_input_ledger.json",
+    "articulate_frames.zip",
+    "articulate_proposal.json",
+    "vlm_check.json",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -407,6 +413,9 @@ PUBLISHED_NAMES = frozenset(
         "inspection_views.zip",
         "settle_summary.json",
         "prior_input_ledger.json",
+        "articulate_frames.zip",
+        "articulate_proposal.json",
+        "vlm_check.json",
     }
 )
 PUBLIC_FIELDS = (
@@ -907,6 +916,18 @@ def build_remote_command(
             ISAACLAB_PYTHON,
             f"{repo}/sceneagent/isaaclab_headless_check.py",
             "--render",
+            out,
+        ]
+    if pipeline == "articulate":
+        return [
+            "env",
+            "-u",
+            "PYTHONPATH",
+            ISAACLAB_PYTHON,
+            f"{repo}/sceneagent/articulate_drive.py",
+            "--proposal",
+            f"{repo}/sceneagent/articulate_proposal.json",
+            "--out",
             out,
         ]
     if pipeline != "run4":
@@ -2367,6 +2388,48 @@ def install_known_host_pin(directory: Path, source: Path, host: str, port: int) 
     return str(path)
 
 
+def _advise_motion(checkout: Path, local_run: Path) -> None:
+    """Copy the proposal into the run dir and write an advisory frame check.
+
+    A missing key or a missing zip leaves the motion result unchanged.
+    """
+    import zipfile
+
+    from sceneagent.articulate_run import PROPOSAL_NAME
+
+    source = Path(checkout) / "sceneagent" / PROPOSAL_NAME
+    if source.is_file():
+        (local_run / PROPOSAL_NAME).write_bytes(source.read_bytes())
+    archive_path = local_run / "articulate_frames.zip"
+    if not archive_path.is_file():
+        return
+    frames: list[bytes] = []
+    with zipfile.ZipFile(archive_path) as archive:
+        for name in sorted(archive.namelist())[:4]:
+            frames.append(archive.read(name))
+    if len(frames) < 2:
+        return
+    try:
+        from sceneagent.gemini_client import client_from_environ
+        from sceneagent.vlm_check import advise
+
+        report = advise(
+            frames,
+            "Is the expected joint motion visible in these frames?",
+            client_from_environ(),
+        )
+    except Exception as exc:
+        report = {
+            "label": "vlm_check",
+            "advisory": True,
+            "verdict": "unparsed",
+            "reason": type(exc).__name__,
+        }
+    (local_run / "vlm_check.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 class SshRemote:
     """Copy the checkout, run the smoke, and fetch the small JSON files."""
 
@@ -2411,7 +2474,6 @@ class SshRemote:
         self.tmp.cleanup()
 
     def run(self, checkout: Path, local_run: Path) -> int:
-        self._sync(checkout)
         # Attributes, not new run() arguments: tests inject remotes whose
         # run() takes only the checkout and the local directory.
         pipeline = getattr(self, "pipeline", "sceneagent")
@@ -2420,6 +2482,13 @@ class SshRemote:
             pipeline = "sceneagent"
         if not isinstance(commit_sha, str):
             commit_sha = ""
+        # The proposal is part of the tree the box runs. Write it before
+        # the copy, or the box only sees the checkout from before the call.
+        if pipeline == "articulate":
+            from sceneagent.articulate_run import prepare_for_box
+
+            prepare_for_box(checkout)
+        self._sync(checkout)
         if pipeline == "setup":
             self.hf_token_sent = self._send_hf_token(os.environ.get(HF_TOKEN_ENV, ""))
         code = self._bash(
@@ -2432,6 +2501,8 @@ class SshRemote:
             timeout_s=REMOTE_TIMEOUT_S,
         )
         self._fetch(local_run, pipeline)
+        if pipeline == "articulate":
+            _advise_motion(checkout, local_run)
         return code
 
     def _probe_ssh(self) -> tuple[int, str]:

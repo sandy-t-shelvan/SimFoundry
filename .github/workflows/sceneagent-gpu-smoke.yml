@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup, articulate]
         default: run4
   pull_request_target:
     types: [labeled]
@@ -162,6 +162,7 @@ jobs:
           VAST_SSH_PRIVATE_KEY: ${{ secrets.VAST_SSH_PRIVATE_KEY }}
           # Only a manual setup run gets the Hugging Face token (SAM 3D's gated weights).
           HF_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.pipeline == 'setup' && secrets.HF_TOKEN || '' }}
+          GEMINI_API_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.pipeline == 'articulate' && secrets.GEMINI_API_KEY || '' }}
           SMOKE_TRIGGER: ${{ github.event_name == 'workflow_dispatch' && 'dispatch' || github.event_name == 'pull_request_target' && 'label' || github.event_name == 'push' && 'request-file' || 'invalid' }}
           # Only a manual run chooses; labels and request files stay run4.
           SMOKE_PIPELINE: ${{ github.event_name == 'workflow_dispatch' && inputs.pipeline || 'run4' }}
@@ -219,6 +220,9 @@ jobs:
             sf4-artifacts/inspection_views.zip
             sf4-artifacts/settle_summary.json
             sf4-artifacts/prior_input_ledger.json
+            sf4-artifacts/articulate_frames.zip
+            sf4-artifacts/articulate_proposal.json
+            sf4-artifacts/vlm_check.json
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.
