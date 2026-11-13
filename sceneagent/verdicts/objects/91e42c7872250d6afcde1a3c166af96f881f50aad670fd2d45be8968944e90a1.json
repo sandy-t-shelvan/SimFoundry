@@ -1,0 +1,24 @@
+{
+  "video_sha256": "91e42c7872250d6afcde1a3c166af96f881f50aad670fd2d45be8968944e90a1",
+  "video_name": "video",
+  "frame_times_s": [
+    3.314,
+    9.943,
+    16.572
+  ],
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "37172c32482205beb89d274e018fe70e262e3b1be2b2fcb66240e10575299ece",
+  "source": "ours: prompt and schema in sceneagent/scene_objects.py",
+  "ok": true,
+  "objects": [
+    {
+      "name": "block",
+      "movable_by_hand": true
+    },
+    {
+      "name": "mailbox",
+      "movable_by_hand": true
+    }
+  ],
+  "prompt": "block . mailbox ."
+}

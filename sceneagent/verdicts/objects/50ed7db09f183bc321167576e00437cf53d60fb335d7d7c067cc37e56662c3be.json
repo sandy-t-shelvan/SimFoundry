@@ -1,0 +1,20 @@
+{
+  "video_sha256": "50ed7db09f183bc321167576e00437cf53d60fb335d7d7c067cc37e56662c3be",
+  "video_name": "video",
+  "frame_times_s": [
+    3.852,
+    11.557,
+    19.261
+  ],
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "37172c32482205beb89d274e018fe70e262e3b1be2b2fcb66240e10575299ece",
+  "source": "ours: prompt and schema in sceneagent/scene_objects.py",
+  "ok": true,
+  "objects": [
+    {
+      "name": "book",
+      "movable_by_hand": true
+    }
+  ],
+  "prompt": "book ."
+}

@@ -1,0 +1,24 @@
+{
+  "video_sha256": "30d0f636a458183aae5ca36a36343c99ed6254d4ebabf3df020376b070ff163f",
+  "video_name": "video",
+  "frame_times_s": [
+    3.966,
+    11.898,
+    19.831
+  ],
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "37172c32482205beb89d274e018fe70e262e3b1be2b2fcb66240e10575299ece",
+  "source": "ours: prompt and schema in sceneagent/scene_objects.py",
+  "ok": true,
+  "objects": [
+    {
+      "name": "left shoe",
+      "movable_by_hand": true
+    },
+    {
+      "name": "right shoe",
+      "movable_by_hand": true
+    }
+  ],
+  "prompt": "left shoe . right shoe ."
+}

@@ -1,0 +1,24 @@
+{
+  "video_sha256": "4510a4e3afc1dc6a8203c10168f2394e1b4685e3c6be0f43adb811e7937eacab",
+  "video_name": "video",
+  "frame_times_s": [
+    1.694,
+    5.082,
+    8.469
+  ],
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "37172c32482205beb89d274e018fe70e262e3b1be2b2fcb66240e10575299ece",
+  "source": "ours: prompt and schema in sceneagent/scene_objects.py",
+  "ok": true,
+  "objects": [
+    {
+      "name": "laptop",
+      "movable_by_hand": true
+    },
+    {
+      "name": "mouse pad",
+      "movable_by_hand": true
+    }
+  ],
+  "prompt": "laptop . mouse pad ."
+}

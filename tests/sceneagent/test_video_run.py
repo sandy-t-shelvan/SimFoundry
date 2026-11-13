@@ -323,13 +323,22 @@ def test_the_package_command_runs_a_known_video_through_video_run(tmp_path, monk
     monkeypatch.setattr("sceneagent.video_run.main", fake_main)
     from sceneagent.__main__ import main
 
-    video = tmp_path / "Mailbox.mp4"
-    video.write_bytes(b"not a video")
+    # KAN-56: a known video is known by its bytes, not its name.
+    import shutil
+
+    video = tmp_path / "renamed_copy.mp4"
+    shutil.copyfile(ROOT / "docs/assets/example_videos/Mailbox.mp4", video)
     assert main([str(video), "--out", str(tmp_path / "out")]) == 0
     assert seen["argv"] == [str(video), "--out", str(tmp_path / "out")]
     with pytest.raises(SystemExit) as caught:
         main([str(video), "--out", str(tmp_path / "capped"), "--fps", "0"])
     assert caught.value.code == 2
+    seen.clear()
+    impostor = tmp_path / "Mailbox.mp4"
+    impostor.write_bytes(b"not a video")
+    with pytest.raises(ValueError, match="not an mp4"):
+        main([str(impostor), "--out", str(tmp_path / "other")])
+    assert seen == {}
 
 
 def test_an_explicit_prompt_is_forwarded_to_the_video_pipeline(tmp_path, monkeypatch):
