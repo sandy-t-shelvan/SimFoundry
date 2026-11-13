@@ -242,7 +242,8 @@ def _object_block(
     """The object's Xform and, when needed, its physics material.
 
     ``variant`` (settle diagnostics only, ``settle_run.VARIANTS``) swaps a
-    rigid body's collider approximation or raises its PhysX solver iterations.
+    rigid body's collider approximation, raises its PhysX solver iterations
+    or sets its PhysX angular damping.
     """
     variant = variant or {}
     name = token(obj.name)
@@ -253,9 +254,10 @@ def _object_block(
     rigid = physx and resolved["body_type"] in ("dynamic rigid", "kinematic")
     schemas = []
     iterations = rigid and "solver_position_iterations" in variant
+    damping = rigid and "angular_damping" in variant
     if rigid:
         schemas += ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
-    if iterations:
+    if iterations or damping:
         schemas.append("PhysxRigidBodyAPI")
     elif physx and (
         values["mass_kg"] is not None or values["density_kg_m3"] is not None
@@ -284,6 +286,11 @@ def _object_block(
         lines.append(
             "        int physxRigidBody:solverVelocityIterationCount = "
             f"{int(variant.get('solver_velocity_iterations', 1))}"
+        )
+    if damping:
+        lines.append(
+            "        float physxRigidBody:angularDamping = "
+            f"{float(variant['angular_damping'])!r}"
         )
     if physx and values["mass_kg"] is not None:
         lines.append(f"        float physics:mass = {values['mass_kg']!r}")

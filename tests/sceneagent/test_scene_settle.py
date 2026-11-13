@@ -123,6 +123,11 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
     # The old default, settled beside it so a regression shows.
     hull = (tmp_path / "export" / "scene_settle_hull.usda").read_text()
     assert 'physics:approximation = "convexHull"' in hull
+    assert "PhysxRigidBodyAPI" not in hull
+    damped = (tmp_path / "export" / "scene_settle_damped_2.usda").read_text()
+    assert '"PhysxRigidBodyAPI"' in damped
+    assert "float physxRigidBody:angularDamping = 2.0" in damped
+    assert 'physics:approximation = "convexDecomposition"' in damped
     evidence = json.loads((tmp_path / "export_evidence.json").read_text())
     # Resting on the table, which is now z = 0, in metres (0.5 m per unit).
     assert abs(evidence["lowest_point_z_m"]["object_0"]) < 0.01
@@ -414,6 +419,6 @@ def test_a_settle_reject_lists_each_variant_and_what_was_applied(tmp_path):
     line = settle_run.context(tmp_path, result)
     assert (
         "variant decomposition object_1: max 0.0040 m/s, excursion 0.0002 m "
-        "(to 4 s: 0.0010 m/s); applied convexDecomposition iters None"
+        "(to 4 s: 0.0010 m/s); applied convexDecomposition iters None damping None"
     ) in line
     assert "variant iters skipped: TypeError: no translation" in line
