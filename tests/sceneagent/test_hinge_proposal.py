@@ -181,6 +181,12 @@ def test_a_null_pivot_without_a_shared_face_is_unresolved():
     assert len(stub.images) == 2
 
 
+def test_the_png_encoder_loads_by_file_path():
+    from sceneagent.articulate_drive import _load_png_bytes
+
+    assert callable(_load_png_bytes())
+
+
 def test_a_failed_call_is_unresolved_and_does_not_raise():
     class Down:
         def generate_images(self, prompt, images=(), search=False):

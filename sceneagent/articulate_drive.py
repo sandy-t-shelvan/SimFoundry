@@ -99,13 +99,30 @@ def _render(joint: dict, out: Path) -> list[Path]:
     return []
 
 
+def _load_png_bytes():
+    """Load the encoder by file path.
+
+    The box runs this script with ``PYTHONPATH`` unset so the repo cannot
+    shadow Isaac Lab. ``sceneagent`` is then not a package.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "isaaclab_headless_check.py"
+    spec = importlib.util.spec_from_file_location("_sf_png_bytes", path)
+    if spec is None or spec.loader is None:
+        raise ImportError("png encoder is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.png_bytes
+
+
 def _sweep(joint: dict, out: Path) -> list[Path]:
     import isaaclab.sim as sim_utils
     import torch
     from isaaclab.sensors.camera import Camera, CameraCfg
     from isaaclab_physx.renderers import IsaacRtxRendererCfg
 
-    from sceneagent.isaaclab_headless_check import png_bytes
+    png_bytes = _load_png_bytes()
 
     sim = sim_utils.SimulationContext.instance()
     ground = sim_utils.GroundPlaneCfg()
