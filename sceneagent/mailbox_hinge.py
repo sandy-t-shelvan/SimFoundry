@@ -244,6 +244,76 @@ def hinge_usda(object_name: str, joint: Mapping[str, Any]) -> str:
     )
 
 
+def proposal_documents(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    """USD text and scene-state joints for every movable proposal.
+
+    Revolute limits in the USDA are degrees. The scene state stays in radians,
+    with ``joint_vel`` zero and ``joint_limits`` keyed by joint name. Fixed
+    joints are omitted. An object with no movable joint stays rigid.
+    """
+    blocks = []
+    scenes = []
+    for obj in proposal.get("objects") or []:
+        name = str(obj.get("object") or obj.get("name"))
+        movable = [
+            joint
+            for joint in obj.get("joints") or []
+            if joint.get("type") in ("revolute", "prismatic")
+        ]
+        if not movable:
+            continue
+        for joint in movable:
+            blocks.append(_joint_usda(name, joint))
+        scenes.append(_scene_for_joints(name, movable))
+    return {"usda": "\n".join(blocks), "scenes": scenes}
+
+
+def _joint_usda(object_name: str, joint: Mapping[str, Any]) -> str:
+    kind = str(joint["type"])
+    if kind == "revolute":
+        return hinge_usda(object_name, joint)
+    parent, child = str(joint["parent"]), str(joint["child"])
+    token = ("X", "Y", "Z")[_axis_index(joint)]
+    return "\n".join(
+        [
+            "#usda 1.0",
+            f'def Xform "{object_name}"',
+            "{",
+            f'    def Xform "{parent}" {{ }}',
+            f'    def Xform "{child}" {{ }}',
+            f'    def PhysicsPrismaticJoint "{joint["name"]}"',
+            "    {",
+            f'        uniform token physics:axis = "{token}"',
+            f"        float physics:lowerLimit = {float(joint['lower']):g}",
+            f"        float physics:upperLimit = {float(joint['upper']):g}",
+            f"        rel physics:body0 = </{object_name}/{parent}>",
+            f"        rel physics:body1 = </{object_name}/{child}>",
+            "    }",
+            "}",
+            "",
+        ]
+    )
+
+
+def _scene_for_joints(
+    object_name: str, joints: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    limits = {
+        str(joint["name"]): {
+            "lower": float(joint["lower"]),
+            "upper": float(joint["upper"]),
+        }
+        for joint in joints
+    }
+    count = len(joints)
+    return {
+        "object": object_name,
+        "joint_pos": [0.0] * count,
+        "joint_vel": [0.0] * count,
+        "joint_limits": limits,
+    }
+
+
 def sweep_targets(
     lower: float, upper: float, seconds: float = SWEEP_SECONDS, hz: int = SWEEP_HZ
 ) -> list[dict[str, float]]:
