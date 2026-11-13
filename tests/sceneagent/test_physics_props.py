@@ -242,3 +242,47 @@ def test_the_cli_writes_the_summary(tmp_path, capsys):
     assert pp.main(["--objects", str(objects), "--out", str(tmp_path / "out")]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert summary["objects"] == 1 and summary["prior"] is None
+
+
+def test_object_names_are_each_objects_most_frequent_phrase():
+    association = {
+        "object_list": [
+            {
+                "object": 1,
+                "masks": [{"phrase": "mailbox"}] * 12 + [{"phrase": "cube"}] * 7,
+            },
+            {"object": 2, "masks": []},
+        ]
+    }
+    assert pp.object_names(association) == {1: "mailbox", 2: "object"}
+
+
+def test_run_physics_writes_a_record_per_placed_object_without_a_prior(tmp_path):
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "object_list": [
+                    {"object": 1, "masks": [{"phrase": "mailbox"}]},
+                    {"object": 2, "masks": [{"phrase": "cup"}]},
+                ]
+            }
+        )
+    )
+    placed = [{"object": 1, "placed": True}, {"object": 2, "placed": False}]
+    (tmp_path / "bin_score.json").write_text(json.dumps({"icp": {"objects": placed}}))
+    assert pp.run_physics(tmp_path) == 0
+    record = json.loads((tmp_path / "physics" / "object_1.json").read_text())
+    assert record["object"] == "mailbox" and record["section"] == "3.4"
+    # No prior: the numbers stay null and say why, for the export's defaults.
+    assert record["mass_kg"] is None and record["sources"]["mass_kg"] == "no prior"
+    assert not (tmp_path / "physics" / "object_2.json").exists()
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["item"] == pp.PROPERTIES_ITEM
+    assert entry["decision"] == "accept" and entry["prior"] is False
+    assert set(entry["materials"]) == {"object_1"}
+
+
+def test_run_physics_without_a_placement_rejects(tmp_path):
+    assert pp.run_physics(tmp_path) == 1
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["decision"] == "reject"

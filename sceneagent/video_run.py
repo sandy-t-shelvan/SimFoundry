@@ -32,11 +32,20 @@ from sceneagent.alignment import PLACEMENT_GATE_LABEL
 from sceneagent.bin_association import SAME_PHRASE, VIDEO_KAPPA_SHARE
 from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
+from sceneagent.settle_run import VARIANTS
 
 # Ours: GroundingDINO phrases for the objects Mailbox.mp4 shows (a red
 # mailbox with a lid, a cyan cube). The orchestrator plan (PR #63) that
 # would write this per video is after the MVP.
-PROMPTS = {"Mailbox": "mailbox . cube ."}
+PROMPTS = {
+    "Mailbox": "mailbox . cube .",
+    # Development video: an orange bowl, a white paper cup and a marker on a
+    # desk (a frame at 2 s).
+    "PutCupInBowl": "bowl . cup . marker .",
+    # The MVP acceptance video, from its title only: nothing in it was looked
+    # at or tuned on.
+    "PutMarkerInCup": "marker . cup .",
+}
 # No new stage starts after this many seconds, so a long stage (the splat's
 # train step may take up to an hour) still ends inside the job's 6,600 s.
 START_BUDGET_S = 2400.0
@@ -51,6 +60,8 @@ STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("association", ("Gaussian association",)),
     ("sam3d", ("SAM 3D meshes",)),
     ("place", ("ICP residuals",)),
+    # §3.4 record per placed object (KAN-40; option B for the MVP: no prior).
+    ("physics", ("§3.4 properties",)),
     # KAN-41: the placed scene as USD (gravity aligned on the support plane),
     # then 2 s in Isaac Lab.
     ("export", ("USD physics export",)),
@@ -86,12 +97,13 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         evidence = _evidence(out, "masks_evidence.json")
         return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
     if name == "association":
-        # Association made before differing phrases stopped merging.
+        # Association made before the current video rules runs again:
         evidence = _evidence(out, "association_evidence.json")
         grouping = evidence.get("rule", {}).get("grouping", {})
-        # ... and before a video's consensus needed half of an object's views.
+        # ... before a video's consensus needed half of an object's views,
+        # and while phrases still split groups (run 43331599718).
         share = evidence.get("rule", {}).get("video_kappa_share")
-        return grouping.get(SAME_PHRASE) is True and share == VIDEO_KAPPA_SHARE
+        return grouping.get(SAME_PHRASE) is False and share == VIDEO_KAPPA_SHARE
     if name == "place":
         # Placements judged by an earlier gate are judged again.
         icp = _evidence(out, "bin_score.json").get("icp", {})
@@ -99,7 +111,11 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     if name == "export":
         # An export made before it recorded each object's box runs again, so
         # a settle reject can say what the bodies were doing.
-        return "object_boxes" in _evidence(out, "export_evidence.json")
+        # ... and before it wrote the settle's diagnostic copies.
+        evidence = _evidence(out, "export_evidence.json")
+        return "object_boxes" in evidence and evidence.get("settle_variants") == list(
+            VARIANTS
+        )
     return True
 
 
@@ -118,6 +134,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
     from sceneagent.bin_sam3d import run_bin_sam3d
     from sceneagent.bin_splat import run_bin_splat
     from sceneagent.physics_export import export_run
+    from sceneagent.physics_props import run_physics
     from sceneagent.settle_run import run_settle
 
     return {
@@ -127,6 +144,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
         "association": lambda: run_bin_association(out),
         "sam3d": lambda: run_bin_sam3d(out),
         "place": lambda: run_bin_place(out),
+        "physics": lambda: run_physics(out),
         "export": lambda: export_run(out),
         "settle": lambda: run_settle(out),
     }

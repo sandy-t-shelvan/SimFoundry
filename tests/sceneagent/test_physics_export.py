@@ -41,7 +41,11 @@ def _cube(name, z=0.05, **props):
 def test_missing_values_are_left_to_physx_and_named():
     resolved = pe.resolve_physics({})
     assert resolved["body_type"] == "dynamic rigid"
-    assert resolved["approximation"] == "convexHull"
+    # No collider in the record: a dynamic body is decomposed (run 43342519758).
+    assert resolved["approximation"] == "convexDecomposition"
+    # A record that names one keeps it.
+    named = pe.resolve_physics({"collision_primitive": "convex hull"})
+    assert named["approximation"] == "convexHull"
     assert set(resolved["defaults"]) == {
         "body_type",
         "collision_primitive",
@@ -144,8 +148,10 @@ def test_the_stage_carries_physx_attributes_and_metadata(tmp_path):
     assert UsdPhysics.MassAPI(mug).GetMassAttr().Get() == pytest.approx(0.3)
     geom = stage.GetPrimAtPath("/World/mug/geometry")
     assert geom.HasAPI(UsdPhysics.CollisionAPI)
+    # No collider in the mug's record: decomposed (run 43342519758).
     assert (
-        UsdPhysics.MeshCollisionAPI(geom).GetApproximationAttr().Get() == "convexHull"
+        UsdPhysics.MeshCollisionAPI(geom).GetApproximationAttr().Get()
+        == "convexDecomposition"
     )
     material, _ = UsdShade.MaterialBindingAPI(geom).ComputeBoundMaterial("physics")
     phys = UsdPhysics.MaterialAPI(material.GetPrim())

@@ -136,7 +136,7 @@ def test_masks_made_before_joined_phrases_were_dropped_run_again(tmp_path):
     assert video_run.stage_done(out, "masks", ("SAM masks",))
 
 
-def test_association_before_same_phrase_grouping_runs_again(tmp_path):
+def test_association_made_under_earlier_video_rules_runs_again(tmp_path):
     out = tmp_path / "mailbox"
     out.mkdir()
     write_scene(out, VIDEO)
@@ -144,10 +144,11 @@ def test_association_before_same_phrase_grouping_runs_again(tmp_path):
     items = ("Gaussian association",)
     (out / "association_evidence.json").write_text(json.dumps({"rule": {}}))
     assert not video_run.stage_done(out, "association", items)
-    rule = {"rule": {"grouping": {"same_phrase": True}}}
+    # Run 43331599718's association split groups by phrase: it runs again.
+    rule = {"rule": {"grouping": {"same_phrase": True}, "video_kappa_share": 0.5}}
     (out / "association_evidence.json").write_text(json.dumps(rule))
     assert not video_run.stage_done(out, "association", items)
-    rule["rule"]["video_kappa_share"] = 0.5
+    rule["rule"]["grouping"]["same_phrase"] = False
     (out / "association_evidence.json").write_text(json.dumps(rule))
     assert video_run.stage_done(out, "association", items)
 
@@ -174,6 +175,9 @@ def test_an_export_without_object_boxes_runs_again(tmp_path):
     assert not video_run.stage_done(out, "export", ("USD physics export",))
     boxes = {"objects": [], "object_boxes": {}}
     (out / "export_evidence.json").write_text(json.dumps(boxes))
+    assert not video_run.stage_done(out, "export", ("USD physics export",))
+    boxes["settle_variants"] = list(video_run.VARIANTS)
+    (out / "export_evidence.json").write_text(json.dumps(boxes))
     assert video_run.stage_done(out, "export", ("USD physics export",))
 
 
@@ -196,7 +200,15 @@ def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
 
     funcs = {name: stage(name, items) for name, items in video_run.STAGES}
     assert video_run.run_video(tmp_path / "Mailbox.mp4", out, "x .", stages=funcs) == 0
-    assert calls == ["masks", "association", "sam3d", "place", "export", "settle"]
+    assert calls == [
+        "masks",
+        "association",
+        "sam3d",
+        "place",
+        "physics",
+        "export",
+        "settle",
+    ]
     record = json.loads((out / video_run.RECORD).read_text())
     assert record["complete"] and set(record["stages"]) == set(calls)
 
@@ -263,8 +275,9 @@ def test_the_mailbox_pipeline_has_its_own_dir_and_ships_the_video():
         "--out",
         REMOTE_MAILBOX_OUT,
     ]
-    assert PIPELINES["mailbox"][0][-3:] == (
+    assert PIPELINES["mailbox"][0][-4:] == (
         bin_place.ICP_ITEM,
+        "§3.4 properties",
         "USD physics export",
         "Isaac Lab settle",
     )
@@ -277,3 +290,16 @@ def test_the_bin_scene_is_unchanged_by_a_video_copy():
     # replace() on the frozen record must not leak into the bin default.
     replace(BIN_SCENE, name="other")
     assert BIN_SCENE.name == "000091"
+
+
+def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
+    from sceneagent.vast_smoke import VIDEO_PIPELINES
+
+    for name, relative in VIDEO_PIPELINES.items():
+        out = remote_out(name)
+        assert out.endswith("/" + name)
+        argv = build_remote_command("/w/repo", out, pipeline=name)
+        assert argv[-3:] == [f"/w/repo/{relative}", "--out", out]
+        assert Path(relative).stem in video_run.PROMPTS
+        assert PIPELINES[name][0][-1] == "Isaac Lab settle"
+    assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)

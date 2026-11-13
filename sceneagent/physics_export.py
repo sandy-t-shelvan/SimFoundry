@@ -23,7 +23,10 @@ Rules that are ours, not the paper's, are named here so a reader can find them:
   PhysX cannot simulate a triangle mesh on a dynamic body, so a dynamic
   ``triangle mesh`` becomes ``convexDecomposition``, and the substitution is
   recorded. A ``cylinder`` or ``capsule`` becomes ``convexHull`` (no mesh
-  approximation fits them exactly).
+  approximation fits them exactly). A dynamic body whose record names no
+  collider gets ``convexDecomposition`` (``DEFAULT_DYNAMIC_APPROXIMATION``),
+  except in the GraspClutter6D bin, which keeps ``convexHull``
+  (``BIN_DYNAMIC_APPROXIMATION``).
 - **Units.** The stage is in metres and kilograms (``metersPerUnit = 1``,
   ``kilogramsPerUnit = 1``, Z up), so mass is kg and density kg/m^3. The
   caller gives ``metres_per_unit`` for the reconstruction frame and an
@@ -51,6 +54,21 @@ RIGID_BODY_TYPES = ("dynamic rigid", "static rigid", "kinematic")
 PHYSGAUSSIAN_BODY_TYPES = ("soft deformable", "cloth shell", "fluid or granular")
 DEFAULT_BODY_TYPE = "dynamic rigid"
 DEFAULT_COLLISION = "convex hull"
+# Ours: a dynamic body with no collider in its record is decomposed, not
+# hulled. A SAM 3D mesh's uneven bottom gives its convex hull a sloped base:
+# the Mailbox body landed tilted 8.8 degrees and rocked at 0.056 m/s, where
+# the same body with convexDecomposition was at 0.0015 m/s (run
+# 43342519758, side by side; 32 solver iterations did not help). A record
+# that names a collider keeps it.
+DEFAULT_DYNAMIC_APPROXIMATION = "convexDecomposition"
+# Ours: the GraspClutter6D bin keeps the convex hull. Its placements are a
+# pile of overlapping bodies, and decomposed pieces lock into one another:
+# with convexDecomposition three bin bodies flipped or jostled at up to
+# 0.10 m/s, and angular damping 0.5 or 2.0 did not help (runs 43343374361,
+# 43344435313), where the hull held all nine under 0.008 m/s. The single
+# Mailbox body did the reverse: hull 0.078 m/s, decomposition 0.001 m/s
+# (runs 43342519758, 43344447144). Revisit when a video holds a pile.
+BIN_DYNAMIC_APPROXIMATION = "convexHull"
 # collision primitive -> UsdPhysics.MeshCollisionAPI physics:approximation
 APPROXIMATION = {
     "box": "boundingCube",
@@ -108,7 +126,10 @@ def _number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def resolve_physics(properties: Mapping[str, Any]) -> dict[str, Any]:
+def resolve_physics(
+    properties: Mapping[str, Any],
+    default_dynamic_approximation: str = DEFAULT_DYNAMIC_APPROXIMATION,
+) -> dict[str, Any]:
     """What the stage authors for one record, and which values are defaults.
 
     Returns the body type, the simulation route (``physx`` or
@@ -134,6 +155,8 @@ def resolve_physics(properties: Mapping[str, Any]) -> dict[str, Any]:
         if collision not in APPROXIMATION:
             raise ValueError(f"collider {collision!r} cannot be a PhysX rigid collider")
         approximation = APPROXIMATION[collision]
+        if "collision_primitive" in defaults and body == "dynamic rigid":
+            approximation = default_dynamic_approximation
         if approximation == "none" and body == "dynamic rigid":
             approximation = "convexDecomposition"
             notes.append(
@@ -224,9 +247,17 @@ def _mesh_lines(points: np.ndarray, faces: np.ndarray, indent: str) -> list[str]
 
 
 def _object_block(
-    obj: PlacedObject, points: np.ndarray, resolved: dict[str, Any]
+    obj: PlacedObject,
+    points: np.ndarray,
+    resolved: dict[str, Any],
+    variant: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """The object's Xform and, when needed, its physics material."""
+    """The object's Xform and, when needed, its physics material.
+
+    ``variant`` (settle diagnostics only, ``settle_run.VARIANTS``) swaps a
+    rigid body's collider approximation or raises its PhysX solver iterations.
+    """
+    variant = variant or {}
     name = token(obj.name)
     centre = points.mean(axis=0)
     local = points - centre
@@ -234,8 +265,11 @@ def _object_block(
     physx = resolved["route"] == "physx"
     rigid = physx and resolved["body_type"] in ("dynamic rigid", "kinematic")
     schemas = []
+    iterations = rigid and "solver_position_iterations" in variant
     if rigid:
         schemas += ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    if iterations:
+        schemas.append("PhysxRigidBodyAPI")
     elif physx and (
         values["mass_kg"] is not None or values["density_kg_m3"] is not None
     ):
@@ -255,6 +289,15 @@ def _object_block(
         lines.append("        bool physics:rigidBodyEnabled = true")
         if resolved["body_type"] == "kinematic":
             lines.append("        bool physics:kinematicEnabled = true")
+    if iterations:
+        lines.append(
+            "        int physxRigidBody:solverPositionIterationCount = "
+            f"{int(variant['solver_position_iterations'])}"
+        )
+        lines.append(
+            "        int physxRigidBody:solverVelocityIterationCount = "
+            f"{int(variant.get('solver_velocity_iterations', 1))}"
+        )
     if physx and values["mass_kg"] is not None:
         lines.append(f"        float physics:mass = {values['mass_kg']!r}")
     if physx and values["density_kg_m3"] is not None:
@@ -281,8 +324,13 @@ def _object_block(
     lines += _mesh_lines(local, obj.faces, "            ")
     if physx:
         lines.append("            bool physics:collisionEnabled = true")
+        approximation = (
+            variant.get("approximation", resolved["approximation"])
+            if rigid
+            else resolved["approximation"]
+        )
         lines.append(
-            f'            uniform token physics:approximation = "{resolved["approximation"]}"'
+            f'            uniform token physics:approximation = "{approximation}"'
         )
         if has_material:
             lines.append(
@@ -318,6 +366,8 @@ def write_physics_stage(
     world_from_scene: np.ndarray | None = None,
     ground_z_m: float | None = 0.0,
     physics_scene: bool = True,
+    variant: Mapping[str, Any] | None = None,
+    default_dynamic_approximation: str = DEFAULT_DYNAMIC_APPROXIMATION,
 ) -> dict[str, Any]:
     """Write the placed bin as a USD physics stage; return what was written.
 
@@ -336,9 +386,9 @@ def write_physics_stage(
         if name in seen:
             raise ValueError(f"two objects map to the prim name {name!r}")
         seen.add(name)
-        resolved = resolve_physics(obj.properties)
+        resolved = resolve_physics(obj.properties, default_dynamic_approximation)
         points = stage_points(obj, metres_per_unit, world_from_scene)
-        block, material = _object_block(obj, points, resolved)
+        block, material = _object_block(obj, points, resolved, variant)
         body += block
         looks += material
         summary["objects"].append(
@@ -665,7 +715,7 @@ def export_run(out: Path | str) -> int:
     import json
 
     from sceneagent.bin_association import read_ply_xyz
-    from sceneagent.bin_run import load_scene
+    from sceneagent.bin_run import BIN_SCENE, load_scene
 
     out = Path(out)
     scene = load_scene(out)
@@ -743,11 +793,17 @@ def export_run(out: Path | str) -> int:
             )
         support = support_frame(positions[~in_objects], clouds, SUPPORT_BAND_M / metres)
         frame = support["world_from_scene"]
+        collider = (
+            BIN_DYNAMIC_APPROXIMATION
+            if scene == BIN_SCENE
+            else DEFAULT_DYNAMIC_APPROXIMATION
+        )
         stage = write_physics_stage(
             placed,
             out / "export" / "scene.usda",
             metres_per_unit=metres,
             world_from_scene=frame,
+            default_dynamic_approximation=collider,
         )
         write_physics_stage(
             placed,
@@ -756,7 +812,20 @@ def export_run(out: Path | str) -> int:
             world_from_scene=frame,
             ground_z_m=None,
             physics_scene=False,
+            default_dynamic_approximation=collider,
         )
+        # Diagnostic copies the settle runs beside the scene, never judged.
+        for variant_name, variant in settle_run.VARIANTS.items():
+            write_physics_stage(
+                placed,
+                out / "export" / f"scene_settle_{variant_name}.usda",
+                metres_per_unit=metres,
+                world_from_scene=frame,
+                ground_z_m=None,
+                physics_scene=False,
+                variant=variant,
+                default_dynamic_approximation=collider,
+            )
         write_physics_mjcf(
             placed,
             out / "export" / "scene.xml",
@@ -770,6 +839,9 @@ def export_run(out: Path | str) -> int:
         gates = {obj.name: "accept" for obj in placed}
         evidence.update(diagnose(placed, metres, frame, gates))
         evidence["excluded_gate_rejects"] = excluded
+        evidence["settle_variants"] = list(settle_run.VARIANTS)
+        evidence["default_dynamic_approximation"] = collider
+        evidence["excluded_evidence"] = why
         evidence.update(
             association_objects=association.get("objects"),
             association_dropped=len(association.get("dropped_objects", [])),

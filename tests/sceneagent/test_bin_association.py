@@ -243,14 +243,13 @@ def test_a_video_drops_objects_seen_in_fewer_than_three_views(tmp_path):
     assert len(evidence["dropped_objects"]) == 2
 
 
-def test_a_video_never_merges_masks_whose_phrases_differ(tmp_path):
+def test_one_object_named_differently_in_two_views_stays_one_object(tmp_path):
+    # Run 43331599718: refusing cross-phrase merges split the mailbox in two.
     out, data, _, _ = _run_dir(tmp_path)
     detections = json.loads((out / "masks" / "detections.json").read_text())
     # The second view calls the "box" cube a "can": the same Gaussians.
     detections["000005.png"][0]["phrase"] = "can"
     (out / "masks" / "detections.json").write_text(json.dumps(detections))
-    bin_result = ba.associate(out, data, depth=_fake_depth())
-    assert len(bin_result["objects"]) == 2  # the bin keeps the paper's cuts
     from sceneagent.bin_run import Scene, write_scene
 
     write_scene(
@@ -267,10 +266,24 @@ def test_a_video_never_merges_masks_whose_phrases_differ(tmp_path):
         ),
     )
     video = ba.associate(out, data, depth=_fake_depth())
-    assert video["same_phrase"] is True
-    refused = [p for p in video["pairs"] if p.get("phrases_differ")]
-    assert refused and not any(p["merged"] for p in refused)
-    assert ba.evidence_from(video)["rule"]["grouping"][ba.SAME_PHRASE] is True
+    assert video["same_phrase"] is False
+    assert not any(p.get("phrases_differ") for p in video["pairs"])
+    assert len(video["merged_pairs"]) == 2
+    assert ba.evidence_from(video)["rule"]["grouping"][ba.SAME_PHRASE] is False
+
+
+def test_the_same_phrase_option_still_refuses_cross_phrase_merges():
+    rng = np.random.default_rng(0)
+    positions = rng.uniform(0, 0.05, (200, 3))
+    ids = np.arange(200)
+    masks = [
+        {"view": "a", "gaussians": ids, "phrase": "mailbox"},
+        {"view": "b", "gaussians": ids, "phrase": "cube"},
+    ]
+    merged, _ = ba.group_masks(masks, positions)
+    assert merged == [[0, 1]]
+    apart, pairs = ba.group_masks(masks, positions, same_phrase=True)
+    assert apart == [[0], [1]] and pairs[0]["phrases_differ"]
 
 
 def test_the_consensus_profile_shrinks_a_set_as_more_views_must_agree():

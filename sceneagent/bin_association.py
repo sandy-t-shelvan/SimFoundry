@@ -321,10 +321,10 @@ def group_masks(
     Returns the components (mask positions in ``masks``) and every pair that
     shares a Gaussian, with whether it passed each cut and merged.
 
-    With ``same_phrase`` (ours, video scenes), masks whose GroundingDINO
-    phrases differ never merge: Mailbox.mp4 joined 7 "cube" masks into the
-    mailbox (run 43309011103). The bin's category prompt can name one object
-    differently in different views, so it keeps the paper's cuts alone.
+    With ``same_phrase``, masks whose GroundingDINO phrases differ never
+    merge. Nothing turns it on: on Mailbox.mp4 it split one mailbox in two
+    (run 43331599718), because GroundingDINO names one object differently
+    from view to view, as the bin's category prompt does.
     """
     centroid, extent = {}, {}
     for i, mask in enumerate(masks):
@@ -581,7 +581,13 @@ def associate(
         views[view] = stats
 
     video = scene != BIN_SCENE
-    components, pairs = group_masks(masks, positions * to_paper, same_phrase=video)
+    # Phrases are not a grouping cut, on video either. Refusing cross-phrase
+    # merges on Mailbox.mp4 split the mailbox in two: the 7 views
+    # GroundingDINO labelled "cube" became a second 0.17 x 0.18 x 0.19 m
+    # mailbox overlapping the first, which kept it sliding in the settle
+    # (run 43331599718). The inflated sets that first suggested the rule
+    # came from kappa = 2, fixed by VIDEO_KAPPA_SHARE.
+    components, pairs = group_masks(masks, positions * to_paper)
     min_views = MIN_OBJECT_VIEWS if video else 1
     dropped = []
     for members in components:
@@ -648,7 +654,7 @@ def associate(
         "merged_pairs": [p for p in pairs if p["merged"]],
         "objects": objects,
         "min_object_views": min_views,
-        "same_phrase": video,
+        "same_phrase": False,
         "dropped_objects": dropped,
         "scene": scene.name,
         "ground_truth": scene.ground_truth,
