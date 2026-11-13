@@ -565,3 +565,93 @@ def test_committed_fruits_file_matches_the_recorded_pin():
     assert hashlib.sha256(data).hexdigest() == FRUITS_SHA256
     info = inspect_video(FRUITS)
     assert info["duration_s"] == pytest.approx(FRUITS_MVHD_DURATION_S)
+
+
+def _ladder_run(tmp_path, registered_per_mapper_run):
+    """A fake COLMAP whose Nth mapper run leaves a model registering the Nth count."""
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    for index in range(1, 301):
+        (image_dir / f"{index:04d}.jpg").write_bytes(b"")
+    mapper_calls = []
+
+    def runner(argv):
+        if argv[1] == "-h":
+            return {"returncode": 0, "stdout": "COLMAP 3.11.1", "stderr": ""}
+        if argv[1] == "mapper":
+            out = Path(argv[argv.index("--output_path") + 1])
+            mapper_calls.append({"argv": list(argv), "stale": sorted(out.iterdir())})
+            model = out / "0"
+            model.mkdir(parents=True)
+            n = registered_per_mapper_run[len(mapper_calls) - 1]
+            (model / "images.bin").write_bytes(
+                _images_bin([f"{i:04d}.jpg" for i in range(1, n + 1)])
+            )
+            log = "Initializing with image pair #51 and #67\n"
+            return {"returncode": 0, "stdout": "", "stderr": log}
+        return {"returncode": 0, "stdout": "", "stderr": ""}
+
+    def analyzer(model):
+        bin_bytes = (Path(model) / "images.bin").read_bytes()
+        count = int.from_bytes(bin_bytes[:8], "little")
+        return {
+            "returncode": 0,
+            "stdout": _analyzer_text(registered=count, observations="60.0"),
+            "stderr": "",
+        }
+
+    result = run_colmap_on_images(
+        image_dir,
+        tmp_path / "work",
+        gpu_check=lambda stage: {"free_mib": 6144, "retries": 0},
+        command_runner=runner,
+        analyzer=analyzer,
+    )
+    return result, mapper_calls
+
+
+def test_a_dead_end_model_is_mapped_again_from_the_relaxed_initial_pair_rule(tmp_path):
+    # KAN-52: COLMAP 3.11.1 kept a two-image model from frames 0051/0067 and,
+    # having a model, never relaxed its initial-pair rule (2-6 of 300).
+    result, calls = _ladder_run(tmp_path, [2, 300])
+    assert result["ok"] is True
+    assert [a["rung"] for a in result["mapper_attempts"]] == [
+        "colmap_default",
+        "relaxed_init",
+    ]
+    assert [a["registered"] for a in result["mapper_attempts"]] == [2, 300]
+    retry = calls[1]["argv"]
+    assert retry[retry.index("--Mapper.init_min_num_inliers") + 1] == "50"
+    assert retry[retry.index("--Mapper.init_min_tri_angle") + 1] == "8"
+    assert calls[1]["stale"] == []  # the dead-end model is gone before the retry
+    assert result["mapper_attempts"][0]["init_pairs"] == [["51", "67"]]
+
+
+def test_a_model_that_passes_is_never_mapped_again(tmp_path):
+    result, calls = _ladder_run(tmp_path, [300])
+    assert result["ok"] is True
+    assert len(calls) == 1
+    assert "--Mapper.init_min_tri_angle" not in calls[0]["argv"]
+    assert [a["rung"] for a in result["mapper_attempts"]] == ["colmap_default"]
+
+
+def test_every_rung_failing_names_each_attempt_in_the_reason(tmp_path):
+    result, calls = _ladder_run(tmp_path, [2, 5, 3])
+    assert result["ok"] is False
+    assert result["failed_step"] == "reconstruction_gate"
+    assert len(calls) == 3
+    assert "mapper attempts: colmap_default 2/300" in result["reason"]
+    assert "relaxed_init 5/300" in result["reason"]
+    assert "relaxed_init_more 3/300" in result["reason"]
+    assert "first pair 51/67" in result["reason"]
+
+
+def test_init_pairs_are_read_from_the_mapper_log():
+    from sceneagent.colmap_stage import init_pairs_from_log
+
+    text = (
+        "I1113 incremental_pipeline.cc:306] Initializing with image pair #114 and #131\n"
+        "noise\nInitializing with image pair #3 and #9\n"
+    )
+    assert init_pairs_from_log(text) == [(114, 131), (3, 9)]
+    assert init_pairs_from_log("") == []

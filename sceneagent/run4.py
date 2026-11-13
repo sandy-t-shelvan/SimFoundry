@@ -21,13 +21,16 @@ from __future__ import annotations
 import io
 import json
 import math
+import shutil
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from sceneagent.colmap_stage import (
+    MAPPER_LADDER,
     colmap_major,
+    init_pairs_from_log,
     pose_commands,
     use_gpu_from_banner,
 )
@@ -127,6 +130,7 @@ def run_colmap_on_images(
     commands = pose_commands(
         database, image_dir, sparse, use_gpu, major=major, matcher=matcher
     )
+    mapper_text = ""
     for argv in commands:
         if argv[1] != matcher and argv[1] not in {
             "feature_extractor",
@@ -135,6 +139,8 @@ def run_colmap_on_images(
             raise ValueError(f"unexpected COLMAP step {argv[1]}")
         gpu_check("colmap")
         step = command_runner([str(part) for part in argv])
+        if argv[1] == "mapper":
+            mapper_text = _command_text(step)
         if step.get("returncode") != 0:
             detail = _command_text(step).strip() or f"{argv[1]} failed"
             return {
@@ -158,6 +164,36 @@ def run_colmap_on_images(
         work_dir / EVIDENCE_DIRNAME,
         runner=analyzer,
     )
+    attempts = [_mapper_attempt(MAPPER_LADDER[0], gate, mapper_text, database)]
+    # Only a model that fails the gate is retried, on the same matches.
+    mapper_argv = [str(part) for part in commands[-1]]
+    for rung in MAPPER_LADDER[1:]:
+        if gate["pass"]:
+            break
+        shutil.rmtree(sparse, ignore_errors=True)
+        sparse.mkdir(parents=True)
+        gpu_check("colmap")
+        step = command_runner([*mapper_argv, *rung[1]])
+        if step.get("returncode") != 0:
+            attempts.append(
+                {
+                    "rung": rung[0],
+                    "flags": list(rung[1]),
+                    "returncode": step.get("returncode"),
+                    "error": _command_text(step).strip()[-300:],
+                }
+            )
+            break
+        gate = accept_reconstruction(
+            sparse,
+            frame_count,
+            work_dir / EVIDENCE_DIRNAME,
+            runner=analyzer,
+        )
+        attempts.append(_mapper_attempt(rung, gate, _command_text(step), database))
+    reason = gate["reason"]
+    if len(attempts) > 1:
+        reason = f"{reason} | mapper attempts: {attempt_summary(attempts)}"
     registered: dict[str, list[str] | None] = {}
     name_errors: dict[str, str] = {}
     if sparse.is_dir():
@@ -175,7 +211,8 @@ def run_colmap_on_images(
     return {
         "ok": bool(gate["pass"]),
         "use_gpu": use_gpu,
-        "reason": gate["reason"],
+        "reason": reason,
+        "mapper_attempts": attempts,
         "failed_step": None if gate["pass"] else "reconstruction_gate",
         "stderr": "",
         "returncode": 0,
@@ -183,6 +220,61 @@ def run_colmap_on_images(
         "registered_names": registered,
         "name_errors": name_errors,
     }
+
+
+def _image_names(database: Path) -> dict[int, str]:
+    """Image id to file name, read from the COLMAP database; empty if unreadable."""
+    import sqlite3
+
+    try:
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as con:
+            return {
+                int(i): str(n)
+                for i, n in con.execute("SELECT image_id, name FROM images")
+            }
+    except sqlite3.Error:
+        return {}
+
+
+def _mapper_attempt(
+    rung: tuple[str, tuple[str, ...]],
+    gate: dict[str, Any],
+    mapper_text: str,
+    database: Path,
+) -> dict[str, Any]:
+    """One mapper run: its flags, the largest model's numbers and its initial pairs."""
+    bar = (gate.get("document") or {}).get("quality_bar") or {}
+    names = _image_names(database) if mapper_text else {}
+    pairs = init_pairs_from_log(mapper_text)
+    return {
+        "rung": rung[0],
+        "flags": list(rung[1]),
+        "pass": bool(gate.get("pass")),
+        "registered": (bar.get("registered") or {}).get("value"),
+        "inputs": bar.get("inputs"),
+        "mean_obs_per_image": (bar.get("mean_obs_per_image") or {}).get("value"),
+        "mean_reproj_err_px": (bar.get("mean_reproj_err_px") or {}).get("value"),
+        "init_pairs": [
+            [names.get(a, str(a)), names.get(b, str(b))] for a, b in pairs[:5]
+        ],
+        "init_pairs_tried": len(pairs),
+    }
+
+
+def attempt_summary(attempts: list[dict[str, Any]]) -> str:
+    """One line per mapper run for the ledger reason, which a failed run publishes."""
+    parts = []
+    for item in attempts:
+        if "error" in item:
+            parts.append(f"{item['rung']} exited {item['returncode']}")
+            continue
+        first = item["init_pairs"][0] if item["init_pairs"] else None
+        start = f", first pair {first[0]}/{first[1]}" if first else ""
+        parts.append(
+            f"{item['rung']} {item['registered']}/{item['inputs']}"
+            f"{start}, {item['init_pairs_tried']} pairs tried"
+        )
+    return "; ".join(parts)
 
 
 def _write(path: Path, payload: Any) -> None:
@@ -268,6 +360,9 @@ def run_run4(
             ),
         }
         colmap_result = run_colmap(names, selection)
+        mapper_attempts = colmap_result.get("mapper_attempts")
+        if mapper_attempts:
+            evidence["mapper_attempts"] = mapper_attempts
         document = colmap_result.get("gate_document")
         if isinstance(document, dict):
             evidence["quality_bar"] = document.get("quality_bar")
@@ -318,6 +413,12 @@ def run_run4(
         "item": "COLMAP camera poses",
         "decision": pose_decision,
     }
+    if evidence.get("mapper_attempts"):
+        # Which mapper rung produced the poses, or each one that failed.
+        pose_entry["mapper_attempts"] = [
+            {k: item.get(k) for k in ("rung", "pass", "registered", "inputs")}
+            for item in evidence["mapper_attempts"]
+        ]
     if pose_decision == "accept":
         pose_entry["use_gpu"] = use_gpu
         sampling = evidence["sampling"] or {}

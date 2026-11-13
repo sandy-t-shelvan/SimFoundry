@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -52,6 +53,37 @@ def colmap_major(banner):
 
 
 MATCHERS = ("sequential_matcher", "exhaustive_matcher")
+
+
+# Mapper retries, applied only after the largest model fails the pose gate
+# (KAN-52). COLMAP 3.11.1 relaxes its initial-pair rule (100 inliers, 16
+# degrees) only when it has built no model at all, and it always keeps its
+# first model however small (incremental_pipeline.cc, Run() and
+# Reconstruct()). On a slow handheld video almost no pair clears 16 degrees,
+# so when one weak, far-apart pair just does, it seeds a model of two images
+# that cannot grow, and relaxation never happens: PutMarkerInCup started from
+# frames 0051 and 0067 (101-107 inliers) and registered 2-6 of 300. Which
+# pair clears the rule moves with run-to-run match noise, which is why the
+# same commands passed and failed. Each rung starts the mapper from the
+# rule COLMAP itself would have relaxed to, on the same matches.
+MAPPER_LADDER = (
+    ("colmap_default", ()),
+    (
+        "relaxed_init",
+        ("--Mapper.init_min_num_inliers", "50", "--Mapper.init_min_tri_angle", "8"),
+    ),
+    (
+        "relaxed_init_more",
+        ("--Mapper.init_min_num_inliers", "25", "--Mapper.init_min_tri_angle", "4"),
+    ),
+)
+
+_INIT_PAIR_RE = re.compile(r"Initializing with image pair #(\d+) and #(\d+)")
+
+
+def init_pairs_from_log(text):
+    """Every initial pair the mapper tried, as (image_id1, image_id2), in order."""
+    return [(int(a), int(b)) for a, b in _INIT_PAIR_RE.findall(text or "")]
 
 
 def pose_commands(
