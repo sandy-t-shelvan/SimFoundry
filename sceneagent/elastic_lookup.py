@@ -15,23 +15,13 @@ from __future__ import annotations
 
 import json
 import math
-import os
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from sceneagent.gemini_client import API_ROOT, PAPER_MODEL_ID, redact
-from sceneagent.gemini_client import _request as gemini_request
 from sceneagent.soft_route import particle_params, route
 
 SOURCE = "web_lookup"
 UNRESOLVED = "unresolved"
-
-
-class MissingGeminiKeyError(Exception):
-    """``GEMINI_API_KEY`` is missing. The message does not carry a key."""
-
-    def __init__(self) -> None:
-        super().__init__("GEMINI_API_KEY is missing or empty")
 
 
 def prompt_for_class(material_class: str) -> str:
@@ -43,28 +33,6 @@ def prompt_for_class(material_class: str) -> str:
         'Keys: "youngs_modulus_pa" (pascals, not GPa) and "poisson_ratio". '
         "Use a grounded source. Do not invent a number."
     )
-
-
-def grounding_urls(payload: Mapping[str, Any]) -> list[str]:
-    """Web URIs from Gemini grounding metadata. The reply text is ignored."""
-    candidates = payload.get("candidates") or []
-    if not candidates or not isinstance(candidates[0], Mapping):
-        return []
-    meta = candidates[0].get("groundingMetadata") or candidates[0].get(
-        "grounding_metadata"
-    )
-    if not isinstance(meta, Mapping):
-        return []
-    chunks = meta.get("groundingChunks") or meta.get("grounding_chunks") or []
-    found: list[str] = []
-    for chunk in chunks:
-        if not isinstance(chunk, Mapping):
-            continue
-        web = chunk.get("web") or {}
-        uri = web.get("uri") if isinstance(web, Mapping) else None
-        if isinstance(uri, str) and uri.strip():
-            found.append(uri.strip())
-    return found
 
 
 def interpret(material_class: str, text: str, urls: Sequence[str]) -> dict[str, Any]:
@@ -103,7 +71,7 @@ def lookup_class(
         return interpret("", "", [])
     if key in stored:
         return stored[key]
-    reply = client.generate_grounded(prompt_for_class(material_class))
+    reply = client.generate_images(prompt_for_class(material_class), search=True)
     record = interpret(
         str(material_class),
         str(reply.get("text") or ""),
@@ -132,68 +100,6 @@ def trace_soft_objects(
             {"object": obj.get("object"), "route": decision, "reason": reason, **params}
         )
     return traced
-
-
-class GroundedGemini:
-    """One ``generateContent`` call with Google Search grounding.
-
-    ``__repr__`` hides the key. Error text is redacted before it is returned.
-    """
-
-    def __init__(self, api_key: str) -> None:
-        if not isinstance(api_key, str) or not api_key.strip():
-            raise MissingGeminiKeyError()
-        self.api_key = api_key
-
-    def __repr__(self) -> str:
-        return "GroundedGemini(api_key='[redacted]')"
-
-    def generate_grounded(self, prompt: str) -> dict[str, Any]:
-        status, raw = gemini_request(
-            f"{API_ROOT}/models/{PAPER_MODEL_ID}:generateContent",
-            self.api_key,
-            {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "tools": [{"google_search": {}}],
-            },
-        )
-        raw = redact(raw, self.api_key)
-        if status != 200:
-            return {
-                "text": "",
-                "urls": [],
-                "http_status": status,
-                "model_id": PAPER_MODEL_ID,
-            }
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            return {
-                "text": "",
-                "urls": [],
-                "http_status": status,
-                "model_id": PAPER_MODEL_ID,
-            }
-        text = ""
-        candidates = payload.get("candidates") or []
-        if candidates:
-            parts = (candidates[0].get("content") or {}).get("parts") or []
-            text = "".join(
-                part.get("text", "") for part in parts if isinstance(part, dict)
-            )
-        return {
-            "text": text.strip(),
-            "urls": grounding_urls(payload),
-            "http_status": status,
-            "model_id": PAPER_MODEL_ID,
-        }
-
-
-def client_from_environ() -> GroundedGemini:
-    """Build a client from ``GEMINI_API_KEY``. No other variable is read."""
-    if "GEMINI_API_KEY" not in os.environ:
-        raise MissingGeminiKeyError()
-    return GroundedGemini(os.environ["GEMINI_API_KEY"])
 
 
 def _json_object(text: str) -> dict[str, Any] | None:

@@ -6,12 +6,14 @@ from __future__ import annotations
 
 import pytest
 
-from sceneagent.elastic_lookup import (
+from sceneagent.gemini_client import (
     MissingGeminiKeyError,
-    SOURCE,
-    UNRESOLVED,
     client_from_environ,
     grounding_urls,
+)
+from sceneagent.elastic_lookup import (
+    SOURCE,
+    UNRESOLVED,
     interpret,
     lookup_class,
     trace_soft_objects,
@@ -28,8 +30,9 @@ class Stub:
         self.urls = list(urls)
         self.prompts = []
 
-    def generate_grounded(self, prompt):
+    def generate_images(self, prompt, images=(), search=False):
         self.prompts.append(prompt)
+        assert search is True
         return {"text": self.text, "urls": list(self.urls)}
 
 

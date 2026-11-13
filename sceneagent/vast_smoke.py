@@ -228,6 +228,7 @@ PIPELINES = {
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
     "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
     "articulate": (("articulated motion",), "proposed joints"),
+    "soft_press": (("soft press",), "one soft object"),
     **{
         name: (
             (
@@ -286,6 +287,8 @@ def remote_out(pipeline: str) -> str:
         return REMOTE_ISAACLAB_OUT
     if pipeline == "articulate":
         return "/workspace/sf4-smoke/articulate"
+    if pipeline == "soft_press":
+        return "/workspace/sf4-smoke/soft_press"
     if pipeline == "mailbox":
         return REMOTE_MAILBOX_OUT
     if pipeline in VIDEO_PIPELINES:
@@ -375,6 +378,8 @@ FETCH_NAMES = (
     "articulate_frames.zip",
     "articulate_proposal.json",
     "vlm_check.json",
+    "soft_press_params.json",
+    "soft_press_status.txt",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -416,6 +421,8 @@ PUBLISHED_NAMES = frozenset(
         "articulate_frames.zip",
         "articulate_proposal.json",
         "vlm_check.json",
+        "soft_press_params.json",
+        "soft_press_status.txt",
     }
 )
 PUBLIC_FIELDS = (
@@ -927,6 +934,12 @@ def build_remote_command(
             f"{repo}/sceneagent/articulate_drive.py",
             "--proposal",
             f"{repo}/sceneagent/articulate_proposal.json",
+    if pipeline == "soft_press":
+        return [
+            REMOTE_PYTHON,
+            f"{repo}/sceneagent/soft_press_drive.py",
+            "--params",
+            f"{repo}/sceneagent/soft_press_params.json",
             "--out",
             out,
         ]
@@ -2428,6 +2441,16 @@ def _advise_motion(checkout: Path, local_run: Path) -> None:
     (local_run / "vlm_check.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
+def _copy_soft_press(checkout: Path, local_run: Path) -> None:
+    """Keep the runner's trace with the box result. Print the status line."""
+    from sceneagent.soft_press import PARAMS_NAME
+
+    source = Path(checkout) / "sceneagent" / PARAMS_NAME
+    if source.is_file():
+        (local_run / PARAMS_NAME).write_bytes(source.read_bytes())
+    status = local_run / "soft_press_status.txt"
+    if status.is_file():
+        print(status.read_text(encoding="utf-8"), flush=True)
 
 
 class SshRemote:
@@ -2489,6 +2512,10 @@ class SshRemote:
 
             prepare_for_box(checkout)
         self._sync(checkout)
+        if pipeline == "soft_press":
+            from sceneagent.soft_press import prepare_for_box
+
+            prepare_for_box(checkout)
         if pipeline == "setup":
             self.hf_token_sent = self._send_hf_token(os.environ.get(HF_TOKEN_ENV, ""))
         code = self._bash(
@@ -2503,6 +2530,8 @@ class SshRemote:
         self._fetch(local_run, pipeline)
         if pipeline == "articulate":
             _advise_motion(checkout, local_run)
+        if pipeline == "soft_press":
+            _copy_soft_press(checkout, local_run)
         return code
 
     def _probe_ssh(self) -> tuple[int, str]:

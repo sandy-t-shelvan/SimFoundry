@@ -30,7 +30,7 @@ DISPATCH_INPUTS = """    inputs:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup, articulate]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup, articulate, soft_press]
         default: run4
 """
 HF_TOKEN_LINE = (
@@ -605,7 +605,7 @@ def workflow_safety_findings(text: str) -> list[str]:
     rest = text.replace(DISPATCH_INPUTS, "", 1).replace("inputs.pipeline", "")
     if dispatch != DISPATCH_INPUTS or "inputs:" in rest or "inputs." in rest:
         findings.append(
-            "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate pipeline choice"
+            "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate/soft_press pipeline choice"
         )
     if "- Main_duplicate" not in on_block:
         findings.append("request-file push must be limited to Main_duplicate")
