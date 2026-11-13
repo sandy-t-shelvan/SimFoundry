@@ -32,6 +32,14 @@ def main(argv=None):
         help="Capture JSON, SimFoundry scene JSON, or an example mp4",
     )
     parser.add_argument(
+        "--prompt",
+        default=None,
+        help=(
+            "Phrases for the video pipeline. A video whose name is in "
+            "video_run.PROMPTS uses that phrase list when this is omitted."
+        ),
+    )
+    parser.add_argument(
         "--out", type=Path, required=True, help="Directory for the ledger and report"
     )
     parser.add_argument(
@@ -59,6 +67,22 @@ def main(argv=None):
     )
     args = parser.parse_args(argv)
     if args.capture.suffix.lower() == ".mp4":
+        from sceneagent import video_run
+
+        # KAN-52 dc1: a known video (or an explicit prompt) is the same stage
+        # list and output directory as ``python -m sceneagent.video_run``.
+        # Other mp4s stay on the phase-1 sampler.
+        prompt = args.prompt or video_run.PROMPTS.get(args.capture.stem)
+        if prompt:
+            if args.fps != 1 or args.max_frames != 16 or args.no_color_calibration:
+                parser.error(
+                    "--fps, --max-frames, and --no-color-calibration apply to "
+                    "the phase-1 sampler, not the video pipeline"
+                )
+            forwarded = [str(args.capture), "--out", str(args.out)]
+            if args.prompt:
+                forwarded.extend(["--prompt", args.prompt])
+            return video_run.main(forwarded)
         from sceneagent.video import run_video
 
         summary = run_video(
@@ -75,9 +99,15 @@ def main(argv=None):
             f"out={summary['out_dir']}"
         )
         return 0
-    if args.fps != 1 or args.max_frames != 16 or args.no_color_calibration:
+    if (
+        args.prompt
+        or args.fps != 1
+        or args.max_frames != 16
+        or args.no_color_calibration
+    ):
         parser.error(
-            "--fps, --max-frames, and --no-color-calibration apply to an mp4 capture"
+            "--prompt, --fps, --max-frames, and --no-color-calibration "
+            "apply to an mp4 capture"
         )
     summary = run_path(args.capture, args.out)
     print(

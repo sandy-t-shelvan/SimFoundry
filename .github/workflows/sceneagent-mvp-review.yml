@@ -1,0 +1,80 @@
+# KAN-52 dc1: after a sceneagent-gpu-smoke video run, the runner judges the
+# stage images, writes the orchestrator plan, and writes the inspector report.
+#
+# Same split as sceneagent-inspector-report. This job never connects to the
+# GPU box and holds no Vast or SSH secret. The one secret is GEMINI_API_KEY,
+# and only the step below reads it.
+name: sceneagent-mvp-review
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_run:
+        description: sceneagent-gpu-smoke run id to review
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  mvp_review:
+    name: mvp-review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check the run id is a number
+        env:
+          SMOKE_RUN: ${{ inputs.smoke_run }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$SMOKE_RUN" | grep -Eq '^[0-9]{1,20}$'
+          echo "reviewing smoke run ${SMOKE_RUN}"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # step_critic and the inspector import numpy. The plan runner does not.
+      - name: Install numpy
+        run: python -m pip install --quiet "numpy==2.4.6"  # as requirements-sceneagent-ci.txt
+
+      - name: Download the smoke artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sceneagent-fruits-smoke
+          run-id: ${{ inputs.smoke_run }}
+          github-token: ${{ github.token }}
+          path: review-input
+
+      - name: Critic, plan and inspector
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SMOKE_RUN: ${{ inputs.smoke_run }}
+        run: |
+          set -euo pipefail
+          mkdir -p review-out
+          critic=0
+          plan=0
+          if [ -f review-input/review_steps.zip ]; then
+            python -m sceneagent.step_critic judge --images review-input/review_steps.zip --out-dir review-out --source-run "$SMOKE_RUN" || critic=$?
+          else
+            printf '%s\n' '{"skipped":"no review_steps.zip in the smoke artifact"}' > review-out/critic_skipped.json
+          fi
+          python -m sceneagent.plan_runner plan --out-dir review-out --source-run "$SMOKE_RUN" || plan=$?
+          python -m sceneagent.inspector report --views review-input/inspection_views.zip --settle review-input/settle_summary.json --out review-out/isaac_lab.json --source-run "$SMOKE_RUN"
+          printf '{"critic_exit":%s,"plan_exit":%s}\n' "$critic" "$plan" > review-out/review_exits.json
+
+      - name: Upload the review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sceneagent-mvp-review
+          retention-days: 14
+          if-no-files-found: error
+          path: review-out/

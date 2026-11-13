@@ -307,6 +307,52 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
 
 
+def test_the_package_command_runs_a_known_video_through_video_run(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_main(argv=None):
+        seen["argv"] = argv
+        return 0
+
+    monkeypatch.setattr("sceneagent.video_run.main", fake_main)
+    from sceneagent.__main__ import main
+
+    video = tmp_path / "Mailbox.mp4"
+    video.write_bytes(b"not a video")
+    assert main([str(video), "--out", str(tmp_path / "out")]) == 0
+    assert seen["argv"] == [str(video), "--out", str(tmp_path / "out")]
+    with pytest.raises(SystemExit) as caught:
+        main([str(video), "--out", str(tmp_path / "capped"), "--fps", "0"])
+    assert caught.value.code == 2
+
+
+def test_an_explicit_prompt_is_forwarded_to_the_video_pipeline(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_main(argv=None):
+        seen["argv"] = argv
+        return 0
+
+    monkeypatch.setattr("sceneagent.video_run.main", fake_main)
+    from sceneagent.__main__ import main
+
+    video = tmp_path / "Other.mp4"
+    video.write_bytes(b"not a video")
+    assert (
+        main(
+            [
+                str(video),
+                "--out",
+                str(tmp_path / "out"),
+                "--prompt",
+                "cup . marker .",
+            ]
+        )
+        == 0
+    )
+    assert seen["argv"][-2:] == ["--prompt", "cup . marker ."]
+
+
 def test_inspection_views_drawn_before_left_out_existed_are_drawn_again(tmp_path):
     out = tmp_path / "mailbox"
     out.mkdir()
