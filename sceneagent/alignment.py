@@ -19,6 +19,16 @@ OURS_GATE_NOTE = (
     "SceneAgent did not publish these cutoffs. These are our iteration-1 gates."
 )
 
+# Held-out profile. Chosen on the derivation half of the checked-in bin
+# scores (scripts/derive_heldout_thresholds.py). Not the iteration-1 numbers,
+# and not a published paper cutoff.
+HELDOUT_GATE_LABEL = "ours_heldout_v1"
+HELDOUT_NORMALIZED_MEDIAN_MAX = 0.0784567069559569
+HELDOUT_P90_MAX = 0.15229201952511362
+HELDOUT_COVERAGE_MIN = 0.4732394366197183
+HELDOUT_SILHOUETTE_MIN = 0.08971836478763888
+HELDOUT_GATE_NOTE = "ours, not published in the paper."
+
 # Ours, iteration 2 (2026-11-12, Sandeep's yes): the placement gate the bin
 # stages use. On the bin's 14 placed objects (run 43315660864) silhouette
 # tracked ground-truth F1 with Spearman +0.85 and p90 with -0.79, while
@@ -67,24 +77,61 @@ def ours_iteration1_thresholds():
     }
 
 
+def ours_heldout_v1_thresholds():
+    """Cutoffs fit on a held-out split. Not a published SceneAgent number."""
+    return {
+        "label": HELDOUT_GATE_LABEL,
+        "paper_published": False,
+        "note": HELDOUT_GATE_NOTE,
+        "normalized_median": {"max": HELDOUT_NORMALIZED_MEDIAN_MAX},
+        "p90": {"max": HELDOUT_P90_MAX},
+        "coverage": {"min": HELDOUT_COVERAGE_MIN},
+        "silhouette": {"min": HELDOUT_SILHOUETTE_MIN},
+    }
+
+
+def _profile_thresholds(profile):
+    if profile == OURS_GATE_LABEL:
+        return ours_iteration1_thresholds()
+    if profile == HELDOUT_GATE_LABEL:
+        return ours_heldout_v1_thresholds()
+    raise ValueError(f"unknown alignment profile {profile!r}")
+
+
 def _using_ours(thresholds):
     return isinstance(thresholds, dict) and thresholds.get("label") == OURS_GATE_LABEL
 
 
-def accept_alignment(residuals, thresholds=None):
+def _using_heldout(thresholds):
+    return (
+        isinstance(thresholds, dict) and thresholds.get("label") == HELDOUT_GATE_LABEL
+    )
+
+
+def accept_alignment(residuals, thresholds=None, profile=None):
     """Accept or reject a pose.
 
     ``thresholds=None`` stays undecided: the paper's four numbers are absent.
     Pass ``ours_iteration1_thresholds()`` or the label ``ours_iteration_1``
     to decide with this tree's iteration-1 gate. A missing silhouette fails
     that gate. It is not treated as a pass.
+
+    ``profile="ours_heldout_v1"`` selects the held-out cutoffs. The default
+    does not. An unknown profile name raises.
     """
-    if thresholds == OURS_GATE_LABEL:
+    named = profile
+    if profile is not None:
+        thresholds = _profile_thresholds(profile)
+    elif thresholds == OURS_GATE_LABEL:
         thresholds = ours_iteration1_thresholds()
+    elif thresholds == HELDOUT_GATE_LABEL:
+        thresholds = ours_heldout_v1_thresholds()
+        named = HELDOUT_GATE_LABEL
     residuals = dict(residuals or {})
     thresholds = dict(thresholds or {})
     ours = _using_ours(thresholds)
-    if not ours:
+    heldout = _using_heldout(thresholds)
+    if not ours and not heldout:
         missing = [
             name
             for name in RESIDUAL_NAMES
@@ -105,7 +152,7 @@ def accept_alignment(residuals, thresholds=None):
     measured = {}
     for name in DISTANCE_RESIDUALS:
         limit = thresholds.get(name) or {}
-        if "max" not in limit and not ours:
+        if "max" not in limit and not ours and not heldout:
             return {
                 "decision": "undecided",
                 "accepted": False,
@@ -122,7 +169,7 @@ def accept_alignment(residuals, thresholds=None):
             failed.append(name)
     for name in AGREEMENT_RESIDUALS:
         limit = thresholds.get(name) or {}
-        if "min" not in limit and not ours:
+        if "min" not in limit and not ours and not heldout:
             return {
                 "decision": "undecided",
                 "accepted": False,
@@ -142,8 +189,10 @@ def accept_alignment(residuals, thresholds=None):
         "accepted": not failed,
         "failed": failed,
         "residuals": measured,
-        "gate": OURS_GATE_LABEL if ours else "caller",
-        "paper_published": False if ours else None,
+        "gate": (
+            OURS_GATE_LABEL if ours else HELDOUT_GATE_LABEL if heldout else "caller"
+        ),
+        "paper_published": False if ours or heldout else None,
     }
     if ours:
         body["note"] = OURS_GATE_NOTE
@@ -153,6 +202,17 @@ def accept_alignment(residuals, thresholds=None):
             "coverage_min": OURS_COVERAGE_MIN,
             "silhouette_min": OURS_SILHOUETTE_MIN,
         }
+    elif heldout:
+        body["note"] = HELDOUT_GATE_NOTE
+        body["constants"] = {
+            "normalized_median_max": HELDOUT_NORMALIZED_MEDIAN_MAX,
+            "p90_max": HELDOUT_P90_MAX,
+            "coverage_min": HELDOUT_COVERAGE_MIN,
+            "silhouette_min": HELDOUT_SILHOUETTE_MIN,
+        }
+    if named is not None:
+        body["profile"] = named
+        body["thresholds_published"] = False
     return body
 
 
