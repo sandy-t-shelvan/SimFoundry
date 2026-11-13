@@ -135,3 +135,17 @@ def test_the_shared_client_hides_the_key(monkeypatch):
         client_from_environ()
     monkeypatch.setenv("GEMINI_API_KEY", "super-secret-value")
     assert "super-secret-value" not in repr(client_from_environ())
+
+
+def test_committed_mailbox_frames_and_objects_can_be_proposed():
+    from pathlib import Path
+
+    from sceneagent.articulate_run import _frames, _objects
+
+    root = Path(__file__).resolve().parents[2]
+    frames = _frames(root)
+    objects = _objects(root)
+    assert 2 <= len(frames) <= 4
+    assert all(frame.startswith(b"\x89PNG\r\n\x1a\n") for frame in frames)
+    assert objects[0]["name"] == "object_1"
+    assert [part["name"] for part in objects[0]["parts"]] == ["body", "lid"]
