@@ -14,7 +14,8 @@ def advise(frames: Sequence[bytes], question: str, client: Any) -> dict[str, Any
     """Yes or no, with a reason. ``advisory`` stays true."""
     if not frames or len(frames) > 6:
         raise ValueError("need about 4 frames")
-    text = str(client.generate_images(question, frames).get("text") or "")
+    reply = client.generate_images(question, frames)
+    text = str(reply.get("text") or "")
     verdict = _yes_no(text)
     return {
         "label": LABEL,
@@ -22,6 +23,7 @@ def advise(frames: Sequence[bytes], question: str, client: Any) -> dict[str, Any
         "verdict": verdict,
         "reason": text.strip(),
         "model_reply": text,
+        "model_id": reply.get("model_id"),
         "frames": len(frames),
     }
 

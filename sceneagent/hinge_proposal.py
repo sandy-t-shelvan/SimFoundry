@@ -67,20 +67,17 @@ def prompt_for(
 
 def _one_object(obj, parts, frames, client) -> dict[str, Any]:
     name = str(obj.get("name"))
-    first = str(
-        client.generate_images(prompt_for(name, parts), frames).get("text") or ""
-    )
+    reply = client.generate_images(prompt_for(name, parts), frames)
+    first = str(reply.get("text") or "")
+    model_id = reply.get("model_id")
     joints, error = _checked(name, parts, first)
-    attempts = [{"model_reply": first, "error": error}]
+    attempts = [{"model_reply": first, "error": error, "model_id": model_id}]
     if error is not None:
-        second = str(
-            client.generate_images(prompt_for(name, parts, rejected=error), frames).get(
-                "text"
-            )
-            or ""
-        )
+        reply = client.generate_images(prompt_for(name, parts, rejected=error), frames)
+        second = str(reply.get("text") or "")
+        model_id = reply.get("model_id")
         joints, error = _checked(name, parts, second)
-        attempts.append({"model_reply": second, "error": error})
+        attempts.append({"model_reply": second, "error": error, "model_id": model_id})
     status = "ok" if error is None else "unresolved"
     return {
         "object": name,
@@ -88,6 +85,7 @@ def _one_object(obj, parts, frames, client) -> dict[str, Any]:
         "source": SOURCE,
         "joints": joints if error is None else [],
         "attempts": attempts,
+        "model_id": model_id,
     }
 
 

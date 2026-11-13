@@ -56,7 +56,7 @@ class Stub:
 
     def generate_images(self, prompt, images=(), search=False):
         self.images.append(images)
-        return {"text": self.replies.pop(0)}
+        return {"text": self.replies.pop(0), "model_id": "stub-model"}
 
 
 def _mailbox():
@@ -69,6 +69,7 @@ def test_the_mailbox_lid_is_one_revolute_and_images_are_sent():
     obj = record["objects"][0]
     assert obj["status"] == "ok" and obj["source"] == SOURCE
     assert obj["joints"][0]["type"] == "revolute"
+    assert obj["model_id"] == "stub-model"
     assert stub.images == [tuple(FRAMES)] or stub.images == [FRAMES]
     assert "measured" not in obj["source"]
 
@@ -102,6 +103,7 @@ def test_the_advisory_check_does_not_change_a_source():
     report = advise(FRAMES, "does the lid open?", stub)
     assert report["advisory"] is True and report["label"] == "vlm_check"
     assert report["verdict"] == "yes"
+    assert report["model_id"] == "stub-model"
 
 
 def test_articulate_is_a_pipeline_and_angles_span_the_limits():
@@ -135,6 +137,15 @@ def test_the_shared_client_hides_the_key(monkeypatch):
         client_from_environ()
     monkeypatch.setenv("GEMINI_API_KEY", "super-secret-value")
     assert "super-secret-value" not in repr(client_from_environ())
+
+
+def test_active_model_id_follows_one_constant(monkeypatch):
+    from sceneagent.gemini_client import DEFAULT_MODEL_ID, active_model_id
+
+    monkeypatch.delenv("GEMINI_MODEL_ID", raising=False)
+    assert active_model_id() == DEFAULT_MODEL_ID
+    monkeypatch.setenv("GEMINI_MODEL_ID", "override-id")
+    assert active_model_id() == "override-id"
 
 
 def test_committed_mailbox_frames_and_objects_can_be_proposed():

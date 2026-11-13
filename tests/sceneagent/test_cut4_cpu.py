@@ -19,7 +19,7 @@ class Stub:
 
     def generate_images(self, prompt, images=(), search=False):
         self.images.append(images)
-        return {"text": self.text}
+        return {"text": self.text, "model_id": "stub-model"}
 
 
 def test_partsam_parts_feed_the_proposal_and_completion_is_gated():
@@ -129,5 +129,6 @@ def test_fracture_is_proposed_and_not_rendered():
     assert record["breakable"] is True
     assert record["where"] == "the lid seam"
     assert record["render"] == "skipped"
+    assert record["model_id"] == "stub-model"
     assert record["render_reason"] == RENDER_SKIPPED
     assert len(stub.images) == 1

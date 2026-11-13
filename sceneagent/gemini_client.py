@@ -21,6 +21,9 @@ import urllib.request
 from typing import Any
 
 PAPER_MODEL_ID = "gemini-2.5-flash"
+# The shared helper uses this id. GEMINI_MODEL_ID overrides it. The paper id
+# above stays for generate_flash, which still records a 404 and falls back.
+DEFAULT_MODEL_ID = "gemini-3.8-flash"
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 
 
@@ -172,8 +175,9 @@ class GeminiClient:
         body: dict[str, Any] = {"contents": [{"parts": parts}]}
         if search:
             body["tools"] = [{"google_search": {}}]
+        model = active_model_id()
         status, raw = _request(
-            f"{API_ROOT}/models/{PAPER_MODEL_ID}:generateContent",
+            f"{API_ROOT}/models/{model}:generateContent",
             self.api_key,
             body,
         )
@@ -182,7 +186,7 @@ class GeminiClient:
             "text": "",
             "urls": [],
             "http_status": status,
-            "model_id": PAPER_MODEL_ID,
+            "model_id": model,
         }
         if status != 200:
             return result
@@ -198,6 +202,14 @@ class GeminiClient:
             ).strip()
         result["urls"] = grounding_urls(payload)
         return result
+
+
+def active_model_id() -> str:
+    """The model ``generate_images`` calls. ``GEMINI_MODEL_ID`` wins when set."""
+    override = os.environ.get("GEMINI_MODEL_ID", "")
+    if isinstance(override, str) and override.strip():
+        return override.strip()
+    return DEFAULT_MODEL_ID
 
 
 def client_from_environ():

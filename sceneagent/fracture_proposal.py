@@ -20,7 +20,8 @@ def propose_fracture(name: str, frames: Sequence[bytes], client: Any) -> dict[st
     """One call with image bytes. Rendering is always skipped."""
     if not 2 <= len(frames) <= 4 or any(not frame for frame in frames):
         raise ValueError("need 2 to 4 image frames")
-    text = str(client.generate_images(_prompt(name), frames).get("text") or "")
+    reply = client.generate_images(_prompt(name), frames)
+    text = str(reply.get("text") or "")
     parsed = _json_object(text)
     record: dict[str, Any] = {
         "object": name,
@@ -29,6 +30,7 @@ def propose_fracture(name: str, frames: Sequence[bytes], client: Any) -> dict[st
         "where": None,
         "rationale": None,
         "model_reply": text,
+        "model_id": reply.get("model_id"),
         "render": "skipped",
         "render_reason": RENDER_SKIPPED,
     }
