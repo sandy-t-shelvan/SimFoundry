@@ -66,6 +66,8 @@ CHECKPOINT_SHA256 = "7d737d52e82e1363efa7dbdb0dd1986b6f9d5d3461829bac9420802cfc0
 # needs numba, timm and open_clip_torch in this env (see the PR for SF-33).
 FIT_PYTHON = "/root/.local/share/mamba/envs/nerf/bin/python3"
 COLMAP_BIN = "/opt/colmap-cuda/bin"
+# Ahead of COLMAP_BIN on the prior driver's PATH only. See colmap_wrap/colmap.
+COLMAP_WRAP = Path(__file__).resolve().parent / "colmap_wrap"
 CUDA_HOME = "/usr/local/cuda-12.1"
 # Encoder weights download once into our cache, never /root's.
 HF_CACHE = "/workspace/sf4-smoke/hf-cache"
@@ -318,6 +320,7 @@ def driver_env(base: dict[str, str] | None, prior_repo: Path) -> dict[str, str]:
     env["PYTHONPATH"] = str(prior_repo)
     env["PATH"] = os.pathsep.join(
         [
+            str(COLMAP_WRAP),
             str(Path(FIT_PYTHON).parent),
             COLMAP_BIN,
             f"{CUDA_HOME}/bin",

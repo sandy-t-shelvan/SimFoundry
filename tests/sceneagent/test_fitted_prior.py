@@ -123,7 +123,13 @@ def test_the_driver_calls_the_priors_own_conversion():
     assert "FeatureEncoders().load()" in fp.DRIVER
     env = fp.driver_env({"PATH": "/usr/bin", "PYTHONPATH": "/w/repo"}, Path("/p"))
     assert env["PYTHONPATH"] == "/p"  # our sceneagent must not shadow the prior's
-    assert env["PATH"].split(":")[1] == fp.COLMAP_BIN
+    parts = env["PATH"].split(":")
+    assert parts[0] == str(fp.COLMAP_WRAP)
+    assert parts[2] == fp.COLMAP_BIN
+    wrapper = fp.COLMAP_WRAP / "colmap"
+    text = wrapper.read_text(encoding="utf-8")
+    assert '[ "$arg" = "--SiftMatching.min_num_inliers" ]' in text
+    assert 'arg="--TwoViewGeometry.min_num_inliers"' in text
 
 
 class _Box:
