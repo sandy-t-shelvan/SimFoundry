@@ -58,34 +58,20 @@ MATCHERS = ("sequential_matcher", "exhaustive_matcher")
 # Mapper rungs, tried in order on the same matches until the largest model
 # passes the pose gate (KAN-52). Each is (name, extra mapper flags).
 #
-# Root cause of PutMarkerInCup's 2-6 of 300 on COLMAP 3.11.1: the 300
-# frames of a 15 s clip are 1-2 source frames apart, so inside the
-# sequential matcher's window (offsets 1, 2, 4, 8, 16) parallax is tiny
-# and 126 of 295 neighbouring pairs verify as planar-or-panoramic. There is
-# no focal prior (an MP4 has no EXIF), so the shared camera starts at
-# 1.2 * width and the mapper's bundle adjustment refines focal length and
-# distortion from the first two images on. With that little baseline they
-# are unconstrained: on a fresh run the first model grew to 52 images, its
-# focal ran from 2304 px to 18183 px with k = 1.66, COLMAP's image filter
-# then dropped every image that disagreed, and 4 were left. Having built a
-# model, COLMAP never relaxes its initial-pair rule, and 199 further
-# initial pairs failed. GPU matching noise only moves where this happens.
+# PutMarkerInCup on COLMAP 3.11.1 (fresh runs on box 60254439, each model
+# compared with the trajectory of the model that placed): the mapper always
+# starts from frames 0051/0067, 16 apart, a low-parallax pair that grows a
+# depth-reversed model (camera rotations 140-177 degrees off). Left alone,
+# its intrinsics run away (2304 -> 18183 px, k 1.66), COLMAP's bogus-camera
+# filter drops the images and it dies at 2-6 frames. Holding the
+# intrinsics fixed only keeps that wrong model alive: it reached 300 of 300
+# at 1.3 px and passed the pose gate, and every placement then failed. So
+# the runaway is the useful signal here, and the rungs never hold them.
 #
-# The same matches and the same initial pair (0051/0067) register 300 of
-# 300 when the intrinsics are held during mapping. Held at the 2304 px
-# guess, though, the geometry is wrong (the model that placed has f 1663
-# px, k 0.02), and one refining bundle adjustment settles at 2355-2464 px,
-# so every placement failed. So a video's camera first starts at the focal
-# its own matches imply (``focal_prior.self_calibrate``, within 4 % on the
-# repo videos), the mapper holds it, and one bundle adjustment over the
-# finished model refines focal and distortion (``REFINE_INTRINSICS``).
-# COLMAP's own rule follows, then the relaxed initial pairs of PR #99.
-FIXED_INTRINSICS = (
-    "--Mapper.ba_refine_focal_length",
-    "0",
-    "--Mapper.ba_refine_extra_params",
-    "0",
-)
+# Having built a model, COLMAP does not relax its initial-pair rule. The
+# relaxed rung starts a second model from 0114/0130, which registers 300 of
+# 300 and matches the placed trajectory to 0.4 % and 1.1 degrees when the
+# camera starts at the self-calibrated focal (focal_prior.py).
 RELAXED_INIT = (
     "relaxed_init",
     ("--Mapper.init_min_num_inliers", "50", "--Mapper.init_min_tri_angle", "8"),
@@ -94,46 +80,14 @@ RELAXED_INIT_MORE = (
     "relaxed_init_more",
     ("--Mapper.init_min_num_inliers", "25", "--Mapper.init_min_tri_angle", "4"),
 )
-# A few wide-baseline stills (exhaustive matcher) constrain the intrinsics
-# from the start, so they keep COLMAP's own mapper first.
 MAPPER_LADDER = (("colmap_default", ()), RELAXED_INIT, RELAXED_INIT_MORE)
-VIDEO_MAPPER_LADDER = (
-    ("fixed_intrinsics", FIXED_INTRINSICS),
-    ("colmap_default", ()),
-    RELAXED_INIT,
-    RELAXED_INIT_MORE,
-)
-# Rungs whose models get one intrinsics-refining bundle adjustment.
-REFINE_INTRINSICS = frozenset({"fixed_intrinsics"})
 
 
 def mapper_ladder(matcher):
-    """The mapper rungs for this matcher: video (sequential) or stills."""
+    """The mapper rungs: the same for a video and for stills."""
     if matcher not in MATCHERS:
         raise ValueError(f"unknown COLMAP matcher {matcher}")
-    return VIDEO_MAPPER_LADDER if matcher == MATCHERS[0] else MAPPER_LADDER
-
-
-def refine_intrinsics_command(model_dir, output_dir):
-    """One bundle adjustment over a finished model that frees focal and distortion.
-
-    The principal point stays at the image centre, as the mapper keeps it.
-    Option names are COLMAP 3.11.1's (``colmap bundle_adjuster -h``).
-    """
-    return [
-        "colmap",
-        "bundle_adjuster",
-        "--input_path",
-        str(model_dir),
-        "--output_path",
-        str(output_dir),
-        "--BundleAdjustment.refine_focal_length",
-        "1",
-        "--BundleAdjustment.refine_extra_params",
-        "1",
-        "--BundleAdjustment.refine_principal_point",
-        "0",
-    ]
+    return MAPPER_LADDER
 
 
 _INIT_PAIR_RE = re.compile(r"Initializing with image pair #(\d+) and #(\d+)")

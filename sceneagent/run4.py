@@ -28,12 +28,10 @@ from pathlib import Path
 from typing import Any
 
 from sceneagent.colmap_stage import (
-    REFINE_INTRINSICS,
     colmap_major,
     init_pairs_from_log,
     mapper_ladder,
     pose_commands,
-    refine_intrinsics_command,
     use_gpu_from_banner,
 )
 from sceneagent.focal_prior import self_calibrate
@@ -45,11 +43,7 @@ from sceneagent.gpu_headroom import (
     require_gpu_headroom,
 )
 from sceneagent.pipeline import write_plan
-from sceneagent.pose_diagnosis import (
-    camera_is_plausible,
-    diagnose,
-    read_cameras_bin,
-)
+from sceneagent.pose_diagnosis import diagnose, read_cameras_bin
 from sceneagent.reconstruction_gate import EVIDENCE_DIRNAME, accept_reconstruction
 from sceneagent.run4_report import registered_image_names, unregistered_frame_report
 from sceneagent.run4_sampling import (
@@ -184,9 +178,6 @@ def run_colmap_on_images(
                 }
             )
             break
-        refined = None
-        if rung[0] in REFINE_INTRINSICS:
-            refined = _refine_intrinsics(sparse, command_runner)
         gate = accept_reconstruction(
             sparse,
             frame_count,
@@ -195,8 +186,6 @@ def run_colmap_on_images(
         )
         attempt = _mapper_attempt(rung, gate, _command_text(step), database)
         attempt["camera"] = _largest_camera(sparse)
-        if refined is not None:
-            attempt["refine_intrinsics"] = refined
         attempts.append(attempt)
         if gate["pass"]:
             break
@@ -273,47 +262,6 @@ def _largest_camera(sparse: Path) -> dict[str, Any] | None:
             return None
         return cameras[0] if cameras else None
     return None
-
-
-def _refine_intrinsics(
-    sparse: Path, command_runner: Callable[[list[str]], dict[str, Any]]
-) -> dict[str, Any]:
-    """Free focal and distortion in one bundle adjustment of the largest model.
-
-    The refined model replaces the mapped one only when the adjustment
-    exits 0 and its camera passes COLMAP's own bogus-parameter rule
-    (:func:`camera_is_plausible`); otherwise the fixed-intrinsics model is
-    kept and the record says why. Bundle adjustment runs on the CPU.
-    """
-    models = _models_by_size(sparse)
-    if not models:
-        return {"applied": False, "why": "no model"}
-    model = models[0]
-    staged = sparse.parent / f".refine_{model.name}"
-    shutil.rmtree(staged, ignore_errors=True)
-    staged.mkdir(parents=True)
-    step = command_runner(refine_intrinsics_command(model, staged))
-    record: dict[str, Any] = {"model": model.name, "applied": False}
-    try:
-        if step.get("returncode") != 0:
-            record["why"] = f"bundle_adjuster exited {step.get('returncode')}"
-            return record
-        try:
-            cameras = read_cameras_bin((staged / "cameras.bin").read_bytes())
-        except (OSError, ValueError) as exc:
-            record["why"] = f"refined cameras unreadable: {exc}"
-            return record
-        record["cameras"] = cameras
-        bad = [c for c in cameras if not camera_is_plausible(c)]
-        if bad:
-            record["why"] = "refined camera fails COLMAP's bogus-parameter rule"
-            return record
-        for item in staged.iterdir():
-            shutil.copyfile(item, model / item.name)
-        record["applied"] = True
-        return record
-    finally:
-        shutil.rmtree(staged, ignore_errors=True)
 
 
 def _image_names(database: Path) -> dict[int, str]:

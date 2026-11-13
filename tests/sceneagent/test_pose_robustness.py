@@ -12,13 +12,7 @@ import numpy as np
 import pytest
 
 from sceneagent.bin_run import clear_pose_state
-from sceneagent.colmap_stage import (
-    MAPPER_LADDER,
-    VIDEO_MAPPER_LADDER,
-    mapper_ladder,
-    pose_commands,
-    refine_intrinsics_command,
-)
+from sceneagent.colmap_stage import MAPPER_LADDER, mapper_ladder, pose_commands
 from sceneagent.focal_prior import estimate_focal, self_calibrate
 from sceneagent.pose_diagnosis import (
     camera_is_plausible,
@@ -60,17 +54,8 @@ COLMAP_3_11_OPTIONS = {
         "--database_path",
         "--image_path",
         "--output_path",
-        "--Mapper.ba_refine_focal_length",
-        "--Mapper.ba_refine_extra_params",
         "--Mapper.init_min_num_inliers",
         "--Mapper.init_min_tri_angle",
-    },
-    "bundle_adjuster": {
-        "--input_path",
-        "--output_path",
-        "--BundleAdjustment.refine_focal_length",
-        "--BundleAdjustment.refine_extra_params",
-        "--BundleAdjustment.refine_principal_point",
     },
 }
 
@@ -86,7 +71,6 @@ def test_every_flag_for_colmap_3_is_a_3_11_1_option(matcher):
         assert _flags(argv) <= COLMAP_3_11_OPTIONS[argv[1]], argv[1]
     for _rung, flags in mapper_ladder(matcher):
         assert _flags(flags) <= COLMAP_3_11_OPTIONS["mapper"]
-    assert _flags(refine_intrinsics_command("a", "b")) <= COLMAP_3_11_OPTIONS["bundle_adjuster"]
 
 
 def test_the_sift_device_flag_follows_the_banner_on_both_sift_steps():
@@ -104,15 +88,12 @@ def test_colmap_4_uses_the_renamed_feature_options():
     assert "--log_to_stderr" not in extract
 
 
-def test_the_video_ladder_holds_intrinsics_first_and_stills_do_not():
-    assert mapper_ladder("sequential_matcher") is VIDEO_MAPPER_LADDER
+def test_the_ladder_relaxes_the_initial_pair_and_never_holds_intrinsics():
+    assert mapper_ladder("sequential_matcher") is MAPPER_LADDER
     assert mapper_ladder("exhaustive_matcher") is MAPPER_LADDER
-    assert [r for r, _ in VIDEO_MAPPER_LADDER] == [
-        "fixed_intrinsics",
-        "colmap_default",
-        "relaxed_init",
-        "relaxed_init_more",
-    ]
+    assert [r for r, _ in MAPPER_LADDER] == ["colmap_default", "relaxed_init", "relaxed_init_more"]
+    for _rung, flags in MAPPER_LADDER:
+        assert not any("refine" in flag for flag in flags)
     with pytest.raises(ValueError):
         mapper_ladder("vocab_tree_matcher")
 
