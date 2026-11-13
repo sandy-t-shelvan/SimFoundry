@@ -414,15 +414,19 @@ def write_property_set(
     for obj, vote_entry, review_entry in zip(objects, votes, reviews, strict=True):
         number = int(obj["object"])
         prior = None
-        pack_path = None if packs is None else Path(packs) / f"object_{number}.npy"
-        use_prior = model is not None and pack_path is not None and pack_path.is_file()
-        if model is not None and not use_prior and number not in fallbacks:
-            raise ValueError(f"object_{number} has no prior pack and is not a fallback")
-        if use_prior:
-            features = np.load(pack_path, mmap_mode="r")
-            mask_path = Path(packs) / f"object_{number}_mask.npy"
-            mask = np.load(mask_path) if mask_path.is_file() else None
-            prior = prior_for_pack(model, features, mask)
+        use_prior = False
+        if packs is not None and model is not None:
+            pack_path = packs / f"object_{number}.npy"
+            if pack_path.is_file():
+                features = np.load(pack_path, mmap_mode="r")
+                mask_path = packs / f"object_{number}_mask.npy"
+                mask = np.load(mask_path) if mask_path.is_file() else None
+                prior = prior_for_pack(model, features, mask)
+                use_prior = True
+            elif number not in fallbacks:
+                raise ValueError(
+                    f"object_{number} has no prior pack and is not a fallback"
+                )
         record = property_record(
             str(obj["name"]),
             prior=prior,
@@ -500,7 +504,9 @@ def _prior_inputs(
 def _fit_fallbacks(out: Path) -> dict[int, str]:
     """Objects the prior tried and could not fit, with the recorded reason."""
     try:
-        evidence = json.loads((out / "prior_input_ledger.json").read_text(encoding="utf-8"))
+        evidence = json.loads(
+            (out / "prior_input_ledger.json").read_text(encoding="utf-8")
+        )
     except (OSError, ValueError):
         return {}
     found: dict[int, str] = {}
