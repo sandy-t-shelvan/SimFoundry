@@ -14,9 +14,9 @@ Sandeep's note "Using the MLP prior with PhysX and PhysGaussian" (10 November
   ``particle_mass = mass_kg / n_gaussians``.
 - Each frame steps PhysX, then PhysGaussian under that contact, then renders.
 
-Young's modulus and Poisson's ratio are unpublished. This module does not
-fill them in. A simulator that needs those two numbers cannot be given them
-from the note.
+Young's modulus and Poisson's ratio are unpublished in the note. This
+module does not invent them. An optional web lookup can be traced through
+``particle_params``; a missing lookup stays unresolved.
 """
 
 from __future__ import annotations
@@ -55,11 +55,17 @@ def route(props: Mapping[str, Any]) -> tuple[str, str]:
     raise ValueError(f"no route for body type {body!r} and deformability {raw!r}")
 
 
-def particle_params(props: Mapping[str, Any], n_gaussians: int) -> dict[str, Any]:
+def particle_params(
+    props: Mapping[str, Any],
+    n_gaussians: int,
+    elastic: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Per-particle mass and stiffness, with the formula and both inputs.
 
     Mass is the MLP mass divided by the number of Gaussians. Stiffness is
-    the MLP rigidity (note section 4). ``log`` is the trace a run writes.
+    the MLP rigidity (note section 4). ``elastic`` is a web lookup record.
+    When it is passed, the trace names its source and URLs. Unresolved
+    numbers stay absent. ``log`` is the trace a run writes.
     """
     count = int(n_gaussians)
     if isinstance(n_gaussians, bool) or count < 1:
@@ -79,11 +85,34 @@ def particle_params(props: Mapping[str, Any], n_gaussians: int) -> dict[str, Any
         f"rigidity: {rigidity:g}",
         f"stiffness: {stiffness:g}",
     ]
-    return {
+    result: dict[str, Any] = {
         "particle_mass": particle_mass,
         "stiffness": stiffness,
         "log": log,
     }
+    if elastic is not None:
+        youngs = elastic.get("youngs_modulus_pa")
+        poisson = elastic.get("poisson_ratio")
+        result["youngs_modulus_pa"] = youngs
+        result["poisson_ratio"] = poisson
+        result["elastic_source"] = elastic.get("source")
+        result["material_class"] = elastic.get("material_class")
+        result["urls"] = list(elastic.get("urls") or [])
+        log.append(f"source: {elastic.get('source')}")
+        log.append(f"material_class: {elastic.get('material_class')}")
+        log.append(
+            "youngs_modulus_pa: unresolved"
+            if youngs is None
+            else f"youngs_modulus_pa: {youngs:g}"
+        )
+        log.append(
+            "poisson_ratio: unresolved"
+            if poisson is None
+            else f"poisson_ratio: {poisson:g}"
+        )
+        if result["urls"]:
+            log.append("urls: " + " ".join(result["urls"]))
+    return result
 
 
 def step_frame(physx: Any, physgaussian: Any, renderer: Any) -> Any:
