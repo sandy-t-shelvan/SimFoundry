@@ -821,7 +821,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         1,
     )
     assert (
-        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate pipeline choice"
+        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate/mailbox_fresh/putcupinbowl_fresh/putmarkerincup_fresh pipeline choice"
         in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
@@ -2890,3 +2890,29 @@ def test_articulate_writes_the_proposal_before_sync(tmp_path, monkeypatch):
     finally:
         remote.close()
     assert order == ["prepare", "sync"]
+
+
+def test_a_fresh_video_pipeline_wipes_only_its_own_dir_first():
+    # KAN-52: the plain pipelines resume, so an accepted pose stage is never
+    # computed again there; "<video>_fresh" proves a pose fix from nothing.
+    from sceneagent.vast_smoke import (
+        PIPELINES,
+        REMOTE_REPO,
+        VIDEO_PIPELINES,
+        build_remote_shell,
+        fresh_lines,
+        remote_out,
+    )
+
+    for name in ("mailbox", "putcupinbowl", "putmarkerincup"):
+        fresh = name + "_fresh"
+        assert VIDEO_PIPELINES[fresh] == VIDEO_PIPELINES[name]
+        assert PIPELINES[fresh][0] == PIPELINES[name][0]
+        out = remote_out(fresh)
+        assert out == f"/workspace/sf4-smoke/{fresh}"
+        script = build_remote_shell(REMOTE_REPO, out, pipeline=fresh)
+        assert script.index(f"rm -rf {out}") < script.index(f"mkdir -p {out}")
+        plain = build_remote_shell(REMOTE_REPO, remote_out(name), pipeline=name)
+        assert "rm -rf" not in plain
+    with pytest.raises(ValueError, match="refusing to wipe"):
+        fresh_lines("mailbox_fresh", "/workspace")

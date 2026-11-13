@@ -109,6 +109,14 @@ VIDEO_PIPELINES = {
     "putcupinbowl": "docs/assets/example_videos/PutCupInBowl.mp4",
     "putmarkerincup": "docs/assets/example_videos/PutMarkerInCup.mp4",
 }
+# KAN-52: "<video>_fresh" runs the same video from nothing in its own dir,
+# which is wiped first, so no frames, database or accepted stage survive
+# from an earlier run. The plain pipelines resume, so a pose stage accepted
+# once is never computed again there and cannot prove a pose fix.
+FRESH_SUFFIX = "_fresh"
+VIDEO_PIPELINES.update(
+    {name + FRESH_SUFFIX: relative for name, relative in list(VIDEO_PIPELINES.items())}
+)
 ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
 # The setup stages run detached on the box (setsid nohup), so a dropped
 # runner does not stop them; each run waits this long, then reports what is
@@ -276,6 +284,15 @@ BIN_PIPELINES = frozenset(
 VLM_VERDICTS_RELATIVE = "sceneagent/verdicts/vlm_verdicts.json"
 # Round 2's pair verdicts travel the same way.
 ACCEPT_VERDICTS_RELATIVE = "sceneagent/verdicts/accept_verdicts.json"
+
+
+def fresh_lines(pipeline: str, out: str) -> list[str]:
+    """Wipe a fresh video pipeline's own dir before it runs; nothing for the rest."""
+    if not (pipeline.endswith(FRESH_SUFFIX) and pipeline in VIDEO_PIPELINES):
+        return []
+    if out != f"/workspace/sf4-smoke/{pipeline}":
+        raise ValueError(f"refusing to wipe {out} for {pipeline}")
+    return [f"rm -rf {shlex.quote(out)}"]
 
 
 def remote_out(pipeline: str) -> str:
@@ -1037,6 +1054,7 @@ def build_remote_shell(
         f"cd {shlex.quote(repo)}",
         f"export PYTHONPATH={shlex.quote(pythonpath)}",
         f'export PATH={shlex.quote(str(Path(REMOTE_PYTHON).parent) + ":" + REMOTE_COLMAP_BIN)}:"$PATH"',
+        *fresh_lines(pipeline, out),
         f"mkdir -p {shlex.quote(out)}",
         # Only a probe run may publish an inventory; never fetch a stale one.
         f"rm -f {shlex.quote(out + '/inventory.txt')}",

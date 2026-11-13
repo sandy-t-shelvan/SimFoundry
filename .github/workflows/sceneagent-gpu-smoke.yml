@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup, articulate]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup, articulate, mailbox_fresh, putcupinbowl_fresh, putmarkerincup_fresh]
         default: run4
   pull_request_target:
     types: [labeled]
