@@ -127,3 +127,22 @@ def test_the_report_workflow_is_runner_only_and_keeps_the_key_in_one_step():
         assert forbidden not in body
     assert "python -m sceneagent.inspector report" in text
     assert "persist-credentials: false" in text
+
+
+def test_the_summary_names_objects_the_export_left_out_and_why(tmp_path):
+    out = _run_dir(tmp_path)
+    association = json.loads((out / "association_evidence.json").read_text())
+    association["object_list"].append({"object": 0, "masks": [{"phrase": "cube"}]})
+    (out / "association_evidence.json").write_text(json.dumps(association))
+    export = json.loads((out / "export_evidence.json").read_text())
+    export["excluded_evidence"] = {"object_0": "failed ['silhouette'], silhouette 0.33"}
+    (out / "export_evidence.json").write_text(json.dumps(export))
+    summary = inspect_run.settle_summary(out)
+    assert summary["left_out"] == [
+        {"name": "object_0 (cube)", "why": "failed ['silhouette'], silhouette 0.33"}
+    ]
+    assert "missing_object" in summary["left_out_note"]
+
+
+def test_nothing_left_out_is_an_empty_list(tmp_path):
+    assert inspect_run.settle_summary(_run_dir(tmp_path))["left_out"] == []
