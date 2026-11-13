@@ -117,6 +117,14 @@ FRESH_SUFFIX = "_fresh"
 VIDEO_PIPELINES.update(
     {name + FRESH_SUFFIX: relative for name, relative in list(VIDEO_PIPELINES.items())}
 )
+# KAN-52: the camera-pose stage alone (sceneagent.run4, the same code the video
+# pipelines pose with) on videos the pose fix was not diagnosed on. Each runs
+# in its own dir, wiped first. No object prompt is needed: nothing after poses.
+POSE_ONLY_PIPELINES = {
+    "poses_fruits": "docs/assets/example_videos/Fruits.mp4",
+    "poses_throwawaytrash": "docs/assets/example_videos/ThrowAwayTrash.mp4",
+    "poses_throwawaytrashcousin": "docs/assets/example_videos/ThrowAwayTrashCousin.mp4",
+}
 ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
 # The setup stages run detached on the box (setsid nohup), so a dropped
 # runner does not stop them; each run waits this long, then reports what is
@@ -256,6 +264,10 @@ PIPELINES = {
         )
         for name, relative in VIDEO_PIPELINES.items()
     },
+    **{
+        name: (REQUIRED_LEDGER_ITEMS, relative)
+        for name, relative in POSE_ONLY_PIPELINES.items()
+    },
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
@@ -288,7 +300,8 @@ ACCEPT_VERDICTS_RELATIVE = "sceneagent/verdicts/accept_verdicts.json"
 
 def fresh_lines(pipeline: str, out: str) -> list[str]:
     """Wipe a fresh video pipeline's own dir before it runs; nothing for the rest."""
-    if not (pipeline.endswith(FRESH_SUFFIX) and pipeline in VIDEO_PIPELINES):
+    fresh_video = pipeline.endswith(FRESH_SUFFIX) and pipeline in VIDEO_PIPELINES
+    if not (fresh_video or pipeline in POSE_ONLY_PIPELINES):
         return []
     if out != f"/workspace/sf4-smoke/{pipeline}":
         raise ValueError(f"refusing to wipe {out} for {pipeline}")
@@ -305,7 +318,7 @@ def remote_out(pipeline: str) -> str:
         return "/workspace/sf4-smoke/articulate"
     if pipeline == "mailbox":
         return REMOTE_MAILBOX_OUT
-    if pipeline in VIDEO_PIPELINES:
+    if pipeline in VIDEO_PIPELINES or pipeline in POSE_ONLY_PIPELINES:
         return f"/workspace/sf4-smoke/{pipeline}"
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
 
@@ -915,6 +928,15 @@ def build_remote_command(
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline == "setup":
         return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
+    if pipeline in POSE_ONLY_PIPELINES:
+        return [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.run4",
+            f"{repo}/{POSE_ONLY_PIPELINES[pipeline]}",
+            "--out",
+            out,
+        ]
     if pipeline in VIDEO_PIPELINES:
         return [
             REMOTE_PYTHON,
@@ -1225,7 +1247,13 @@ def rsync_invocations(
                 "-e",
                 ssh_e,
                 FRUITS_RELATIVE,
-                *[m for m in VIDEO_PIPELINES.values() if (checkout / m).is_file()],
+                *[
+                    m
+                    for m in sorted(
+                        {*VIDEO_PIPELINES.values(), *POSE_ONLY_PIPELINES.values()}
+                    )
+                    if (checkout / m).is_file()
+                ],
                 remote,
             ],
             checkout,
@@ -1262,7 +1290,9 @@ def iter_shipped_files(checkout: Path) -> list[Path]:
             if _ship_excluded(relative):
                 continue
             shipped.append(path)
-    for relative in (FRUITS_RELATIVE, *VIDEO_PIPELINES.values()):
+    for relative in sorted(
+        {FRUITS_RELATIVE, *VIDEO_PIPELINES.values(), *POSE_ONLY_PIPELINES.values()}
+    ):
         video = root / relative
         if video.is_file() and not _ship_excluded(relative):
             shipped.append(video)
