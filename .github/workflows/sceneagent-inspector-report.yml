@@ -1,0 +1,74 @@
+# SF-22 (KAN-23) inspector report: Gemini writes the fix report for one
+# finished sceneagent-gpu-smoke video run.
+#
+# Runner only, like sceneagent-vlm-verdict. It never connects to the GPU box
+# and holds no Vast or SSH secret; the one secret it reads is GEMINI_API_KEY,
+# in the one step that calls Gemini. It reads inspection_views.zip and
+# settle_summary.json from the gpu-smoke run's artifact (the inspect stage
+# draws them on the box) and uploads inspection/isaac_lab.json, whose
+# fix_report_from_model is KAN-52 dc4's field.
+name: sceneagent-inspector-report
+
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_run:
+        description: sceneagent-gpu-smoke run id whose inspection views are reported on
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inspector_report:
+    name: inspector-report
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check the run id is a number
+        env:
+          SMOKE_RUN: ${{ inputs.smoke_run }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$SMOKE_RUN" | grep -Eq '^[0-9]{1,20}$'
+          echo "reporting on inspection views from run ${SMOKE_RUN}"
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # inspector imports numpy at module level (via similarity_icp); the
+      # report path needs nothing else (checked in a clean venv).
+      - name: Install numpy
+        run: python -m pip install --quiet "numpy==2.4.6"  # as requirements-sceneagent-ci.txt
+
+      - name: Download the inspection views
+        uses: actions/download-artifact@v4
+        with:
+          name: sceneagent-fruits-smoke
+          run-id: ${{ inputs.smoke_run }}
+          github-token: ${{ github.token }}
+          path: inspect-input
+
+      - name: Gemini fix report
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SMOKE_RUN: ${{ inputs.smoke_run }}
+        run: |
+          set -euo pipefail
+          python -m sceneagent.inspector report --views inspect-input/inspection_views.zip --settle inspect-input/settle_summary.json --out inspect-out/isaac_lab.json --source-run "$SMOKE_RUN"
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sceneagent-inspector-report
+          retention-days: 14
+          if-no-files-found: error
+          path: inspect-out/

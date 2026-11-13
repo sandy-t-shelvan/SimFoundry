@@ -208,6 +208,7 @@ def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
         "physics",
         "export",
         "settle",
+        "inspect",
     ]
     record = json.loads((out / video_run.RECORD).read_text())
     assert record["complete"] and set(record["stages"]) == set(calls)
@@ -275,11 +276,12 @@ def test_the_mailbox_pipeline_has_its_own_dir_and_ships_the_video():
         "--out",
         REMOTE_MAILBOX_OUT,
     ]
-    assert PIPELINES["mailbox"][0][-4:] == (
+    assert PIPELINES["mailbox"][0][-5:] == (
         bin_place.ICP_ITEM,
         "§3.4 properties",
         "USD physics export",
         "Isaac Lab settle",
+        "inspection views",
     )
     assert bin_place.SCORE_ITEM not in PIPELINES["mailbox"][0]
     for name in (video_run.RECORD, "scene.json"):
@@ -301,5 +303,5 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
         argv = build_remote_command("/w/repo", out, pipeline=name)
         assert argv[-3:] == [f"/w/repo/{relative}", "--out", out]
         assert Path(relative).stem in video_run.PROMPTS
-        assert PIPELINES[name][0][-1] == "Isaac Lab settle"
+        assert PIPELINES[name][0][-1] == "inspection views"
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
