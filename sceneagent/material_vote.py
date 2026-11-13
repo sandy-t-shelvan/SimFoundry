@@ -24,7 +24,7 @@ The three sources are the physics prior, the VLM, and keywords.
   number is a SimFoundry choice, not published: the paper says keyword
   priors use a fixed weight and does not give the number.
 
-The material-vote VLM is ``GEMINI_FLASH_MODEL_ID`` (``gemini-3.8-flash``).
+The material-vote VLM is :func:`sceneagent.gemini_client.active_model_id`.
 That model id is our configuration. The PDF's Gemini 2.5 Flash sentence is
 the section 3.8 Meshy route, not this vote. The key is read only from
 ``os.environ['GEMINI_API_KEY']``.
@@ -42,7 +42,7 @@ from typing import Any
 
 import numpy as np
 
-from sceneagent.gemini_client import GeminiClient, redact
+from sceneagent.gemini_client import GeminiClient, active_model_id, redact
 from sceneagent.mlp.apply import decode_mean, vote_loaded_prior
 from sceneagent.mlp.contract import PRIOR_DIM
 from sceneagent.mlp.prior import PhysicsPrior
@@ -55,10 +55,6 @@ from sceneagent.taxonomy import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Our configuration for the material vote. The PDF's Gemini 2.5 Flash
-# sentence is the section 3.8 Meshy route, not this vote.
-GEMINI_FLASH_MODEL_ID = "gemini-3.8-flash"
 
 
 class MissingGeminiKeyError(Exception):
@@ -143,7 +139,7 @@ def parse_vlm_vote(text: str) -> dict[str, Any]:
 
 
 class GeminiFlashMaterialClient:
-    """Crop vote against ``gemini-3.8-flash``.
+    """Crop vote against :func:`active_model_id`.
 
     Construct this only after ``gemini_api_key_from_environ`` has returned.
     ``repr`` and ``str`` name the model and do not include the key.
@@ -157,7 +153,7 @@ class GeminiFlashMaterialClient:
         self._http = GeminiClient(api_key)
 
     def __repr__(self) -> str:
-        return f"GeminiFlashMaterialClient(model_id={GEMINI_FLASH_MODEL_ID!r})"
+        return f"GeminiFlashMaterialClient(model_id={active_model_id()!r})"
 
     def __str__(self) -> str:
         return repr(self)
@@ -165,10 +161,11 @@ class GeminiFlashMaterialClient:
     def classify_crops(self, crops: Sequence[bytes]) -> dict[str, Any]:
         """Return ``class`` and ``confidence`` for these crops. One HTTP call."""
 
+        model = active_model_id()
         try:
             reply = self._http.generate(
                 vlm_vote_prompt(),
-                GEMINI_FLASH_MODEL_ID,
+                model,
                 images=tuple(crops),
             )
         except Exception as exc:
@@ -176,9 +173,7 @@ class GeminiFlashMaterialClient:
         status = reply.get("http_status")
         if status != 200:
             detail = redact(str(reply.get("error_body") or ""), self._http.api_key)
-            raise MaterialVlmError(
-                f"{GEMINI_FLASH_MODEL_ID} returned HTTP {status}: {detail}"
-            )
+            raise MaterialVlmError(f"{model} returned HTTP {status}: {detail}")
         return parse_vlm_vote(str(reply.get("text") or ""))
 
     def _scrubbed(self, exc: BaseException) -> MaterialVlmError:
@@ -258,7 +253,7 @@ def run_material_vote(
         "section": "3.4",
         "equation": "2",
         "step": "material_vote",
-        "model_id": GEMINI_FLASH_MODEL_ID,
+        "model_id": active_model_id(),
         "vlm_calls": counted.calls,
         "objects": [str(obj["name"]) for obj in objects],
     }

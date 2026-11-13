@@ -143,9 +143,30 @@ def test_active_model_id_follows_one_constant(monkeypatch):
     from sceneagent.gemini_client import DEFAULT_MODEL_ID, active_model_id
 
     monkeypatch.delenv("GEMINI_MODEL_ID", raising=False)
-    assert active_model_id() == DEFAULT_MODEL_ID
+    assert active_model_id() == DEFAULT_MODEL_ID == "gemini-3.8-flash"
     monkeypatch.setenv("GEMINI_MODEL_ID", "override-id")
     assert active_model_id() == "override-id"
+
+
+def test_a_failed_call_is_unresolved_and_does_not_raise():
+    class Down:
+        def generate_images(self, prompt, images=(), search=False):
+            return {"text": "", "http_status": 503, "model_id": "stub-model"}
+
+    record = propose_articulation(_mailbox(), FRAMES, Down())
+    obj = record["objects"][0]
+    assert obj["status"] == "unresolved"
+    assert obj["joints"] == []
+    assert obj["http_status"] == 503
+    assert obj["attempts"][0]["error"] == "HTTP 503"
+
+    class TimingOut:
+        def generate_images(self, prompt, images=(), search=False):
+            raise TimeoutError("timed out")
+
+    record = propose_articulation(_mailbox(), FRAMES, TimingOut())
+    assert record["objects"][0]["status"] == "unresolved"
+    assert record["objects"][0]["http_status"] == 0
 
 
 def test_committed_mailbox_frames_and_objects_can_be_proposed():

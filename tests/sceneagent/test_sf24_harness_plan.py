@@ -12,8 +12,8 @@ import pytest
 
 from sceneagent.agent_loop import ALLOWED_STEPS, default_plan, harness_status
 from sceneagent.fruits_agent import plan_with_client, run_fruits
+from sceneagent.gemini_client import active_model_id
 from sceneagent.harness import (
-    GEMINI_MODEL_ID,
     GeminiHarness,
     HarnessCallError,
     MissingGeminiApiKeyError,
@@ -48,13 +48,12 @@ MODEL_ORDER = [
 class _Harness:
     """Stand-in for the Gemini adapter. ``complete`` does not touch the network."""
 
-    name = GEMINI_MODEL_ID
-    model_id = GEMINI_MODEL_ID
-
     def __init__(self, text):
         self.text = text
         self.call_count = 0
         self.prompts = []
+        self.name = active_model_id()
+        self.model_id = self.name
 
     def complete(self, prompt):
         self.call_count += 1
@@ -65,7 +64,10 @@ class _Harness:
 def _reply(steps, procedures=None):
     bodies = procedures
     if bodies is None:
-        bodies = {step: f"Procedure for {step}. Later conversions read this file." for step in steps}
+        bodies = {
+            step: f"Procedure for {step}. Later conversions read this file."
+            for step in steps
+        }
     return json.dumps({"steps": steps, "procedures": bodies})
 
 
@@ -112,7 +114,7 @@ def test_model_chosen_order_is_written_to_plan_json(tmp_path):
     eligible = counts_toward_dc2(plan)
     assert eligible["counts"] is True
     assert "not the live" in eligible["reason"]
-    assert plan["harness"] == GEMINI_MODEL_ID
+    assert plan["harness"] == active_model_id()
     assert calls == MODEL_ORDER
     assert harness.call_count == 1
     ledger = json.loads(_read(tmp_path / "ledger.json"))
@@ -128,7 +130,7 @@ def test_transcript_artifact_exists(tmp_path):
     path = tmp_path / "transcript.json"
     assert path.is_file()
     body = json.loads(_read(path))
-    assert body["harness"] == GEMINI_MODEL_ID
+    assert body["harness"] == active_model_id()
     assert body["call_count"] == 1
     assert "sam3d" in body["reply"]
     assert body["reply"].find("sam3d") < body["reply"].find("material_vote")
@@ -324,7 +326,9 @@ def test_google_api_key_is_not_a_substitute(monkeypatch):
     assert called == []
 
 
-def test_fake_key_is_absent_from_logs_exceptions_and_artifacts(tmp_path, monkeypatch, caplog, capsys):
+def test_fake_key_is_absent_from_logs_exceptions_and_artifacts(
+    tmp_path, monkeypatch, caplog, capsys
+):
     monkeypatch.setenv("GEMINI_API_KEY", SECRET)
     caplog.set_level(logging.DEBUG)
 

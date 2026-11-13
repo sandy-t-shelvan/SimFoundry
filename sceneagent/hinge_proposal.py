@@ -14,6 +14,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from sceneagent.gemini_client import call_failed, safe_generate_images
 from sceneagent.mailbox_hinge import hinge_from_reply, parts_manifest
 
 SOURCE = "gemini_proposed"
@@ -67,17 +68,26 @@ def prompt_for(
 
 def _one_object(obj, parts, frames, client) -> dict[str, Any]:
     name = str(obj.get("name"))
-    reply = client.generate_images(prompt_for(name, parts), frames)
-    first = str(reply.get("text") or "")
+    reply = safe_generate_images(client, prompt_for(name, parts), frames)
     model_id = reply.get("model_id")
+    failure = call_failed(reply)
+    if failure is not None:
+        return _unresolved(name, model_id, reply, failure)
+    first = str(reply.get("text") or "")
     joints, error = _checked(name, parts, first)
-    attempts = [{"model_reply": first, "error": error, "model_id": model_id}]
+    attempts = [_attempt(first, error, model_id, reply)]
     if error is not None:
-        reply = client.generate_images(prompt_for(name, parts, rejected=error), frames)
-        second = str(reply.get("text") or "")
+        reply = safe_generate_images(
+            client, prompt_for(name, parts, rejected=error), frames
+        )
         model_id = reply.get("model_id")
+        failure = call_failed(reply)
+        if failure is not None:
+            attempts.append(_attempt("", failure, model_id, reply))
+            return _unresolved(name, model_id, reply, failure, attempts)
+        second = str(reply.get("text") or "")
         joints, error = _checked(name, parts, second)
-        attempts.append({"model_reply": second, "error": error, "model_id": model_id})
+        attempts.append(_attempt(second, error, model_id, reply))
     status = "ok" if error is None else "unresolved"
     return {
         "object": name,
@@ -86,6 +96,29 @@ def _one_object(obj, parts, frames, client) -> dict[str, Any]:
         "joints": joints if error is None else [],
         "attempts": attempts,
         "model_id": model_id,
+    }
+
+
+def _unresolved(name, model_id, reply, failure, attempts=None):
+    if attempts is None:
+        attempts = [_attempt("", failure, model_id, reply)]
+    return {
+        "object": name,
+        "status": "unresolved",
+        "source": SOURCE,
+        "joints": [],
+        "attempts": attempts,
+        "model_id": model_id,
+        "http_status": reply.get("http_status"),
+    }
+
+
+def _attempt(text, error, model_id, reply):
+    return {
+        "model_reply": text,
+        "error": error,
+        "model_id": model_id,
+        "http_status": reply.get("http_status"),
     }
 
 

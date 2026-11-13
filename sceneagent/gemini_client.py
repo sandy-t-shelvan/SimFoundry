@@ -6,25 +6,36 @@ image bytes and, when asked, Google Search grounding. URLs come only from
 grounding metadata. The key is read from ``GEMINI_API_KEY`` and is not put
 in a record or an error.
 
-The paper names Gemini 2.5 Flash. ``generate_flash`` tries that id first. A
-404 is stored, then a Flash id the key's model list actually contains is
-used. The substitute is not labeled 2.5.
+``generate_flash`` and ``generate_images`` call :func:`active_model_id`.
+``GEMINI_MODEL_ID`` overrides that id. A 404 tries one later Flash id from
+:data:`FALLBACK_MODEL_IDS` or from the error text. HTTP 429, 503, and
+timeouts are retried a few times and then returned, not raised.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
 
-PAPER_MODEL_ID = "gemini-2.5-flash"
-# The shared helper uses this id. GEMINI_MODEL_ID overrides it. The paper id
-# above stays for generate_flash, which still records a 404 and falls back.
+# The one id new calls use. GEMINI_MODEL_ID overrides it.
 DEFAULT_MODEL_ID = "gemini-3.8-flash"
+# Used only when the active id returns HTTP 404. The caller excludes the id
+# that just failed, so this list is not a second default.
+FALLBACK_MODEL_IDS = (
+    DEFAULT_MODEL_ID,
+    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
+)
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
+RETRY_ATTEMPTS = 3
+RETRY_STATUS = frozenset({429, 503})
+# Wait before the second and third tries.
+RETRY_BACKOFF_SECONDS = (1.0, 2.0)
 
 
 def redact(text, secret):
@@ -33,7 +44,11 @@ def redact(text, secret):
     return str(text).replace(secret, "[redacted]")
 
 
-def _request(url, key, payload=None):
+def _pause(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _request_once(url, key, payload=None):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -48,6 +63,62 @@ def _request(url, key, payload=None):
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         return exc.code, raw
+
+
+def _request(url, key, payload=None):
+    """POST or GET. Retry 429, 503, and timeouts. Other errors still raise.
+
+    After the last try a retryable failure is returned: HTTP status and body,
+    or ``(0, "timeout")``. Callers record that. They do not see ``TimeoutError``.
+    """
+    last_status = 0
+    last_raw = ""
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            status, raw = _request_once(url, key, payload)
+        except TimeoutError:
+            last_status, last_raw = 0, "timeout"
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, TimeoutError):
+                last_status, last_raw = 0, "timeout"
+            else:
+                raise
+        else:
+            if status not in RETRY_STATUS:
+                return status, raw
+            last_status, last_raw = status, raw
+        if attempt + 1 < RETRY_ATTEMPTS:
+            _pause(RETRY_BACKOFF_SECONDS[attempt])
+    return last_status, last_raw
+
+
+def call_failed(reply) -> str | None:
+    """A short reason when ``reply`` is not a usable 200. Stubs omit status."""
+    if not isinstance(reply, dict):
+        return "empty reply"
+    status = reply.get("http_status")
+    if status in (None, 200):
+        return None
+    if status == 0:
+        return "timeout"
+    return f"HTTP {status}"
+
+
+def safe_generate_images(client, prompt, images=()):
+    """``generate_images`` that returns a failed reply instead of raising."""
+    try:
+        reply = client.generate_images(prompt, images)
+    except (TimeoutError, OSError):
+        return {
+            "text": "",
+            "urls": [],
+            "http_status": 0,
+            "model_id": active_model_id(),
+        }
+    if not isinstance(reply, dict):
+        return {"text": "", "urls": [], "http_status": 0, "model_id": None}
+    return reply
 
 
 def _candidate_text(raw):
@@ -127,26 +198,36 @@ class GeminiClient:
         return names
 
     def generate_flash(self, prompt, image_bytes=None):
-        """Try the paper id, then one listed Flash id if that call is not 200."""
-        first = self.generate(prompt, PAPER_MODEL_ID, image_bytes=image_bytes)
+        """Call :func:`active_model_id`. On HTTP 404, try one other Flash id.
+
+        429, 503, and timeouts are already retried inside ``_request``. Those
+        are returned as the first result. A different model is only for a 404.
+        ``paper_model_id`` is the id that was asked for first. Older readers
+        still look for that key.
+        """
+        model = active_model_id()
+        first = self.generate(prompt, model, image_bytes=image_bytes)
+        first["paper_model_id"] = model
         if first["http_status"] == 200 and first["text"]:
-            first["paper_model_id"] = PAPER_MODEL_ID
             first["used_paper_model"] = True
+            return first
+        if first["http_status"] != 404:
+            first["used_paper_model"] = False
+            first["fallback_model_id"] = None
             return first
         listed = self.list_model_ids()
         fallback = choose_flash_model(
             first.get("error_body") or "",
             listed,
-            exclude=(PAPER_MODEL_ID,),
+            exclude=(model,),
         )
         if not fallback:
-            first["paper_model_id"] = PAPER_MODEL_ID
             first["used_paper_model"] = False
             first["fallback_model_id"] = None
             return first
         fallback_id = fallback.split("/", 1)[-1]
         second = self.generate(prompt, fallback_id, image_bytes=image_bytes)
-        second["paper_model_id"] = PAPER_MODEL_ID
+        second["paper_model_id"] = model
         second["paper_http_status"] = first["http_status"]
         second["paper_error_body"] = first.get("error_body") or ""
         second["fallback_model_id"] = fallback_id
@@ -205,7 +286,7 @@ class GeminiClient:
 
 
 def active_model_id() -> str:
-    """The model ``generate_images`` calls. ``GEMINI_MODEL_ID`` wins when set."""
+    """The id every Gemini call uses. ``GEMINI_MODEL_ID`` wins when set."""
     override = os.environ.get("GEMINI_MODEL_ID", "")
     if isinstance(override, str) and override.strip():
         return override.strip()
@@ -251,11 +332,12 @@ def grounding_urls(payload):
     return found
 
 
-def choose_flash_model(error_body, model_names, exclude=(PAPER_MODEL_ID,)):
+def choose_flash_model(error_body, model_names, exclude=()):
     """Pick a Flash id the API lists, other than the id that just failed.
 
-    The 404 text names the unavailable model first, then the replacement.
-    The replacement is used. It is not labeled as the paper model.
+    A "no longer available" 404 names the dead id first, then the replacement.
+    That first id is skipped. Otherwise a name in the error wins, then
+    :data:`FALLBACK_MODEL_IDS`, then any other listed text Flash id.
     """
     available = set(model_names)
     excluded = set()
@@ -278,6 +360,12 @@ def choose_flash_model(error_body, model_names, exclude=(PAPER_MODEL_ID,)):
             end += 1
         named.append(error_body[start:end])
         cursor = end
+    if named and "no longer available" in (error_body or "").lower():
+        dead = named[0]
+        excluded.add(dead)
+        excluded.add(dead.split("/")[-1])
+        if not str(dead).startswith("models/"):
+            excluded.add("models/" + str(dead))
 
     def usable(name):
         short = name.split("/")[-1]
@@ -290,12 +378,8 @@ def choose_flash_model(error_body, model_names, exclude=(PAPER_MODEL_ID,)):
     for name in named:
         if usable(name):
             return name if name in available else "models/" + name.split("/")[-1]
-    preferred = (
-        "models/gemini-3.8-flash",
-        "models/gemini-flash-latest",
-        "models/gemini-2.5-flash-lite",
-    )
-    for name in preferred:
+    for short in FALLBACK_MODEL_IDS:
+        name = short if str(short).startswith("models/") else "models/" + str(short)
         if usable(name):
             return name
     for name in model_names:

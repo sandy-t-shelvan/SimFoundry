@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from sceneagent.agent_loop import append_step, parse_material_class
-from sceneagent.gemini_client import PAPER_MODEL_ID
+from sceneagent.gemini_client import active_model_id
 from sceneagent.physics import UNKNOWN_WEIGHT_SCALE, vote_material
 from sceneagent.taxonomy import (
     DEFAULT_KEYWORD_WEIGHT,
@@ -204,7 +204,7 @@ def request_audit(object_name, provisional_class, sources, api_key=None, live=Fa
         "text": "",
         "decision": "pending",
         "historical": [dict(item) for item in HISTORICAL_VLM],
-        "paper_model_id": PAPER_MODEL_ID,
+        "paper_model_id": active_model_id(),
     }
     if not live or not api_key:
         return body
@@ -347,8 +347,9 @@ def request_material_properties(
 ):
     """Ask Gemini for class, friction, mass, and density. Default is not to call.
 
-    A 404 on gemini-2.5-flash stays the paper attempt. gemini-3.8-flash, when
-    chosen by the client, is recorded as the fallback and is not labeled 2.5.
+    A live reply records the id :func:`sceneagent.gemini_client.active_model_id`
+    returned. A 404 on that id may name a later Flash id. It is not labeled as
+    a different model.
     """
     prompt = material_properties_prompt(object_name, notes)
     body = {
@@ -356,7 +357,7 @@ def request_material_properties(
         "called": False,
         "model_id": None,
         "http_status": None,
-        "paper_model_id": PAPER_MODEL_ID,
+        "paper_model_id": active_model_id(),
         "used_paper_model": False,
         "model_role": None,
         "fallback_model_id": None,
