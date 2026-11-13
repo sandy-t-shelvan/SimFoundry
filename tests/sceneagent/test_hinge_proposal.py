@@ -181,6 +181,16 @@ def test_a_null_pivot_without_a_shared_face_is_unresolved():
     assert len(stub.images) == 2
 
 
+def test_the_sweep_builds_a_simulation_context():
+    from pathlib import Path
+
+    import sceneagent.articulate_drive as drive
+
+    text = Path(drive.__file__).read_text(encoding="utf-8")
+    assert "SimulationContext.instance" not in text
+    assert "SimulationContext(sim_cfg)" in text
+
+
 def test_the_png_encoder_loads_by_file_path():
     from sceneagent.articulate_drive import _load_png_bytes
 

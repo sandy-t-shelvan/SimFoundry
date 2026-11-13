@@ -56,6 +56,9 @@ def main() -> None:
     out = Path(sys.argv[sys.argv.index("--out") + 1])
     proposal_path = Path(sys.argv[sys.argv.index("--proposal") + 1])
     out.mkdir(parents=True, exist_ok=True)
+    # A crashed rerun must not leave the last ledger to be fetched.
+    for name in ("ledger.json", "plan.json", ZIP_NAME):
+        (out / name).unlink(missing_ok=True)
     note = partsam_note()
     (out / "partsam_note.json").write_text(
         json.dumps(note, indent=2) + "\n", encoding="utf-8"
@@ -90,10 +93,15 @@ def _render(joint: dict, out: Path) -> list[Path]:
     args.enable_cameras = True
     import isaaclab.sim as sim_utils
 
-    saved: list[Path] = []
-    with launch_simulation(sim_utils.SimulationCfg(dt=1.0 / 60.0), args):
-        saved = _sweep(joint, out)
-        _finish(out, "accept", f"{len(saved)} frames", saved)
+    sim_cfg = sim_utils.SimulationCfg(dt=1.0 / 60.0)
+    with launch_simulation(sim_cfg, args):
+        try:
+            saved = _sweep(joint, out, sim_cfg)
+            _finish(out, "accept", f"{len(saved)} frames", saved)
+        except Exception:
+            _finish(
+                out, "reject", "render failed: " + traceback.format_exc()[-800:], []
+            )
         sys.stdout.flush()
         os._exit(0)
     return []
@@ -116,15 +124,20 @@ def _load_png_bytes():
     return module.png_bytes
 
 
-def _sweep(joint: dict, out: Path) -> list[Path]:
+def _sweep(joint: dict, out: Path, sim_cfg: object) -> list[Path]:
+    import math
+
     import isaaclab.sim as sim_utils
     import torch
     from isaaclab.sensors.camera import Camera, CameraCfg
     from isaaclab_physx.renderers import IsaacRtxRendererCfg
+    from pxr import Gf, UsdGeom  # type: ignore[import-not-found]
 
     png_bytes = _load_png_bytes()
 
-    sim = sim_utils.SimulationContext.instance()
+    # .instance() is None until a context is built. The headless check
+    # constructs one; spawning into a missing stage raises GetPrimAtPath.
+    sim = sim_utils.SimulationContext(sim_cfg)
     ground = sim_utils.GroundPlaneCfg()
     ground.func("/World/ground", ground)
     light = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.8, 0.8, 0.8))
@@ -132,7 +145,7 @@ def _sweep(joint: dict, out: Path) -> list[Path]:
     body = sim_utils.CuboidCfg(size=(0.2, 0.2, 0.2))
     body.func("/World/body", body, translation=(0.0, 0.0, 0.1))
     lid = sim_utils.CuboidCfg(size=(0.2, 0.2, 0.05))
-    lid.func("/World/lid", lid, translation=(0.0, 0.0, 0.22))
+    lid.func("/World/lid", lid, translation=(0.0, 0.0, 0.225))
     camera = Camera(
         CameraCfg(
             prim_path="/World/Camera",
@@ -154,11 +167,15 @@ def _sweep(joint: dict, out: Path) -> list[Path]:
         torch.tensor([[0.8, 0.6, 0.45]], device=sim.device),
         torch.tensor([[0.0, 0.0, 0.15]], device=sim.device),
     )
+    lid_prim = UsdGeom.Xformable(sim.stage.GetPrimAtPath("/World/lid"))
     lower = float(joint.get("lower") or 0.0)
     upper = float(joint.get("upper") or lower)
     samples = angles(lower, upper)
     paths = []
-    for index, _angle in enumerate(samples):
+    for index, angle in enumerate(samples):
+        lid_prim.ClearXformOpOrder()
+        lid_prim.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.0, 0.225))
+        lid_prim.AddRotateXOp().Set(math.degrees(angle))
         sim.step()
         camera.update(sim.get_physics_dt())
         frame = camera.data.output["rgb"].torch[0, ..., :3]
