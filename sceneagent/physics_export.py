@@ -23,7 +23,8 @@ Rules that are ours, not the paper's, are named here so a reader can find them:
   PhysX cannot simulate a triangle mesh on a dynamic body, so a dynamic
   ``triangle mesh`` becomes ``convexDecomposition``, and the substitution is
   recorded. A ``cylinder`` or ``capsule`` becomes ``convexHull`` (no mesh
-  approximation fits them exactly).
+  approximation fits them exactly). A dynamic body whose record names no
+  collider gets ``convexDecomposition`` (``DEFAULT_DYNAMIC_APPROXIMATION``).
 - **Units.** The stage is in metres and kilograms (``metersPerUnit = 1``,
   ``kilogramsPerUnit = 1``, Z up), so mass is kg and density kg/m^3. The
   caller gives ``metres_per_unit`` for the reconstruction frame and an
@@ -51,6 +52,13 @@ RIGID_BODY_TYPES = ("dynamic rigid", "static rigid", "kinematic")
 PHYSGAUSSIAN_BODY_TYPES = ("soft deformable", "cloth shell", "fluid or granular")
 DEFAULT_BODY_TYPE = "dynamic rigid"
 DEFAULT_COLLISION = "convex hull"
+# Ours: a dynamic body with no collider in its record is decomposed, not
+# hulled. A SAM 3D mesh's uneven bottom gives its convex hull a sloped base:
+# the Mailbox body landed tilted 8.8 degrees and rocked at 0.056 m/s, where
+# the same body with convexDecomposition was at 0.0015 m/s (run
+# 43342519758, side by side; 32 solver iterations did not help). A record
+# that names a collider keeps it.
+DEFAULT_DYNAMIC_APPROXIMATION = "convexDecomposition"
 # collision primitive -> UsdPhysics.MeshCollisionAPI physics:approximation
 APPROXIMATION = {
     "box": "boundingCube",
@@ -134,6 +142,8 @@ def resolve_physics(properties: Mapping[str, Any]) -> dict[str, Any]:
         if collision not in APPROXIMATION:
             raise ValueError(f"collider {collision!r} cannot be a PhysX rigid collider")
         approximation = APPROXIMATION[collision]
+        if "collision_primitive" in defaults and body == "dynamic rigid":
+            approximation = DEFAULT_DYNAMIC_APPROXIMATION
         if approximation == "none" and body == "dynamic rigid":
             approximation = "convexDecomposition"
             notes.append(

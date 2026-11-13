@@ -48,14 +48,10 @@ WINDOW_S = 0.5
 # rocked at 0.33 rad/s, 0.6 mm net in 0.5 s). Only the scene as exported is
 # judged. physics_export writes one export/scene_settle_<name>.usda for each.
 VARIANTS: dict[str, dict] = {
-    # The rocking body already had the default collider, a convex hull.
-    "decomposition": {"approximation": "convexDecomposition"},
-    "iters": {"solver_position_iterations": 32, "solver_velocity_iterations": 4},
-    "decomposition_iters": {
-        "approximation": "convexDecomposition",
-        "solver_position_iterations": 32,
-        "solver_velocity_iterations": 4,
-    },
+    # The old default collider, kept beside the scene so a regression shows:
+    # it rocked the Mailbox body at 0.056 m/s where convexDecomposition held
+    # it at 0.0015 m/s (run 43342519758).
+    "hull": {"approximation": "convexHull"},
 }
 VARIANT_SPACING_M = 3.0
 ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"

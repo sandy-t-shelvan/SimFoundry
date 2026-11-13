@@ -119,21 +119,10 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
         assert (tmp_path / "export" / name).is_file()
     settle = (tmp_path / "export" / "scene_settle.usda").read_text()
     assert "PhysicsScene" not in settle and 'def Cube "ground"' not in settle
-    assert "PhysxRigidBodyAPI" not in settle
-    assert 'physics:approximation = "convexHull"' in settle  # the default
-    # The diagnostic copies, one change each.
-    decomposition = (
-        tmp_path / "export" / "scene_settle_decomposition.usda"
-    ).read_text()
-    assert 'physics:approximation = "convexDecomposition"' in decomposition
-    assert "solverPositionIterationCount" not in decomposition
-    iters = (tmp_path / "export" / "scene_settle_iters.usda").read_text()
-    assert '"PhysxRigidBodyAPI"' in iters
-    assert "int physxRigidBody:solverPositionIterationCount = 32" in iters
-    assert "int physxRigidBody:solverVelocityIterationCount = 4" in iters
-    assert 'physics:approximation = "convexHull"' in iters
-    both = (tmp_path / "export" / "scene_settle_decomposition_iters.usda").read_text()
-    assert "convexDecomposition" in both and "solverPositionIterationCount = 32" in both
+    assert 'physics:approximation = "convexDecomposition"' in settle  # the default
+    # The old default, settled beside it so a regression shows.
+    hull = (tmp_path / "export" / "scene_settle_hull.usda").read_text()
+    assert 'physics:approximation = "convexHull"' in hull
     evidence = json.loads((tmp_path / "export_evidence.json").read_text())
     # Resting on the table, which is now z = 0, in metres (0.5 m per unit).
     assert abs(evidence["lowest_point_z_m"]["object_0"]) < 0.01
