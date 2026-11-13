@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from typing import Any, Protocol
 
-from sceneagent.gemini_client import PAPER_MODEL_ID, GeminiClient
+from sceneagent.gemini_client import GeminiClient
 
 
 class MissingGeminiKeyError(Exception):
@@ -45,17 +45,24 @@ class _UntilMerge:
     def generate_images(self, prompt, images=(), search=False):
         if search:
             raise RuntimeError("search grounding arrives with the shared helper")
-        reply = self._inner.generate(
-            prompt,
-            PAPER_MODEL_ID,
-            images=tuple(images or ()),
-            mime_type="image/png",
+        blobs = tuple(images or ())
+        # Model choice stays on the client. This module does not name one.
+        reply = self._inner.generate_flash(
+            prompt, image_bytes=blobs[0] if blobs else None
         )
+        if len(blobs) > 1 and reply.get("http_status") == 200 and reply.get("model_id"):
+            reply = self._inner.generate(
+                prompt,
+                reply["model_id"],
+                images=blobs,
+                mime_type="image/png",
+            )
         return {
             "text": reply.get("text") or "",
-            "urls": [],
+            "urls": list(reply.get("urls") or []),
             "http_status": reply.get("http_status"),
-            "model_id": reply.get("model_id") or PAPER_MODEL_ID,
+            "model_id": reply.get("model_id"),
+            "error_body": reply.get("error_body") or "",
         }
 
 
