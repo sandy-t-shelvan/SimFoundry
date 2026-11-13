@@ -172,27 +172,68 @@ def test_until_the_helper_lands_generate_images_matches_its_dict(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "super-secret-value")
     seen = {}
 
-    def fake_generate(
-        self, prompt, model_id, image_bytes=None, mime_type="image/jpeg", images=()
-    ):
-        seen["images"] = images
-        seen["mime"] = mime_type
-        seen["model"] = model_id
-        return {"text": "ok", "http_status": 200, "model_id": model_id}
+    def fake_flash(self, prompt, image_bytes=None):
+        seen["image"] = image_bytes
+        return {
+            "text": "ok",
+            "http_status": 200,
+            "model_id": "from-client",
+            "error_body": "",
+        }
 
-    monkeypatch.setattr(gemini_client.GeminiClient, "generate", fake_generate)
+    monkeypatch.setattr(gemini_client.GeminiClient, "generate_flash", fake_flash)
     client = client_from_environ()
     reply = client.generate_images("hello", images=[b"png"])
-    assert reply == {
-        "text": "ok",
-        "urls": [],
-        "http_status": 200,
-        "model_id": seen["model"],
-    }
-    assert seen["images"] == (b"png",) and seen["mime"] == "image/png"
+    assert reply["text"] == "ok"
+    assert reply["http_status"] == 200
+    assert reply["model_id"] == "from-client"
+    assert seen["image"] == b"png"
     assert "super-secret-value" not in repr(client)
+    import sceneagent.vlm_port as port
+
+    source = inspect.getsource(port)
+    assert "PAPER_MODEL_ID" not in source
+    assert "gemini-" not in source
     with pytest.raises(RuntimeError, match="search grounding"):
         client.generate_images("hello", search=True)
+
+
+def test_a_failed_http_call_exits_nonzero_and_records_the_status(tmp_path, capsys):
+    vote = tmp_path / "material_vote.json"
+    vote.write_text(json.dumps({"votes": [VOTE, {**VOTE, "object": "bowl"}]}))
+    crops = tmp_path / "crops"
+    for name in ("mug", "bowl"):
+        folder = crops / name
+        folder.mkdir(parents=True)
+        (folder / "0.png").write_bytes(b"png")
+    out = tmp_path / "material_review.json"
+
+    class Boom:
+        def generate_images(self, prompt, images=(), search=False):
+            return {
+                "text": "",
+                "urls": [],
+                "http_status": 404,
+                "model_id": "stub-model",
+                "error_body": "model is not available",
+            }
+
+    code = main(
+        ["--vote", str(vote), "--crops-dir", str(crops), "--out", str(out)],
+        client=Boom(),
+    )
+    assert code == 1
+    document = json.loads(out.read_text(encoding="utf-8"))
+    assert document["failed"]
+    assert len(document["failed"]) == 2
+    for review in document["reviews"]:
+        assert review["decision"] == "failed"
+        assert review["final_class"] == "plastic"
+        assert review["http_status"] == 404
+        assert review["error"] == "model is not available"
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["ok"] is False
+    assert summary["failed"] == 2
 
 
 def test_a_missing_key_is_not_echoed(monkeypatch):

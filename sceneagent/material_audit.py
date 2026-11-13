@@ -8,7 +8,8 @@ crops, that class, and every source, then writes ``material_review.json``.
 ``confirm`` or ``replace``. A failed call keeps the provisional class and is
 listed under ``failed``. The module does not read an API key; the client
 comes from :func:`sceneagent.vlm_port.client_from_environ`, which calls
-``generate_images``.
+``generate_images``. The process exits 1 when any object call fails. A
+failure keeps the provisional class and records ``http_status`` and ``error``.
 
     python -m sceneagent.material_audit --vote material_vote.json \\
         --crops-dir CROPS --out material_review.json
@@ -118,7 +119,7 @@ def audit_votes(
     """One ``generate_images`` call per vote. Failures keep the provisional class."""
 
     reviews: list[dict[str, Any]] = []
-    failed: list[dict[str, str]] = []
+    failed: list[dict[str, Any]] = []
     replaced: list[str] = []
     calls = 0
     model = None
@@ -128,6 +129,7 @@ def audit_votes(
         provisional = None if provisional is None else str(provisional)
         sources = list(vote.get("sources") or [])
         images = [blob for blob in crops.get(name, ()) if isinstance(blob, bytes)]
+        reply = None
         try:
             calls += 1
             reply = client.generate_images(
@@ -138,16 +140,30 @@ def audit_votes(
             model = reply.get("model_id") or model
             status = reply.get("http_status")
             text = reply.get("text") if status in (None, 200) else ""
-            if not isinstance(text, str) or not text.strip():
+            if (
+                status not in (None, 200)
+                or not isinstance(text, str)
+                or not text.strip()
+            ):
                 raise ValueError(f"audit call failed with HTTP {status}")
             parsed = parse_audit(text, provisional)
         except Exception as exc:
-            failed.append({"name": name, "error": f"{type(exc).__name__}: {exc}"[:300]})
-            reviews.append(_row(name, provisional, None, "failed", ""))
+            status = reply.get("http_status") if isinstance(reply, dict) else None
+            error = _error_text(reply, exc)
+            failed.append({"name": name, "http_status": status, "error": error})
+            reviews.append(_row(name, provisional, None, "failed", "", status, error))
             continue
         final = parsed["audit_class"]
         reviews.append(
-            _row(name, provisional, final, parsed["decision"], parsed["reason"])
+            _row(
+                name,
+                provisional,
+                final,
+                parsed["decision"],
+                parsed["reason"],
+                reply.get("http_status"),
+                None,
+            )
         )
         if parsed["decision"] == "replace":
             replaced.append(name)
@@ -171,12 +187,23 @@ def write_review(document: Mapping[str, Any], path: Path) -> Path:
     return destination
 
 
+def _error_text(reply: Any, exc: Exception) -> str:
+    body = ""
+    if isinstance(reply, dict):
+        body = str(reply.get("error_body") or "").strip()
+    if not body:
+        body = f"{type(exc).__name__}: {exc}"
+    return body[:300]
+
+
 def _row(
     name: str,
     provisional: str | None,
     audit_class: str | None,
     decision: str,
     reason: str,
+    http_status: Any = None,
+    error: str | None = None,
 ) -> dict[str, Any]:
     final = provisional if decision == "failed" else audit_class
     return {
@@ -186,6 +213,8 @@ def _row(
         "final_class": final,
         "decision": decision,
         "reason": reason,
+        "http_status": http_status,
+        "error": error,
         "signed_by": SIGNED_BY,
     }
 
@@ -204,16 +233,21 @@ def main(argv: list[str] | None = None, client: ImageClient | None = None) -> in
     opened = client if client is not None else client_from_environ()
     document = audit_votes(votes, load_crops(args.crops_dir), opened)
     write_review(document, args.out)
+    failed = document["failed"]
     print(
         json.dumps(
             {
+                "ok": not failed,
                 "vlm_calls": document["vlm_calls"],
                 "replaced": document["replaced"],
-                "failed": len(document["failed"]),
+                "failed": len(failed),
             }
         )
     )
-    return 0 if not document["failed"] else 1
+    if failed:
+        print(json.dumps({"failed": failed}), file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

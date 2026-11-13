@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -72,3 +75,18 @@ def test_the_profile_matches_a_fresh_derivation_and_the_doc_label():
     text = (ROOT / "docs" / "heldout-thresholds.md").read_text(encoding="utf-8")
     assert "ours, not published in the paper" in text
     assert str(HELDOUT_NORMALIZED_MEDIAN_MAX) in text
+
+
+def test_the_derivation_script_runs_without_pythonpath():
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "derive_heldout_thresholds.py")],
+        cwd=ROOT / "docs",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    assert "normalized_median_max" in done.stdout
