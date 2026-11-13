@@ -267,9 +267,15 @@ def test_one_object_named_differently_in_two_views_stays_one_object(tmp_path):
     )
     video = ba.associate(out, data, depth=_fake_depth())
     assert video["same_phrase"] is False
+    assert video["video_kappa_share"] == ba.VIDEO_KAPPA_SHARE
     assert not any(p.get("phrases_differ") for p in video["pairs"])
     assert len(video["merged_pairs"]) == 2
-    assert ba.evidence_from(video)["rule"]["grouping"][ba.SAME_PHRASE] is False
+    evidence = ba.evidence_from(video)
+    assert evidence["rule"]["grouping"][ba.SAME_PHRASE] is False
+    # video_run.stage_done treats a missing share as an old association and
+    # reruns every later stage. The evidence must carry the share even
+    # though phrases no longer split groups.
+    assert evidence["rule"]["video_kappa_share"] == ba.VIDEO_KAPPA_SHARE
 
 
 def test_the_same_phrase_option_still_refuses_cross_phrase_merges():
