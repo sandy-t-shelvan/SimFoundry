@@ -26,7 +26,7 @@ is 0.067. After Cut 3's κ = 2 (#45) and pose rescale (#48) it is 0.327 / 0.021 
 | Phase 5: rerun the bin with the loop on | Done | `…_kappa2_rescale_vlm_reviewed.json` (review run 42943461864), `…_vlm_accepted.json` and `…_vlm_accepted_matched.json`, all with run ids. |
 | Phase 5: SF-18 (KAN-19) step critic | Code merged (#60), no verdict on a real stage yet | Nothing on `main` (`0ddf5a0`) calls `step_critic` or publishes `review_steps.zip` (`video_run`, `vast_smoke`, `__main__`, `bin_run`), so `sceneagent-mvp-review` skips the critic (`critic_skipped.json` in run 43443313519). `mvp_check` dc1 needs critic verdicts, so the MVP acceptance run will score dc1 PARTLY until this is wired. |
 | Phase 5: SF-24 (KAN-25) planner | The plan comes from the harness; nothing runs it yet | First real plan: `sceneagent-mvp-review` [run 43443313519](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/43443313519), on Mailbox run 43370600333. It has `plan_source: harness`, `forced: false`, `gemini-3.8-flash`, 1 call, and 10 steps with procedures and a transcript. The steps come from the orchestrator's vocabulary (`sam3d`, `partsam`, `icp`, …), not from `video_run`'s stages, and `plan_runner run` calls `run_plan` with no tools, so every stage would record "no tool registered". So the plan does not drive a run. |
-| Phase 5: SF-27 (KAN-28) held-out thresholds | Not met | Placement gate iteration 2 (silhouette ≥ 0.5, p90 ≤ 0.05 m) was calibrated on this bin's own ground truth (Spearman +0.85 and −0.79), not on held-out data. Meeting it needs a second ground-truth scene through the whole chain, plus Sandeep's call on thresholds. No constant was retuned. |
+| Phase 5: SF-27 (KAN-28) held-out thresholds | Not met; deferred by Sandeep (2026-11-13, "not now, later") | Placement gate iteration 2 (silhouette ≥ 0.5, p90 ≤ 0.05 m) was calibrated on this bin's own ground truth (Spearman +0.85 and −0.79), not on held-out data. Meeting it needs a second ground-truth scene through the whole chain, plus Sandeep's call on thresholds. No constant was retuned. |
 | Phase 6: SF-20 (KAN-21) physics vote and prior | In progress, in the MVP's dc2 stream | Phrase-based §3.4 is merged (#65). The prior's input packs for video runs are merged (#83, `b8aaf9f`); only #85 (editor, KAN-51) has merged since. No bin run of the prior is recorded in the repo. |
 | Phase 6: SF-21 (KAN-22) VLM material audit | Not built | `section34.request_audit` exists, but nothing calls it. |
 | Phase 6: SF-22 (KAN-23) inspector report written by the model | Met on Mailbox, not on a bin object | `fix_report_from_model: true` in inspector [run 43371557299](https://github.com/sandy-t-shelvan/SimFoundry/actions/runs/43371557299) (Mailbox). The ticket names a bin object. That needs `bin_settle`, an inspect stage on the bin and a report run. |
@@ -34,7 +34,8 @@ is 0.067. After Cut 3's κ = 2 (#45) and pose rescale (#48) it is 0.327 / 0.021 
 **What is left, and why it waits:**
 - **GPU items** (SF-18's `render-masks` run, SF-22 on the bin): they share the one gpu-smoke queue with the
   MVP work due 2026-11-14. Each waits for Sandeep's go and an empty queue.
-- **SF-27:** needs a held-out scene and a threshold decision; both are Sandeep's.
+- **SF-27:** deferred by Sandeep on 2026-11-13. When it comes back, it needs a held-out ground-truth scene
+  and his threshold decision.
 - **SF-20:** belongs to the MVP's dc2 stream.
 
 ## Goal
