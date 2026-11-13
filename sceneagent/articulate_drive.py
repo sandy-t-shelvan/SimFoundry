@@ -40,6 +40,19 @@ def movable(proposal: dict) -> list[dict]:
     return found
 
 
+def require_stage(sim: object, prim_path: str):
+    """The stage must exist before a prim is spawned or read.
+
+    ``SimulationContext.instance()`` is None until a context is constructed,
+    and ``create_prim`` then calls ``GetPrimAtPath`` on that None. Name the
+    prim path in the error so the next log says which spawn failed.
+    """
+    stage = getattr(sim, "stage", None)
+    if stage is None:
+        raise RuntimeError(f"USD stage is None before spawning {prim_path}")
+    return stage
+
+
 def partsam_note() -> dict:
     """Whether the PartSAM entry is on the box. Nothing is installed."""
     return {
@@ -64,7 +77,7 @@ def main() -> None:
         json.dumps(note, indent=2) + "\n", encoding="utf-8"
     )
     if not proposal_path.is_file():
-        _finish(out, "reject", "no proposal file", [])
+        _finish(out, "reject", f"no proposal file at {proposal_path}", [])
         return
     proposal = json.loads(proposal_path.read_text(encoding="utf-8"))
     joints = movable(proposal)
@@ -138,12 +151,16 @@ def _sweep(joint: dict, out: Path, sim_cfg: object) -> list[Path]:
     # .instance() is None until a context is built. The headless check
     # constructs one; spawning into a missing stage raises GetPrimAtPath.
     sim = sim_utils.SimulationContext(sim_cfg)
+    require_stage(sim, "/World/ground")
     ground = sim_utils.GroundPlaneCfg()
     ground.func("/World/ground", ground)
+    require_stage(sim, "/World/Light")
     light = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.8, 0.8, 0.8))
     light.func("/World/Light", light)
+    require_stage(sim, "/World/body")
     body = sim_utils.CuboidCfg(size=(0.2, 0.2, 0.2))
     body.func("/World/body", body, translation=(0.0, 0.0, 0.1))
+    require_stage(sim, "/World/lid")
     lid = sim_utils.CuboidCfg(size=(0.2, 0.2, 0.05))
     lid.func("/World/lid", lid, translation=(0.0, 0.0, 0.225))
     camera = Camera(
@@ -167,7 +184,10 @@ def _sweep(joint: dict, out: Path, sim_cfg: object) -> list[Path]:
         torch.tensor([[0.8, 0.6, 0.45]], device=sim.device),
         torch.tensor([[0.0, 0.0, 0.15]], device=sim.device),
     )
-    lid_prim = UsdGeom.Xformable(sim.stage.GetPrimAtPath("/World/lid"))
+    stage = require_stage(sim, "/World/lid")
+    lid_prim = UsdGeom.Xformable(stage.GetPrimAtPath("/World/lid"))
+    if not lid_prim.GetPrim().IsValid():
+        raise RuntimeError("USD prim is missing at /World/lid")
     lower = float(joint.get("lower") or 0.0)
     upper = float(joint.get("upper") or lower)
     samples = angles(lower, upper)

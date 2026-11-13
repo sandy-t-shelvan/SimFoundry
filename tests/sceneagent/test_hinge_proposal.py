@@ -181,14 +181,75 @@ def test_a_null_pivot_without_a_shared_face_is_unresolved():
     assert len(stub.images) == 2
 
 
+def test_a_missing_stage_names_the_prim_path():
+    from sceneagent.articulate_drive import require_stage
+
+    class Empty:
+        stage = None
+
+    with pytest.raises(
+        RuntimeError, match=r"USD stage is None before spawning /World/ground"
+    ):
+        require_stage(Empty(), "/World/ground")
+
+
+def test_the_remote_command_uses_the_shipped_proposal_path(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    from sceneagent.vast_smoke import (
+        ISAACLAB_PYTHON,
+        REMOTE_REPO,
+        build_remote_command,
+        remote_out,
+    )
+
+    out = remote_out("articulate")
+    argv = build_remote_command(REMOTE_REPO, out, pipeline="articulate")
+    assert argv == [
+        "env",
+        "-u",
+        "PYTHONPATH",
+        ISAACLAB_PYTHON,
+        f"{REMOTE_REPO}/sceneagent/articulate_drive.py",
+        "--proposal",
+        f"{REMOTE_REPO}/sceneagent/articulate_proposal.json",
+        "--out",
+        out,
+    ]
+    assert out == "/workspace/sf4-smoke/articulate"
+    script = Path(__file__).resolve().parents[2] / "sceneagent" / "articulate_drive.py"
+    missing = tmp_path / "not-a-proposal.json"
+    local_out = tmp_path / "articulate-missing-proposal"
+    done = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--proposal",
+            str(missing),
+            "--out",
+            str(local_out),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+    ledger = json.loads((local_out / "ledger.json").read_text(encoding="utf-8"))
+    assert ledger["entries"][0]["decision"] == "reject"
+    assert str(missing) in ledger["entries"][0]["reason"]
+    assert "isaaclab" not in done.stderr.lower()
+
+
 def test_the_sweep_builds_a_simulation_context():
     from pathlib import Path
 
     import sceneagent.articulate_drive as drive
 
     text = Path(drive.__file__).read_text(encoding="utf-8")
-    assert "SimulationContext.instance" not in text
-    assert "SimulationContext(sim_cfg)" in text
+    assert "sim_utils.SimulationContext.instance" not in text
+    assert "sim_utils.SimulationContext(sim_cfg)" in text
 
 
 def test_the_png_encoder_loads_by_file_path():
