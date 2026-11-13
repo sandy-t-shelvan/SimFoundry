@@ -337,6 +337,20 @@ def _reset_evidence(evidence_dir: Path) -> None:
     evidence_dir.mkdir(parents=True)
 
 
+def measured_summary(bar: dict[str, Any], models: int) -> str:
+    """The measured values beside their limits, so a failed run's manifest shows them."""
+    registered = bar.get("registered") or {}
+    observations = bar.get("mean_obs_per_image") or {}
+    reprojection = bar.get("mean_reproj_err_px") or {}
+    return (
+        f" (largest of {models} models: registered {registered.get('value')} of "
+        f"{bar.get('inputs')} inputs, needs >= {registered.get('threshold')}; "
+        f"observations per image {observations.get('value')}, needs >= "
+        f"{observations.get('threshold')}; reprojection {reprojection.get('value')} px, "
+        f"needs <= {reprojection.get('threshold')})"
+    )
+
+
 def accept_reconstruction(
     sparse_dir: Path,
     input_images: Any,
@@ -373,7 +387,11 @@ def accept_reconstruction(
     if document["pass"]:
         reason = ""
     else:
-        reason = "reconstruction not accepted: " + "; ".join(document["fail_reasons"])
+        reason = (
+            "reconstruction not accepted: "
+            + "; ".join(document["fail_reasons"])
+            + measured_summary(bar, len(models))
+        )
     return {
         "pass": document["pass"],
         "model": document["chosen_model"],
