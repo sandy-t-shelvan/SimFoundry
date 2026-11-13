@@ -1,9 +1,11 @@
 """Section 3.2 camera poses, using the COLMAP binary when it is installed.
 
 The PDF names COLMAP and does not publish extractor settings. The commands
-below are COLMAP 3.7's sequential pipeline for one video camera. A banner
-that says "without CUDA" forces SIFT onto the CPU. A missing binary is not
-a reconstruction, and this stage does not train a splat.
+below are COLMAP 3.7's sequential pipeline for one video camera. SIFT stays
+on the CPU even when the banner reports CUDA: two GPU matches of one
+PutMarkerInCup extract shared every keypoint and not the inliers, and the
+fresh match kept a two-image model. A missing binary is not a reconstruction,
+and this stage does not train a splat.
 
 The frame sample defaults to 1 fps and 16 frames. That cap is this runner's.
 ``max_frames`` None or 0 omits it, and ``fps`` None or 0 omits the fps
@@ -60,7 +62,8 @@ def pose_commands(
     """Extract, match, map. ``matcher`` is sequential (video) or exhaustive.
 
     Exhaustive matching is for a few unordered stills, such as the 13
-    GraspClutter6D views; it takes the same GPU flag and no overlap window.
+    GraspClutter6D views. It keeps the CPU SIFT flag and drops the overlap
+    window.
     """
     if matcher not in MATCHERS:
         raise ValueError(f"unknown COLMAP matcher {matcher}")
@@ -75,12 +78,19 @@ def pose_commands(
 
 
 def _sequential_pose_commands(database, image_dir, sparse_dir, use_gpu, major=3):
-    """Three sequential steps. ``use_gpu`` is the SIFT device flag, 0 or 1.
+    """Three sequential steps. SIFT stays on the CPU.
 
-    COLMAP 3.7 names the device ``SiftExtraction.use_gpu``. COLMAP 4.2 names
-    it ``FeatureExtraction.use_gpu`` and rejects ``--log_to_stderr``.
+    ``use_gpu`` is accepted and does not select the SIFT device. CUDA SIFT
+    matching does not repeat: two matches of one PutMarkerInCup extract
+    shared every keypoint and not the inliers, and the fresh match
+    registered 2 of 300 frames. CPU SIFT on a fresh extract of those frames
+    registered all 300. COLMAP 3.7 names the device
+    ``SiftExtraction.use_gpu``. COLMAP 4.2 names it
+    ``FeatureExtraction.use_gpu`` and rejects ``--log_to_stderr``.
     """
-    gpu = "1" if use_gpu else "0"
+    # A CUDA banner must not turn SIFT back on. See the docstring.
+    del use_gpu
+    gpu = "0"
     database = str(database)
     image_dir = str(image_dir)
     sparse_dir = str(sparse_dir)
@@ -150,8 +160,9 @@ def _sequential_pose_commands(database, image_dir, sparse_dir, use_gpu, major=3)
             database,
             "--SiftMatching.use_gpu",
             gpu,
-            # Overlap 5 left PutMarkerInCup on a two-image model. Overlap 10,
-            # COLMAP's own default, registered all 300 of those frames.
+            # Overlap 5 left PutMarkerInCup on a two-image model. Overlap 10
+            # is COLMAP's own default. GPU matching at that window did not
+            # repeat, which is why the device flag above stays on CPU.
             "--SequentialMatching.overlap",
             "10",
         ],

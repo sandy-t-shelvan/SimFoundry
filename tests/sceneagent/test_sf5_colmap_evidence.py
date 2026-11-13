@@ -570,11 +570,7 @@ def test_offline_dry_run_registers_every_native_frame(tmp_path, monkeypatch):
     assert ledger["config"]["gpu_free_mib_min"] == 6144
     assert ledger["config"]["gpu_budget_approved"] is False
     before = [row for row in ledger["gpu_memory"] if row["when"] == "before"]
-    assert [row["stage"] for row in before] == [
-        "feature_extractor",
-        "sequential_matcher",
-        "mapper",
-    ]
+    assert [row["stage"] for row in before] == ["mapper"]
     assert all(row["source"] == "offline_fixture" for row in before)
     assert all(row["min_free_mib"] >= 6144 for row in before)
     assert all(row["exact_true_peak"] is False for row in before)
@@ -648,7 +644,7 @@ def test_absent_budget_stops_before_the_video_probe(tmp_path, monkeypatch):
     assert "6144" in ledger["reason"]
 
 
-def test_short_free_memory_stops_before_feature_extraction(tmp_path, monkeypatch):
+def test_short_free_memory_stops_before_the_mapper(tmp_path, monkeypatch):
     video, digest = _synthetic_video(tmp_path)
     _install_stub(tmp_path / "bin")
     monkeypatch.setenv("PATH", str(tmp_path / "bin") + os.pathsep + os.environ["PATH"])
@@ -665,21 +661,23 @@ def test_short_free_memory_stops_before_feature_extraction(tmp_path, monkeypatch
         )
     )
     assert code == 4
-    assert not stage_log.exists()
+    assert stage_log.read_text(encoding="utf-8") == "feature_extractor\n"
     ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
     assert ledger["process_exit"] == 4
-    assert ledger["gpu_memory"][0]["stage"] == "feature_extractor"
+    assert ledger["gpu_memory"][0]["stage"] == "mapper"
     assert ledger["gpu_memory"][0]["when"] == "before"
     assert ledger["gpu_memory"][0]["min_free_mib"] == 100
     assert ledger["gpu_memory"][0]["meets_budget"] is False
-    assert "feature_extractor" not in ledger.get("exit_statuses", {})
+    assert "mapper" not in ledger.get("exit_statuses", {})
 
 
 def test_mapper_gpu_check_follows_the_ba_flag():
     commands = pose_commands("/tmp/db", "/tmp/images", "/tmp/sparse", True, major=3)
     by_name = {argv[1]: argv for argv in commands}
-    assert command_uses_gpu(by_name["feature_extractor"], cuda_build=True) is True
-    assert command_uses_gpu(by_name["sequential_matcher"], cuda_build=True) is True
+    assert by_name["feature_extractor"][by_name["feature_extractor"].index("--SiftExtraction.use_gpu") + 1] == "0"
+    assert by_name["sequential_matcher"][by_name["sequential_matcher"].index("--SiftMatching.use_gpu") + 1] == "0"
+    assert command_uses_gpu(by_name["feature_extractor"], cuda_build=True) is False
+    assert command_uses_gpu(by_name["sequential_matcher"], cuda_build=True) is False
     assert command_uses_gpu(by_name["mapper"], cuda_build=True) is True
     assert command_uses_gpu(by_name["mapper"], cuda_build=False) is False
     cpu_mapper = list(by_name["mapper"]) + ["--Mapper.ba_use_gpu", "0"]

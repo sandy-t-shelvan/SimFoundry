@@ -53,10 +53,16 @@ def test_pose_commands_match_colmap_37_and_skip_gpu_without_cuda():
     assert use_gpu_from_banner(banner) is True
     cuda = pose_commands("database.db", "images", "sparse", use_gpu=True, major=4)
     assert "--FeatureExtraction.use_gpu" in cuda[0]
-    assert cuda[0][cuda[0].index("--FeatureExtraction.use_gpu") + 1] == "1"
+    assert cuda[0][cuda[0].index("--FeatureExtraction.use_gpu") + 1] == "0"
     assert "--log_to_stderr" not in cuda[0]
     assert "--FeatureMatching.use_gpu" in cuda[1]
+    assert cuda[1][cuda[1].index("--FeatureMatching.use_gpu") + 1] == "0"
     assert cuda[2][cuda[2].index("--Mapper.init_min_num_inliers") + 1] == "200"
+    live = pose_commands("database.db", "images", "sparse", use_gpu=True, major=3)
+    assert live[0][live[0].index("--SiftExtraction.use_gpu") + 1] == "0"
+    assert live[0][live[0].index("--SiftExtraction.max_image_size") + 1] == "1280"
+    assert live[1][live[1].index("--SiftMatching.use_gpu") + 1] == "0"
+    assert live[1][live[1].index("--SequentialMatching.overlap") + 1] == "10"
     blob = json.dumps(commands).lower()
     assert "sceneagentx" not in blob
 
