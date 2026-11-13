@@ -1386,6 +1386,10 @@ def remove_objects(scene, names, *, removable_names=None):
 # else is additive SimFoundry state -- see merge_settled_scene.
 SIMULATOR_OWNED_KEYS = ("versions", "metadata", "state", "init_info", "objects_info")
 
+#: SF-34 fields the physics panel does not edit. Kept across a settle because
+#: it is not one of SIMULATOR_OWNED_KEYS.
+PHYSICS_RECORDS_KEY = "physics_records"
+
 
 def strip_nested_scene_file(scene):
     """Remove the recursive scene snapshot from ``init_info.args.scene_file``.
