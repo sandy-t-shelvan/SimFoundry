@@ -31,7 +31,7 @@ This subsection is the newest status and supersedes the Cut 1 tables below where
 2. Container-sized groups that swallow their neighbours. A 0.35 m extent split, PR #47: F1 fell to 0.109, not kept.
 3. SAM 3D pose starts about 0.75 m off. A mask-depth rescale of the pose, PR #48: F1 0.125 → 0.327, kept.
 
-Not yet separated: how much of the 0.058 → 0.067 gain comes from centred ICP starts and how much from the reviewer's retries.
+The 0.058 → 0.067 gain was never split between centred ICP starts and the reviewer's retries, and it can no longer be: run 42765601450 recorded no before-retry score, and box 59601312 is deleted. Later review runs score before and after: retries moved κ = 2 from 0.1245 to 0.1278, and κ = 2 + rescale from 0.3268 to 0.3235 (rule) and 0.3267 (Gemini). The oracle bound is 0.3291. Cut 2's close-out, item by item: [`docs/cut2-plan.md`](cut2-plan.md#close-out-2026-11-13) (2026-11-13).
 
 **GPU box.** Instance 58301075 again from 2026-11-10 (59601312 was deleted). PR #50 repins the workflow and sets the tool paths from two read-only probes.
 

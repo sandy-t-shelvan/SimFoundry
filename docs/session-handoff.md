@@ -124,7 +124,12 @@ Python 3.11 with `requirements-cpu-ci.txt` and `requirements-sceneagent-ci.txt`:
 
 ## Cut 2: what is left
 
-SF-19 is built (PR #44): every object's eleven reviewer views are drawn, a retry is chosen from them and logged, and
-the bin is scored again (F1@1cm 0.067, Chamfer 0.125 m). Open: separate the centred-start and retry gains (the
-reviewer now scores both), and test camera consensus at kappa 2 (PR #45) against the floaters the views show. Both
-need 59601312 running. Cut 3 planning can start from here.
+Superseded on 2026-11-13 by the close-out in [`cut2-plan.md`](cut2-plan.md#close-out-2026-11-13). The agreed scope
+(phases 0–4 plus SF-19) is done:
+- κ = 2 was tested and kept (#45).
+- The centred-start vs retry split is measured on the successor runs. The original run's split cannot be
+  recovered, because box 59601312 is deleted.
+
+Still open from the stretch phases: SF-18 has no verdict on a real stage, SF-27 has no held-out thresholds, and
+SF-21 is not built. SF-22 is met on Mailbox but not on a bin object. SF-20 is in the MVP's dc2 stream. The GPU
+box is now 60254439, not the boxes named above.
