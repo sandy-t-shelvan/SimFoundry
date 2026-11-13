@@ -40,6 +40,35 @@ def test_filter_drops_off_prompt_huge_and_duplicate_boxes():
     ]
 
 
+def test_a_video_drops_a_phrase_that_joins_two_prompt_terms():
+    dets = [
+        _det("mailbox cube", 0.9, [100, 100, 300, 300]),
+        _det("mailbox", 0.8, [400, 100, 600, 300]),
+        _det("cube", 0.7, [700, 100, 800, 200]),
+    ]
+    video = mask_filter.filter_detections(
+        dets, W, H, "mailbox . cube .", single_term=True
+    )
+    assert [d["kept"] for d in video] == [False, True, True]
+    assert video[0]["drop_reason"] == "phrase joins several prompt terms"
+    # The bin's rule is unchanged: a joined phrase still names a prompt term.
+    bin_rule = mask_filter.filter_detections(dets, W, H, "mailbox . cube .")
+    assert all(d["kept"] for d in bin_rule)
+
+
+def test_a_term_counts_only_as_whole_words():
+    assert mask_filter.names_term("red mailbox", "mailbox")
+    assert not mask_filter.names_term("mailbox", "box")
+    assert mask_filter.names_term("a red can here", "red can")
+
+
+def test_only_a_video_asks_the_worker_for_single_term_phrases():
+    images, masks = Path("i"), Path("m")
+    assert "--single-term" not in bin_masks.worker_command(images, masks)
+    argv = bin_masks.worker_command(images, masks, "x .", single_term=True)
+    assert argv[-1] == "--single-term"
+
+
 def test_prompt_terms_split_on_dots():
     assert mask_filter.prompt_terms("Object . red can .") == ["object", "red can"]
 

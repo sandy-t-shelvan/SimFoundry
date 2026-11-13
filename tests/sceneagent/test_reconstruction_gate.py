@@ -947,3 +947,20 @@ def test_run_video_accepts_when_the_gate_passes(tmp_path, monkeypatch):
     )
     assert poses["ok"] is True
     assert poses["reconstruction_gate"]["chosen_model"] == "1"
+
+
+def test_a_rejected_reconstruction_reason_carries_the_measured_values():
+    from sceneagent.reconstruction_gate import measured_summary, quality_bar
+
+    largest = {
+        "model": "0",
+        "registered": 120,
+        "points": 900,
+        "mean_obs_per_image": 22.5,
+        "mean_reproj_err_px": 1.1,
+    }
+    bar = quality_bar(largest, 300)
+    line = measured_summary(bar, 3)
+    assert "registered 120 of 300 inputs, needs >= 240" in line
+    assert "observations per image 22.5, needs >= 30.0" in line
+    assert "largest of 3 models" in line

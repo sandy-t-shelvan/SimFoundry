@@ -392,21 +392,21 @@ def test_label_cleanup_does_not_run_for_a_different_label():
 
 def test_workflow_checker_rejects_retired_id_and_lifecycle_puts():
     text = WORKFLOW.read_text(encoding="utf-8")
-    retired = text.replace("--instance-id 58301075", "--instance-id 59601312", 1)
+    retired = text.replace("--instance-id 60254439", "--instance-id 58301075", 1)
     findings = workflow_safety_findings(retired)
-    assert "workflow must not name retired instance 59601312" in findings
-    assert "instance id must be the literal 58301075" in findings
+    assert "workflow must not name retired instance 58301075" in findings
+    assert "instance id must be the literal 60254439" in findings
     started = text.replace(
-        "--instance-id 58301075",
-        '--instance-id 58301075 \'{"state": "running"}\'',
+        "--instance-id 60254439",
+        '--instance-id 60254439 \'{"state": "running"}\'',
         1,
     )
     assert "workflow must not send a Vast state running" in workflow_safety_findings(
         started
     )
     stopped = text.replace(
-        "--instance-id 58301075",
-        '--instance-id 58301075 \'{"state": "stopped"}\'',
+        "--instance-id 60254439",
+        '--instance-id 60254439 \'{"state": "stopped"}\'',
         1,
     )
     assert "workflow must not send a Vast state stopped" in workflow_safety_findings(

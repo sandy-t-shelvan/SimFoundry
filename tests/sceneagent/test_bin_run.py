@@ -191,11 +191,11 @@ def test_bin_manifest_requires_its_own_ledger_items(tmp_path):
     (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
     command = build_remote_command(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
     passed = collect_artifact_manifest(
-        run, command=command, instance_id=58301075, pipeline="bin"
+        run, command=command, instance_id=60254439, pipeline="bin"
     )
     assert passed["passed"] is True
     assert passed["video"] == "GraspClutter6D 000091"
-    as_video = collect_artifact_manifest(run, command=command, instance_id=58301075)
+    as_video = collect_artifact_manifest(run, command=command, instance_id=60254439)
     assert as_video["passed"] is False
 
 
@@ -213,14 +213,14 @@ def test_bin_manifest_ignores_other_pipelines_entries_in_the_shared_ledger(tmp_p
     (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
     command = build_remote_command(REMOTE_REPO, REMOTE_OUT, pipeline="bin")
     manifest = collect_artifact_manifest(
-        run, command=command, instance_id=58301075, pipeline="bin"
+        run, command=command, instance_id=60254439, pipeline="bin"
     )
     assert manifest["passed"] is True
     assert [s["item"] for s in manifest["stages"]][-1] == "full-scene splat"
     entries[1]["decision"] = "reject"
     (run / "ledger.json").write_text(json.dumps({"entries": entries}) + "\n")
     manifest = collect_artifact_manifest(
-        run, command=command, instance_id=58301075, pipeline="bin"
+        run, command=command, instance_id=60254439, pipeline="bin"
     )
     assert manifest["passed"] is False
 

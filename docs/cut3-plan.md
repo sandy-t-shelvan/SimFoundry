@@ -277,6 +277,15 @@ So it is not retrained here. Its rules, from the PhysX/PhysGaussian note:
 | SF-35 (KAN-41): USD physics export and settle test | One OpenUSD stage: PhysX actors with collider, mass and density. It settles in Isaac Lab (maximum speed below 1 cm/s after 2 s, nothing below the ground) and loads and settles in MuJoCo. PhysGaussian objects, if any, are marked for Cut 4 (SF-40) |
 | SF-22 (KAN-23): inspector report written by the model | `fix_report_from_model: true` on the exported bin |
 
+**SF-35, CPU part (2026-11-11, KAN-41).** `sceneagent/physics_export.py` writes the placed bin as one USD stage and one MJCF model from each object's mesh, ICP pose and SF-34 record:
+- **PhysX attributes:** a rigid body (or a kinematic one, or a static collider), mass and density when known, collider approximation, and a bound physics material for friction and restitution.
+- **Metadata:** every other property as `sceneagent:*`.
+- **Defaults:** a missing value is left to PhysX and listed in `sceneagent:defaults`.
+- **PhysGaussian objects:** display-only meshes marked for SF-40, never rigid.
+- **Tests:** they open the stage with `pxr` and step the MJCF in MuJoCo; a resting cube stays below 1 cm/s after 2 s. Both skip on CPU CI, which has neither package.
+
+Next on the box: build the records from SF-34, export the real bin, and run dc2 (Isaac Lab settle) and dc3 (MuJoCo settle).
+
 **Watch:** the prior's fitted set has no YCB objects, and the bin is all YCB. Its test scores are on GSO and ABO. The YCB catalogue masses are a check on the bin only, never an input.
 
 ## After Cut 3

@@ -30,7 +30,7 @@ APPROVED_FRAMES = 452
 APPROVED_WIDTH = 1280
 APPROVED_HEIGHT = 720
 APPROVED_DURATION_ROUNDED_S = "15.067"
-INSTANCE_ID = "58301075"
+INSTANCE_ID = "60254439"
 REQUIRED_COLMAP_VERSION = "3.11.1"
 SCENEAGENT_ROOT = "/workspace/sceneagent-simfoundry"
 LEGACY_MODEL_ROOT = "/workspace/fruits-fullrate-colmap"
@@ -939,6 +939,12 @@ def execute(request: dict[str, Any]) -> int:
         kind = "forbidden" if isinstance(exc, ForbiddenPathError) else "identity"
         if isinstance(exc, GpuBudgetError):
             kind = "gpu_budget"
+        elif isinstance(exc, GpuQueryTimeout):
+            # The message is lowercase gpu_query_timeout, so the "GPU"
+            # substring below does not see it. The type is a resource
+            # failure (exit 3), not an identity failure (exit 2). A short
+            # budget stays exit 4 on GpuBudgetError above.
+            kind = "resource"
         elif "COLMAP" in str(exc):
             kind = "version"
         elif "GPU" in str(exc):
