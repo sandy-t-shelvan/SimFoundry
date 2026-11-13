@@ -10,7 +10,7 @@ the retry. The box then logs each verdict in the ledger and re-runs a
 rejected stage once, carrying the note. Same split as the SF-19 reviewer
 (:mod:`sceneagent.vlm_review`): the key never reaches the box.
 
-    python -m sceneagent.step_critic render-masks --out OUT        # box, CPU
+    python -m sceneagent.step_critic render --out OUT              # box, CPU
     python -m sceneagent.step_critic judge --images review_steps.zip --out-dir DIR  # runner
 
 ``judge`` writes ``DIR/review/<stage>.json`` (image, verdict, reason, model)
@@ -18,9 +18,10 @@ and ``DIR/step_verdicts.json``. ``ledger_entries`` and ``retry_requests`` turn
 committed verdicts into ledger lines and at most one retry per stage.
 
 The prompts are ours (the paper does not publish its critic prompts), one per
-stage, each hashed into the verdict file. The masks stage is hooked first:
-``render_masks`` draws its review image from the masks stage's own outputs.
-The other stages have prompts here; their review images come later.
+stage, each hashed into the verdict file. ``render`` draws whichever stage
+images the run directory already holds: masks from ``masks/``, Gaussians from
+the splat PLY and ``association/objects.npz``, meshes from ``sam3d/object_*.glb``,
+and parts from ``parts/object_*.npz``.
 """
 
 from __future__ import annotations
@@ -365,6 +366,157 @@ def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
     return path
 
 
+def _cap(points: np.ndarray, limit: int = 5000) -> np.ndarray:
+    """A deterministic subset, so a re-render of a large cloud matches."""
+    if len(points) <= limit:
+        return points
+    step = int(np.ceil(len(points) / limit))
+    return points[::step]
+
+
+def _save_points(
+    out: Path,
+    stage: str,
+    groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+) -> Path:
+    """Orthographic XY scatter. Each group is points plus an RGB colour."""
+    from PIL import Image
+
+    kept = [(pts, colour) for pts, colour in groups if len(pts)]
+    if not kept:
+        raise ValueError(f"no points to draw for {stage}")
+    cloud = np.concatenate([pts[:, :2] for pts, _colour in kept])
+    low = cloud.min(axis=0)
+    span = np.maximum(cloud.max(axis=0) - low, 1e-6)
+    canvas = np.full((TILE_PX, TILE_PX, 3), 255, np.uint8)
+    for pts, colour in kept:
+        xy = (pts[:, :2] - low) / span
+        cols = np.clip((xy[:, 0] * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3)
+        rows = np.clip(
+            ((1.0 - xy[:, 1]) * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3
+        )
+        for dr in (0, 1):
+            for dc in (0, 1):
+                canvas[rows + dr, cols + dc] = colour
+    folder = out / REVIEW_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{stage}.png"
+    Image.fromarray(canvas).save(path)
+    return path
+
+
+def _splat_ply(out: Path) -> Path | None:
+    found = sorted((out / "splat" / "export").glob("*.ply"))
+    return found[0] if found else None
+
+
+def render_gaussians(out: Path) -> Path | None:
+    """One colour per object, from the splat PLY and ``association/objects.npz``."""
+    ply = _splat_ply(out)
+    sets_path = out / "association" / "objects.npz"
+    if ply is None or not sets_path.is_file():
+        return None
+    from sceneagent.bin_association import read_ply_xyz
+
+    xyz = read_ply_xyz(ply)
+    with np.load(sets_path) as sets:
+        keys = sorted(key for key in sets.files if key.startswith("object_"))
+        colours = _palette(len(keys))
+        groups = []
+        for key, colour in zip(keys, colours, strict=True):
+            ids = np.asarray(sets[key], dtype=np.int64)
+            if ids.size == 0:
+                continue
+            if int(ids.min()) < 0 or int(ids.max()) >= len(xyz):
+                raise ValueError(f"{key} index is outside the splat")
+            groups.append((_cap(xyz[ids]), colour))
+    if not groups:
+        return None
+    return _save_points(out, "gaussians", groups)
+
+
+def render_mesh(out: Path) -> Path | None:
+    """Each mesh in grey, with that object's Gaussians in blue when the splat is there."""
+    glbs = sorted((out / "sam3d").glob("object_*.glb"))
+    if not glbs:
+        return None
+    from sceneagent.bin_place import sample_mesh
+
+    grey = (160, 160, 160)
+    blue = (30, 90, 220)
+    ply = _splat_ply(out)
+    sets_path = out / "association" / "objects.npz"
+    xyz = None
+    sets = None
+    if ply is not None and sets_path.is_file():
+        from sceneagent.bin_association import read_ply_xyz
+
+        xyz = read_ply_xyz(ply)
+        sets = np.load(sets_path)
+    groups: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+    try:
+        for glb in glbs:
+            groups.append((_cap(sample_mesh(glb, 800, seed=0)), grey))
+            if xyz is None or sets is None:
+                continue
+            key = glb.stem if glb.stem.startswith("object_") else ""
+            if key not in sets.files:
+                continue
+            ids = np.asarray(sets[key], dtype=np.int64)
+            groups.append((_cap(xyz[ids]), blue))
+    finally:
+        if sets is not None:
+            sets.close()
+    return _save_points(out, "mesh", groups)
+
+
+def render_parts(out: Path) -> Path | None:
+    """One colour per part. Arrays in ``parts/object_*.npz`` are Nx3 points."""
+    files = sorted((out / "parts").glob("object_*.npz"))
+    if not files:
+        return None
+    loaded: list[np.ndarray] = []
+    for path in files:
+        with np.load(path) as data:
+            for key in sorted(data.files):
+                pts = np.asarray(data[key], dtype=float)
+                if pts.ndim != 2 or pts.shape[1] < 2:
+                    raise ValueError(f"{path.name}:{key} is not points")
+                if pts.shape[1] == 2:
+                    pts = np.column_stack([pts, np.zeros(len(pts))])
+                loaded.append(pts[:, :3])
+    if not loaded:
+        return None
+    colours = _palette(len(loaded))
+    groups = [(_cap(pts), colour) for pts, colour in zip(loaded, colours, strict=True)]
+    return _save_points(out, "parts", groups)
+
+
+def render_review_images(out: Path) -> dict[str, str]:
+    """Draw every stage that has inputs, then zip the images that were written."""
+    out = Path(out)
+    drawn: dict[str, str] = {}
+    if (out / "masks" / "detections.json").is_file():
+        try:
+            drawn["masks"] = str(render_masks(out))
+        except (OSError, ValueError, KeyError):
+            pass
+    for stage, renderer in (
+        ("gaussians", render_gaussians),
+        ("mesh", render_mesh),
+        ("parts", render_parts),
+    ):
+        try:
+            path = renderer(out)
+        except (OSError, ValueError, KeyError, ImportError):
+            continue
+        if path is not None:
+            drawn[stage] = str(path)
+    if drawn:
+        pack_review_images(out)
+    return drawn
+
+
 def pack_review_images(out: Path) -> Path:
     """Zip every ``review_steps/<stage>.png`` for the runner to judge."""
     out = Path(out)
@@ -380,10 +532,10 @@ def pack_review_images(out: Path) -> Path:
 def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    render = sub.add_parser(
-        "render-masks", help="draw the masks stage's review image (box)"
-    )
+    render = sub.add_parser("render", help="draw every stage image that has inputs")
     render.add_argument("--out", type=Path, required=True)
+    masks = sub.add_parser("render-masks", help="draw the masks stage's review image")
+    masks.add_argument("--out", type=Path, required=True)
     judge = sub.add_parser(
         "judge", help="ask the VLM to judge each stage image (runner)"
     )
@@ -393,6 +545,10 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
         "--source-run", default="", help="gpu-smoke run id the images came from"
     )
     args = parser.parse_args(argv)
+    if args.command == "render":
+        drawn = render_review_images(args.out)
+        print(json.dumps({"images": drawn, "zip": str(args.out / REVIEW_ZIP)}))
+        return 0 if drawn else 1
     if args.command == "render-masks":
         path = render_masks(args.out)
         print(

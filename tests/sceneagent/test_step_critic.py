@@ -216,3 +216,61 @@ def test_the_critic_never_reads_a_key_itself():
     source = inspect.getsource(sc)
     assert "os.environ" not in source and "load_gemini_api_key" not in source
     assert "import os" not in source
+
+
+def _ply(path, xyz):
+    xyz = np.asarray(xyz, dtype=np.float32)
+    header = (
+        "ply\nformat binary_little_endian 1.0\n"
+        f"element vertex {len(xyz)}\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "end_header\n"
+    ).encode("ascii")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header + xyz.tobytes())
+
+
+def _colours(path):
+    from PIL import Image
+
+    image = np.asarray(Image.open(path))
+    return {tuple(int(c) for c in px) for px in image.reshape(-1, 3)}
+
+
+def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
+    trimesh = pytest.importorskip("trimesh")
+    _ply(
+        tmp_path / "splat" / "export" / "splat.ply",
+        [[0, 0, 0], [0.2, 0, 0], [4, 0, 0], [4.2, 0, 0]],
+    )
+    (tmp_path / "association").mkdir()
+    np.savez(
+        tmp_path / "association" / "objects.npz",
+        object_0=np.array([0, 1]),
+        object_1=np.array([2, 3]),
+    )
+    (tmp_path / "sam3d").mkdir()
+    trimesh.creation.box().export(tmp_path / "sam3d" / "object_0.glb")
+    (tmp_path / "parts").mkdir()
+    np.savez(
+        tmp_path / "parts" / "object_0.npz",
+        body=np.array([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        lid=np.array([[3.0, 0.0, 0.0], [3.0, 1.0, 0.0]]),
+    )
+    assert sc.main(["render", "--out", str(tmp_path)]) == 0
+    drawn = ("gaussians.png", "mesh.png", "parts.png")
+    with zipfile.ZipFile(tmp_path / "review_steps.zip") as archive:
+        assert archive.namelist() == list(drawn)
+    assert {tuple(c) for c in sc._palette(2)} <= _colours(
+        tmp_path / "review_steps" / "gaussians.png"
+    )
+    mesh = _colours(tmp_path / "review_steps" / "mesh.png")
+    assert (160, 160, 160) in mesh and (30, 90, 220) in mesh
+    assert {tuple(c) for c in sc._palette(2)} <= _colours(
+        tmp_path / "review_steps" / "parts.png"
+    )
+
+
+def test_render_with_nothing_to_draw_exits_nonzero(tmp_path):
+    assert sc.main(["render", "--out", str(tmp_path)]) == 1
+    assert not (tmp_path / "review_steps.zip").exists()

@@ -375,6 +375,7 @@ FETCH_NAMES = (
     "articulate_frames.zip",
     "articulate_proposal.json",
     "vlm_check.json",
+    "review_steps.zip",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -416,6 +417,7 @@ PUBLISHED_NAMES = frozenset(
         "articulate_frames.zip",
         "articulate_proposal.json",
         "vlm_check.json",
+        "review_steps.zip",
     }
 )
 PUBLIC_FIELDS = (
