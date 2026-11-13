@@ -379,6 +379,7 @@ def write_property_set(
     vote: Mapping[str, Any] | None = None,
     review: Mapping[str, Any] | None = None,
     vlm_physics: Mapping[str, Any] | None = None,
+    fallbacks: Mapping[int, str] | None = None,
 ) -> dict[str, Any]:
     """Write ``out/physics/<n>.json`` for every object and a summary.
 
@@ -409,25 +410,34 @@ def write_property_set(
     folder = Path(out) / "physics"
     folder.mkdir(parents=True, exist_ok=True)
     records = []
+    fallbacks = fallbacks or {}
     for obj, vote_entry, review_entry in zip(objects, votes, reviews, strict=True):
         number = int(obj["object"])
         prior = None
-        if model is not None:
-            if packs is None:
-                raise ValueError("a prior checkpoint needs --packs")
-            pack_path = Path(packs) / f"object_{number}.npy"
-            features = np.load(pack_path, mmap_mode="r")
-            mask_path = Path(packs) / f"object_{number}_mask.npy"
-            mask = np.load(mask_path) if mask_path.is_file() else None
-            prior = prior_for_pack(model, features, mask)
+        use_prior = False
+        if packs is not None and model is not None:
+            pack_path = packs / f"object_{number}.npy"
+            if pack_path.is_file():
+                features = np.load(pack_path, mmap_mode="r")
+                mask_path = packs / f"object_{number}_mask.npy"
+                mask = np.load(mask_path) if mask_path.is_file() else None
+                prior = prior_for_pack(model, features, mask)
+                use_prior = True
+            elif number not in fallbacks:
+                raise ValueError(
+                    f"object_{number} has no prior pack and is not a fallback"
+                )
         record = property_record(
             str(obj["name"]),
             prior=prior,
             vote=vote_entry,
             review=review_entry,
             vlm_physics=estimates.get(str(number)),
-            prior_provenance=provenance,
+            prior_provenance=provenance if use_prior else None,
         )
+        if number in fallbacks:
+            record["plan_source"] = "fallback"
+            record["fallback_reason"] = fallbacks[number]
         record["object_number"] = number
         (folder / f"object_{number}.json").write_text(
             json.dumps(record, indent=2) + "\n", encoding="utf-8"
@@ -468,6 +478,45 @@ def object_names(association: Mapping[str, Any]) -> dict[int, str]:
     return names
 
 
+def _prior_inputs(
+    out: Path, checkpoint: Path | None
+) -> tuple[Path | None, Path | None]:
+    """Packs and the pinned checkpoint when both are present, else option B.
+
+    A checkpoint file whose SHA-256 is not the pinned prior is a reject, not
+    a silent fallback.
+    """
+    from sceneagent.fitted_prior import (
+        CHECKPOINT_RELATIVE,
+        PRIOR_REPO,
+        checked_checkpoint,
+    )
+
+    packs = out / "prior_input"
+    if not any(packs.glob("object_*.npy")):
+        return None, None
+    path = Path(checkpoint) if checkpoint else Path(PRIOR_REPO) / CHECKPOINT_RELATIVE
+    if not path.is_file():
+        return None, None
+    return packs, checked_checkpoint(path)
+
+
+def _fit_fallbacks(out: Path) -> dict[int, str]:
+    """Objects the prior tried and could not fit, with the recorded reason."""
+    try:
+        evidence = json.loads(
+            (out / "prior_input_ledger.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+    found: dict[int, str] = {}
+    for obj in evidence.get("objects") or []:
+        if not isinstance(obj, dict) or obj.get("ok"):
+            continue
+        found[int(obj["object"])] = str(obj.get("error") or "prior fit failed")
+    return found
+
+
 def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
     """Write ``physics/object_<n>.json`` for every placed object; one ledger item.
 
@@ -498,7 +547,20 @@ def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
         ]
         if not objects:
             raise ValueError("no placed object")
-        result = write_property_set(objects, None, out, checkpoint=checkpoint)
+        packs, used = _prior_inputs(out, checkpoint)
+        fallbacks = _fit_fallbacks(out)
+        if used is not None and packs is not None:
+            objects = [
+                obj
+                for obj in objects
+                if (packs / f"object_{obj['object']}.npy").is_file()
+                or obj["object"] in fallbacks
+            ]
+            if not objects:
+                raise ValueError("prior packs match no placed object")
+        result = write_property_set(
+            objects, packs, out, checkpoint=used, fallbacks=fallbacks
+        )
         entry.update(
             decision="accept",
             use_gpu=False,
@@ -509,6 +571,11 @@ def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
                 for r in result["records"]
             },
         )
+        if fallbacks:
+            entry["fallbacks"] = [
+                {"object": number, "plan_source": "fallback", "reason": reason}
+                for number, reason in sorted(fallbacks.items())
+            ]
     except (OSError, ValueError, KeyError) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[:800])
     entries.append(entry)

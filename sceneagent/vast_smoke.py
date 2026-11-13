@@ -237,6 +237,7 @@ PIPELINES = {
                 "Gaussian association",
                 "SAM 3D meshes",
                 "ICP residuals",
+                "fitted splat prior input",
                 "§3.4 properties",
                 "USD physics export",
                 "Isaac Lab settle",
@@ -367,6 +368,7 @@ FETCH_NAMES = (
     "inspection_sheet.png",
     "inspection_views.zip",
     "settle_summary.json",
+    "prior_input_ledger.json",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -404,6 +406,7 @@ PUBLISHED_NAMES = frozenset(
         "inspection_sheet.png",
         "inspection_views.zip",
         "settle_summary.json",
+        "prior_input_ledger.json",
     }
 )
 PUBLIC_FIELDS = (

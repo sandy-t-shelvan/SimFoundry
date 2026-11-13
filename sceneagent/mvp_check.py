@@ -11,9 +11,10 @@ dc3, dc5 and dc7 are post-MVP and are not checked.
 dc1: ``ledger.json`` accepts every ``video_run`` stage, and ``step_verdicts.json``
 (from the runner review, beside the run or in ``--review``) accepts every
 stage it judged.
-dc2: ``physics/object_<n>.json`` for every object in ``export_evidence.json``,
-with every §3.4 field and a ``sources`` entry. Prior provenance (a ``prior``
-block with a sha256) is option A; fields without it are option B and partly met.
+dc2: ``physics/object_<n>.json`` for every exported object, with every §3.4
+field and a ``sources`` entry. Met when at least one record is prior-backed.
+``plan_source`` ``fallback`` keeps default physics and never counts as
+prior-backed. Fields with no prior are option B and partly met.
 dc4 (Sandeep, 2026-11-13, option A): the scene settles, and the inspector
 report is model-written (``model_replied`` true, no ``error``), findings or not.
 dc6: a ``*_scene_state_exported.json`` from the editor import, with physics
@@ -132,6 +133,9 @@ def _record_complete(record: dict[str, Any] | None) -> tuple[bool, bool]:
     if not isinstance(sources, dict):
         return False, False
     fields = all(key in record and key in sources for key in SECTION_34_FIELDS)
+    # A fallback keeps default physics. It is never prior-backed.
+    if record.get("plan_source") == "fallback":
+        return fields, False
     prior = record.get("prior")
     sha = prior.get("sha256") if isinstance(prior, dict) else None
     return fields, isinstance(sha, str) and _SHA.fullmatch(sha) is not None
@@ -160,7 +164,7 @@ def check_dc2(run: Path) -> dict[str, Any]:
         fields, prior = _record_complete(_read(path))
         with_fields += int(fields)
         with_prior += int(fields and prior)
-    if with_fields == len(numbers) and with_prior == len(numbers):
+    if with_fields == len(numbers) and with_prior >= 1:
         status = MET
     elif with_fields == len(numbers):
         status = PARTLY

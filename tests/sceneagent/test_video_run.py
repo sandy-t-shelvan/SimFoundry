@@ -205,6 +205,7 @@ def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
         "association",
         "sam3d",
         "place",
+        "prior_input",
         "physics",
         "export",
         "settle",
@@ -276,8 +277,9 @@ def test_the_mailbox_pipeline_has_its_own_dir_and_ships_the_video():
         "--out",
         REMOTE_MAILBOX_OUT,
     ]
-    assert PIPELINES["mailbox"][0][-5:] == (
+    assert PIPELINES["mailbox"][0][-6:] == (
         bin_place.ICP_ITEM,
+        "fitted splat prior input",
         "§3.4 properties",
         "USD physics export",
         "Isaac Lab settle",

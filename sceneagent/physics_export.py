@@ -270,9 +270,13 @@ def _object_block(
         schemas += ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
     if iterations:
         schemas.append("PhysxRigidBodyAPI")
-    elif physx and (
-        values["mass_kg"] is not None or values["density_kg_m3"] is not None
+    elif (
+        physx
+        and "PhysicsMassAPI" not in schemas
+        and (values["mass_kg"] is not None or values["density_kg_m3"] is not None)
     ):
+        # A rigid body already carries PhysicsMassAPI. Applying it again makes
+        # the USDA prim fail to compose, so settle finds no body.
         schemas.append("PhysicsMassAPI")
     head = f'    def Xform "{name}"'
     if schemas:

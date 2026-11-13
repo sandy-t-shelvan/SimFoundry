@@ -57,6 +57,21 @@ def test_missing_values_are_left_to_physx_and_named():
     assert all(v is None for v in resolved["values"].values())
 
 
+def test_a_prior_mass_and_density_apply_the_mass_schema_once():
+    obj = _cube(
+        "object_1",
+        body_type="dynamic rigid",
+        collision_primitive="box",
+        mass_kg=1.7,
+        density_kg_m3=590.0,
+    )
+    resolved = pe.resolve_physics(obj.properties)
+    lines, _ = pe._object_block(obj, pe.stage_points(obj), resolved)
+    schemas = next(line for line in lines if "apiSchemas" in line)
+    assert schemas.count("PhysicsMassAPI") == 1
+    assert 'physics:approximation = "boundingCube"' in "\n".join(lines)
+
+
 def test_a_dynamic_triangle_mesh_becomes_a_convex_decomposition():
     resolved = pe.resolve_physics(
         {"body_type": "dynamic rigid", "collision_primitive": "triangle mesh"}

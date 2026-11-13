@@ -1,0 +1,16 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# COLMAP 3.11.1 dropped --SiftMatching.min_num_inliers. The prior still passes
+# it. This wrapper rewrites that one flag and execs the real binary.
+
+real=/opt/colmap-cuda/bin/colmap
+args=()
+for arg in "$@"; do
+  if [ "$arg" = "--SiftMatching.min_num_inliers" ]; then
+    arg="--TwoViewGeometry.min_num_inliers"
+  fi
+  args+=("$arg")
+done
+exec "$real" "${args[@]}"

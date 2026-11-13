@@ -282,6 +282,87 @@ def test_run_physics_writes_a_record_per_placed_object_without_a_prior(tmp_path)
     assert set(entry["materials"]) == {"object_1"}
 
 
+def test_a_failed_fit_gets_default_physics_and_is_marked_fallback(tmp_path):
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "object_list": [
+                    {"object": 1, "masks": [{"phrase": "cup"}]},
+                    {"object": 2, "masks": [{"phrase": "marker"}]},
+                ]
+            }
+        )
+    )
+    (tmp_path / "bin_score.json").write_text(
+        json.dumps(
+            {
+                "icp": {
+                    "objects": [
+                        {"object": 1, "placed": True},
+                        {"object": 2, "placed": True},
+                    ]
+                }
+            }
+        )
+    )
+    (tmp_path / "prior_input_ledger.json").write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 2, "ok": False, "error": "no good initial image pair"}
+                ]
+            }
+        )
+    )
+    assert pp.run_physics(tmp_path) == 0
+    record = json.loads((tmp_path / "physics" / "object_2.json").read_text())
+    assert record["plan_source"] == "fallback"
+    assert record["fallback_reason"] == "no good initial image pair"
+    assert record["mass_kg"] is None and "prior" not in record
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["fallbacks"][0]["plan_source"] == "fallback"
+
+
+def test_run_physics_rejects_a_checkpoint_that_is_not_the_pinned_prior(tmp_path):
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps({"object_list": [{"object": 1, "masks": [{"phrase": "mailbox"}]}]})
+    )
+    (tmp_path / "bin_score.json").write_text(
+        json.dumps({"icp": {"objects": [{"object": 1, "placed": True}]}})
+    )
+    packs = tmp_path / "prior_input"
+    packs.mkdir()
+    np.save(packs / "object_1.npy", np.zeros((5, PRIOR_DIM)))
+    (tmp_path / "not_the_prior.npz").write_bytes(b"nope")
+    assert pp.run_physics(tmp_path, checkpoint=tmp_path / "not_the_prior.npz") == 1
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["decision"] == "reject" and "not the pinned" in entry["reason"]
+
+
+def test_run_physics_uses_packs_when_the_checkpoint_hash_matches(tmp_path, monkeypatch):
+    from sceneagent import fitted_prior
+
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps({"object_list": [{"object": 1, "masks": [{"phrase": "mailbox"}]}]})
+    )
+    (tmp_path / "bin_score.json").write_text(
+        json.dumps({"icp": {"objects": [{"object": 1, "placed": True}]}})
+    )
+    checkpoint = _constant_prior(_bias(material="plastic")).save(tmp_path / "prior.npz")
+    monkeypatch.setattr(
+        fitted_prior, "CHECKPOINT_SHA256", fitted_prior.file_sha256(checkpoint)
+    )
+    packs = tmp_path / "prior_input"
+    packs.mkdir()
+    np.save(packs / "object_1.npy", np.zeros((8, PRIOR_DIM)))
+    assert pp.run_physics(tmp_path, checkpoint=checkpoint) == 0
+    record = json.loads((tmp_path / "physics" / "object_1.json").read_text())
+    assert record["prior"]["sha256"] == fitted_prior.file_sha256(checkpoint)
+    assert record["mass_kg"] is not None
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["prior"] is True
+
+
 def test_run_physics_without_a_placement_rejects(tmp_path):
     assert pp.run_physics(tmp_path) == 1
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]

@@ -218,6 +218,7 @@ jobs:
             sf4-artifacts/inspection_sheet.png
             sf4-artifacts/inspection_views.zip
             sf4-artifacts/settle_summary.json
+            sf4-artifacts/prior_input_ledger.json
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.
