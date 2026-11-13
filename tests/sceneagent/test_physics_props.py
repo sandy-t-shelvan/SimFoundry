@@ -282,6 +282,47 @@ def test_run_physics_writes_a_record_per_placed_object_without_a_prior(tmp_path)
     assert set(entry["materials"]) == {"object_1"}
 
 
+def test_a_failed_fit_gets_default_physics_and_is_marked_fallback(tmp_path):
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "object_list": [
+                    {"object": 1, "masks": [{"phrase": "cup"}]},
+                    {"object": 2, "masks": [{"phrase": "marker"}]},
+                ]
+            }
+        )
+    )
+    (tmp_path / "bin_score.json").write_text(
+        json.dumps(
+            {
+                "icp": {
+                    "objects": [
+                        {"object": 1, "placed": True},
+                        {"object": 2, "placed": True},
+                    ]
+                }
+            }
+        )
+    )
+    (tmp_path / "prior_input_ledger.json").write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 2, "ok": False, "error": "no good initial image pair"}
+                ]
+            }
+        )
+    )
+    assert pp.run_physics(tmp_path) == 0
+    record = json.loads((tmp_path / "physics" / "object_2.json").read_text())
+    assert record["plan_source"] == "fallback"
+    assert record["fallback_reason"] == "no good initial image pair"
+    assert record["mass_kg"] is None and "prior" not in record
+    entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
+    assert entry["fallbacks"][0]["plan_source"] == "fallback"
+
+
 def test_run_physics_rejects_a_checkpoint_that_is_not_the_pinned_prior(tmp_path):
     (tmp_path / "association_evidence.json").write_text(
         json.dumps({"object_list": [{"object": 1, "masks": [{"phrase": "mailbox"}]}]})

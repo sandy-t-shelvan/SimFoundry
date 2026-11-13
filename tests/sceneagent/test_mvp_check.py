@@ -136,6 +136,11 @@ def test_dc2_is_partly_met_without_a_prior_and_met_with_one(tmp_path):
     (folder / "object_2.json").write_text(json.dumps(_physics(2, prior=True)))
     row = mvp_check.check_dc2(tmp_path)
     assert row["status"] == mvp_check.MET and row["with_prior"] == 2
+    fallback = _physics(2, prior=True)
+    fallback["plan_source"] = "fallback"
+    (folder / "object_2.json").write_text(json.dumps(fallback))
+    row = mvp_check.check_dc2(tmp_path)
+    assert row["status"] == mvp_check.MET and row["with_prior"] == 1
     assert set(UNPUBLISHED_LOOKUPS).issubset(mvp_check.SECTION_34_FIELDS)
 
 

@@ -379,6 +379,7 @@ def write_property_set(
     vote: Mapping[str, Any] | None = None,
     review: Mapping[str, Any] | None = None,
     vlm_physics: Mapping[str, Any] | None = None,
+    fallbacks: Mapping[int, str] | None = None,
 ) -> dict[str, Any]:
     """Write ``out/physics/<n>.json`` for every object and a summary.
 
@@ -409,13 +410,15 @@ def write_property_set(
     folder = Path(out) / "physics"
     folder.mkdir(parents=True, exist_ok=True)
     records = []
+    fallbacks = fallbacks or {}
     for obj, vote_entry, review_entry in zip(objects, votes, reviews, strict=True):
         number = int(obj["object"])
         prior = None
-        if model is not None:
-            if packs is None:
-                raise ValueError("a prior checkpoint needs --packs")
-            pack_path = Path(packs) / f"object_{number}.npy"
+        pack_path = None if packs is None else Path(packs) / f"object_{number}.npy"
+        use_prior = model is not None and pack_path is not None and pack_path.is_file()
+        if model is not None and not use_prior and number not in fallbacks:
+            raise ValueError(f"object_{number} has no prior pack and is not a fallback")
+        if use_prior:
             features = np.load(pack_path, mmap_mode="r")
             mask_path = Path(packs) / f"object_{number}_mask.npy"
             mask = np.load(mask_path) if mask_path.is_file() else None
@@ -426,8 +429,11 @@ def write_property_set(
             vote=vote_entry,
             review=review_entry,
             vlm_physics=estimates.get(str(number)),
-            prior_provenance=provenance,
+            prior_provenance=provenance if use_prior else None,
         )
+        if number in fallbacks:
+            record["plan_source"] = "fallback"
+            record["fallback_reason"] = fallbacks[number]
         record["object_number"] = number
         (folder / f"object_{number}.json").write_text(
             json.dumps(record, indent=2) + "\n", encoding="utf-8"
@@ -491,6 +497,20 @@ def _prior_inputs(
     return packs, checked_checkpoint(path)
 
 
+def _fit_fallbacks(out: Path) -> dict[int, str]:
+    """Objects the prior tried and could not fit, with the recorded reason."""
+    try:
+        evidence = json.loads((out / "prior_input_ledger.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    found: dict[int, str] = {}
+    for obj in evidence.get("objects") or []:
+        if not isinstance(obj, dict) or obj.get("ok"):
+            continue
+        found[int(obj["object"])] = str(obj.get("error") or "prior fit failed")
+    return found
+
+
 def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
     """Write ``physics/object_<n>.json`` for every placed object; one ledger item.
 
@@ -522,15 +542,19 @@ def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
         if not objects:
             raise ValueError("no placed object")
         packs, used = _prior_inputs(out, checkpoint)
+        fallbacks = _fit_fallbacks(out)
         if used is not None and packs is not None:
             objects = [
                 obj
                 for obj in objects
                 if (packs / f"object_{obj['object']}.npy").is_file()
+                or obj["object"] in fallbacks
             ]
             if not objects:
                 raise ValueError("prior packs match no placed object")
-        result = write_property_set(objects, packs, out, checkpoint=used)
+        result = write_property_set(
+            objects, packs, out, checkpoint=used, fallbacks=fallbacks
+        )
         entry.update(
             decision="accept",
             use_gpu=False,
@@ -541,6 +565,11 @@ def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
                 for r in result["records"]
             },
         )
+        if fallbacks:
+            entry["fallbacks"] = [
+                {"object": number, "plan_source": "fallback", "reason": reason}
+                for number, reason in sorted(fallbacks.items())
+            ]
     except (OSError, ValueError, KeyError) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[:800])
     entries.append(entry)

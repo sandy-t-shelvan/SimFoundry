@@ -220,16 +220,18 @@ def test_every_meshed_object_is_packed_and_recorded(tmp_path):
     assert box.cwd == str(out / "fitted")  # not the prior checkout
 
 
-def test_a_failed_object_or_a_constant_pack_rejects_the_stage(tmp_path):
+def test_a_failed_fit_is_a_fallback_and_the_stage_still_accepts(tmp_path):
     pytest.importorskip("trimesh")
     out = _bin(tmp_path)
     constant = _pack()
     constant[:, fp.OPACITY_COLUMN] = 0.99
     box = _Box(fp.PRIOR_COMMIT, {3: None, 5: constant})
-    assert fp.run_fitted_prior(out, runner=box, prior_repo=tmp_path / "prior") == 1
+    assert fp.run_fitted_prior(out, runner=box, prior_repo=tmp_path / "prior") == 0
     entry = json.loads((out / "ledger.json").read_text())["entries"][-1]
-    assert entry["decision"] == "reject" and entry["failed"] == 2
+    assert entry["decision"] == "accept" and entry["failed"] == 2
     assert "only 3 views" in entry["reason"] and "constant" in entry["reason"]
+    assert [row["plan_source"] for row in entry["fallbacks"]] == ["fallback", "fallback"]
+    assert all(row["reason"] for row in entry["fallbacks"])
 
 
 def test_a_checkpoint_with_the_wrong_hash_is_refused(tmp_path):

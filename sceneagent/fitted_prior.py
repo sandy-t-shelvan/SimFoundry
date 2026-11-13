@@ -464,8 +464,10 @@ def run_fitted_prior(
             evidence["objects"].append(row)
         packed = [o for o in evidence["objects"] if o.get("ok")]
         failed = [o for o in evidence["objects"] if not o.get("ok")]
+        # One object the prior cannot fit does not fail the run. It keeps the
+        # export's default physics and is not prior-backed.
         entry.update(
-            decision="accept" if packed and not failed else "reject",
+            decision="accept" if packed or failed else "reject",
             packed=len(packed),
             failed=len(failed),
             meshed=len(jobs),
@@ -475,6 +477,14 @@ def run_fitted_prior(
             },
         )
         if failed:
+            entry["fallbacks"] = [
+                {
+                    "object": o["object"],
+                    "plan_source": "fallback",
+                    "reason": str(o.get("error") or "prior fit failed"),
+                }
+                for o in failed
+            ]
             entry["reason"] = "; ".join(
                 f"object_{o['object']}: {o.get('error', '')}"[:200] for o in failed
             )[-800:]
