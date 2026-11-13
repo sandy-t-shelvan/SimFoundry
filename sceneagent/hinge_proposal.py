@@ -56,8 +56,10 @@ def prompt_for(
         json.dumps([_box(part) for part in parts]),
         "Reply with one JSON object and no other text.",
         'Keys: "joints", a list. Each joint has "type" (revolute, prismatic, or fixed),',
-        '"parent", "child", "axis" (unit vector), "pivot", "lower", "upper", and "rationale".',
-        "Limits are radians. Use fixed when a pair should not move.",
+        '"parent", "child", "axis" (unit vector), "pivot" (a 3-vector, required),',
+        '"lower", "upper", and "rationale".',
+        "Limits are radians. pivot is metres and must not be null.",
+        "Use fixed when a pair should not move.",
         "Do not describe any value as measured.",
     ]
     if rejected:
@@ -146,7 +148,7 @@ def _checked(name: str, parts: Sequence[Mapping[str, Any]], text: str):
             )
             continue
         try:
-            reply = _movable_reply(item, kind)
+            reply = _movable_reply(item, kind, parts)
         except (KeyError, TypeError, ValueError) as exc:
             errors.append(f"joint {index}: {exc}")
             continue
@@ -171,27 +173,79 @@ def _checked(name: str, parts: Sequence[Mapping[str, Any]], text: str):
             continue
         joint = dict(built["joint"])
         joint["rationale"] = reply["rationale"]
+        joint["pivot_source"] = reply["pivot_source"]
         accepted.append(joint)
     if errors:
         return [], "; ".join(errors)
     return accepted, None
 
 
-def _movable_reply(item: Mapping[str, Any], kind: str) -> dict[str, Any]:
+def _movable_reply(
+    item: Mapping[str, Any], kind: str, parts: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
     rationale = item.get("rationale")
     if not isinstance(rationale, str) or not rationale.strip():
         raise ValueError("rationale is missing")
+    pivot = _vec3(item.get("pivot"))
+    source = "reply"
+    if pivot is None:
+        pivot = shared_face_pivot(
+            parts, str(item.get("parent")), str(item.get("child"))
+        )
+        source = "shared_face"
+    if pivot is None:
+        raise ValueError("pivot is missing")
     return {
         "name": f"{item.get('parent')}_to_{item.get('child')}",
         "type": kind,
         "parent": str(item["parent"]),
         "child": str(item["child"]),
         "axis": [float(value) for value in item["axis"]],
-        "origin": [float(value) for value in item["pivot"]],
+        "origin": pivot,
         "lower": float(item["lower"]),
         "upper": float(item["upper"]),
         "rationale": rationale.strip(),
+        "pivot_source": source,
     }
+
+
+def shared_face_pivot(
+    parts: Sequence[Mapping[str, Any]], parent: str, child: str
+) -> list[float] | None:
+    """Center of the overlap of the two part boxes.
+
+    A lid sitting on a body meets it on one face. The center of that face is
+    the pivot. Boxes that do not meet have no pivot to invent.
+    """
+    boxes = {}
+    for part in parts:
+        low, high = _vec3(part.get("bbox_min")), _vec3(part.get("bbox_max"))
+        if low is None or high is None:
+            continue
+        boxes[str(part.get("name"))] = (low, high)
+    if parent not in boxes or child not in boxes:
+        return None
+    low_a, high_a = boxes[parent]
+    low_b, high_b = boxes[child]
+    center: list[float] = []
+    for index in range(3):
+        start = max(low_a[index], low_b[index])
+        end = min(high_a[index], high_b[index])
+        if end < start - 1e-6:
+            return None
+        if end < start:
+            start = end = (start + end) / 2.0
+        center.append((start + end) / 2.0)
+    return center
+
+
+def _vec3(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return None
+    try:
+        return [float(item) for item in value]
+    except (TypeError, ValueError):
+        return None
 
 
 def _fixed(item: Mapping[str, Any], kind: str) -> dict[str, Any]:

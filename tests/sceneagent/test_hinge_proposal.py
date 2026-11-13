@@ -148,6 +148,39 @@ def test_active_model_id_follows_one_constant(monkeypatch):
     assert active_model_id() == "override-id"
 
 
+def test_a_null_pivot_uses_the_shared_face_and_is_written_into_usd():
+    from sceneagent.mailbox_hinge import proposal_documents
+
+    raw = json.loads(GOOD)
+    raw["joints"][0]["pivot"] = None
+    raw["joints"][0]["axis"] = [-1, 0, 0]
+    raw["joints"][0]["upper"] = 1.571
+    stub = Stub([json.dumps(raw)])
+    record = propose_articulation(_mailbox(), FRAMES, stub)
+    joint = record["objects"][0]["joints"][0]
+    assert record["objects"][0]["status"] == "ok"
+    assert joint["origin"] == pytest.approx([0.1, 0.1, 0.2])
+    assert joint["pivot_source"] == "shared_face"
+    assert len(stub.images) == 1
+    usda = proposal_documents(record)["usda"]
+    assert "point3f physics:localPos0 = (0.1, 0.1, 0.2)" in usda
+    assert "point3f physics:localPos1 = (0.1, 0.1, 0.2)" in usda
+
+
+def test_a_null_pivot_without_a_shared_face_is_unresolved():
+    raw = json.loads(GOOD)
+    raw["joints"][0]["pivot"] = None
+    text = json.dumps(raw)
+    stub = Stub([text, text])
+    bare = [{"name": "object_1", "parts": [{"name": "body"}, {"name": "lid"}]}]
+    record = propose_articulation(bare, FRAMES, stub)
+    obj = record["objects"][0]
+    assert obj["status"] == "unresolved"
+    assert obj["joints"] == []
+    assert "pivot is missing" in obj["attempts"][-1]["error"]
+    assert len(stub.images) == 2
+
+
 def test_a_failed_call_is_unresolved_and_does_not_raise():
     class Down:
         def generate_images(self, prompt, images=(), search=False):

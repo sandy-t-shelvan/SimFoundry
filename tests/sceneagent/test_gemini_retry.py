@@ -41,7 +41,26 @@ def _ok_payload(text="ok"):
     ).encode()
 
 
-def test_request_retries_503_and_timeout_then_returns(monkeypatch):
+def test_the_audit_client_asks_for_the_active_model(monkeypatch):
+    """material_audit calls this client. The first request is not the retired id."""
+    from sceneagent.gemini_client import DEFAULT_MODEL_ID
+    from sceneagent.vlm_port import client_from_environ as audit_client
+
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-real-key")
+    monkeypatch.delenv("GEMINI_MODEL_ID", raising=False)
+    seen = []
+
+    def fake(url, key, payload=None):
+        seen.append(url)
+        body = json.dumps({"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+        return 200, body
+
+    monkeypatch.setattr("sceneagent.gemini_client._request", fake)
+    reply = audit_client().generate_images("audit", images=[b"png"])
+    assert reply["http_status"] == 200
+    assert reply["model_id"] == DEFAULT_MODEL_ID
+    assert seen[0].endswith(f"/models/{DEFAULT_MODEL_ID}:generateContent")
+    assert "/models/gemini-2.5-flash:" not in seen[0]
     calls = {"n": 0}
 
     def urlopen(_request, timeout=None):

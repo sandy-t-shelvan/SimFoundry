@@ -233,6 +233,7 @@ def hinge_usda(object_name: str, joint: Mapping[str, Any]) -> str:
             f'    def PhysicsRevoluteJoint "{joint_name}"',
             "    {",
             f'        uniform token physics:axis = "{token}"',
+            *_local_pos(joint),
             f"        float physics:lowerLimit = {lower:g}",
             f"        float physics:upperLimit = {upper:g}",
             f"        rel physics:body0 = </{object_name}/{parent}>",
@@ -284,6 +285,7 @@ def _joint_usda(object_name: str, joint: Mapping[str, Any]) -> str:
             f'    def PhysicsPrismaticJoint "{joint["name"]}"',
             "    {",
             f'        uniform token physics:axis = "{token}"',
+            *_local_pos(joint),
             f"        float physics:lowerLimit = {float(joint['lower']):g}",
             f"        float physics:upperLimit = {float(joint['upper']):g}",
             f"        rel physics:body0 = </{object_name}/{parent}>",
@@ -293,6 +295,18 @@ def _joint_usda(object_name: str, joint: Mapping[str, Any]) -> str:
             "",
         ]
     )
+
+
+def _local_pos(joint: Mapping[str, Any]) -> list[str]:
+    """Joint position in both body frames. Empty xforms share object space."""
+    origin = joint.get("origin")
+    if not isinstance(origin, (list, tuple)) or len(origin) != 3:
+        return []
+    point = ", ".join(f"{float(value):g}" for value in origin)
+    return [
+        f"        point3f physics:localPos0 = ({point})",
+        f"        point3f physics:localPos1 = ({point})",
+    ]
 
 
 def _scene_for_joints(

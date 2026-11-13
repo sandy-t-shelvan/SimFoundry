@@ -103,6 +103,7 @@ def test_proposed_joints_are_written_into_usd_and_the_scene_state():
                         "parent": "body",
                         "child": "lid",
                         "axis": [0, 1, 0],
+                        "origin": [0.1, 0.1, 0.2],
                         "lower": 0.0,
                         "upper": 1.5707963267948966,
                     }
@@ -114,6 +115,7 @@ def test_proposed_joints_are_written_into_usd_and_the_scene_state():
     assert 'def PhysicsRevoluteJoint "body_to_lid"' in documents["usda"]
     assert 'physics:axis = "Y"' in documents["usda"]
     assert "physics:upperLimit = 90" in documents["usda"]
+    assert "point3f physics:localPos0 = (0.1, 0.1, 0.2)" in documents["usda"]
     scene = documents["scenes"][0]
     assert scene["joint_pos"] == [0.0]
     assert scene["joint_vel"] == [0.0]
