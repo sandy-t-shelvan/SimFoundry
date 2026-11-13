@@ -117,6 +117,11 @@ def _sequential_pose_commands(database, image_dir, sparse_dir, use_gpu, major=3)
                 image_dir,
                 "--output_path",
                 sparse_dir,
+                # COLMAP keeps the first model even when it is two images, and
+                # then will not relax initialization. A pair with barely 100
+                # inliers becomes that model and nothing else registers.
+                "--Mapper.init_min_num_inliers",
+                "200",
             ],
         ]
     return [
@@ -159,6 +164,9 @@ def _sequential_pose_commands(database, image_dir, sparse_dir, use_gpu, major=3)
             image_dir,
             "--output_path",
             sparse_dir,
+            # See the COLMAP 4 branch: a two-image model blocks relaxation.
+            "--Mapper.init_min_num_inliers",
+            "200",
         ],
     ]
 

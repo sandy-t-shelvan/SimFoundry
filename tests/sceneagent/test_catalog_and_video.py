@@ -56,6 +56,7 @@ def test_pose_commands_match_colmap_37_and_skip_gpu_without_cuda():
     assert cuda[0][cuda[0].index("--FeatureExtraction.use_gpu") + 1] == "1"
     assert "--log_to_stderr" not in cuda[0]
     assert "--FeatureMatching.use_gpu" in cuda[1]
+    assert cuda[2][cuda[2].index("--Mapper.init_min_num_inliers") + 1] == "200"
     blob = json.dumps(commands).lower()
     assert "sceneagentx" not in blob
 
