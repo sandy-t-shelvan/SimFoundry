@@ -28,10 +28,12 @@ from pathlib import Path
 from typing import Any
 
 from sceneagent.colmap_stage import (
-    MAPPER_LADDER,
+    REFINE_INTRINSICS,
     colmap_major,
     init_pairs_from_log,
+    mapper_ladder,
     pose_commands,
+    refine_intrinsics_command,
     use_gpu_from_banner,
 )
 from sceneagent.gpu_headroom import (
@@ -42,10 +44,16 @@ from sceneagent.gpu_headroom import (
     require_gpu_headroom,
 )
 from sceneagent.pipeline import write_plan
+from sceneagent.pose_diagnosis import (
+    camera_is_plausible,
+    diagnose,
+    read_cameras_bin,
+)
 from sceneagent.reconstruction_gate import EVIDENCE_DIRNAME, accept_reconstruction
 from sceneagent.run4_report import registered_image_names, unregistered_frame_report
 from sceneagent.run4_sampling import (
     BIN_COUNT,
+    bin_count,
     decode_all_command,
     extract_selected_command,
     ffprobe_command,
@@ -102,8 +110,12 @@ def run_colmap_on_images(
 
     ``pose_commands`` chooses the matcher. This function does not swap in
     vocab-tree matching. A failed check raises :class:`GpuHeadroomError`
-    and does not run that command. A non-zero command is returned as a
-    failure with its stderr. It is not retried.
+    and does not run that command. A non-zero extractor or matcher is
+    returned as a failure with its stderr and is not retried. The mapper
+    runs once per rung of :func:`mapper_ladder` until the largest model
+    passes the gate; every rung is recorded in ``mapper_attempts``, the
+    passing one is ``mapper_rung``, and a model that never passes carries a
+    likely cause read from the database (:func:`diagnose`).
     """
     image_dir = Path(image_dir)
     work_dir = Path(work_dir)
@@ -130,51 +142,33 @@ def run_colmap_on_images(
     commands = pose_commands(
         database, image_dir, sparse, use_gpu, major=major, matcher=matcher
     )
-    mapper_text = ""
-    for argv in commands:
-        if argv[1] != matcher and argv[1] not in {
-            "feature_extractor",
-            "mapper",
-        }:
+    *prepare, mapper_command = commands
+    for argv in prepare:
+        if argv[1] not in {matcher, "feature_extractor"}:
             raise ValueError(f"unexpected COLMAP step {argv[1]}")
         gpu_check("colmap")
         step = command_runner([str(part) for part in argv])
-        if argv[1] == "mapper":
-            mapper_text = _command_text(step)
         if step.get("returncode") != 0:
-            detail = _command_text(step).strip() or f"{argv[1]} failed"
-            return {
-                "ok": False,
-                "use_gpu": use_gpu,
-                "reason": detail,
-                "failed_step": argv[1],
-                "stderr": _command_text(step)[-2000:],
-                "returncode": step.get("returncode"),
-                "gate_document": None,
-                "registered_names": {},
-                "name_errors": {},
-            }
+            return _step_failure(argv[1], step, use_gpu)
     # Video frames are JPG; GraspClutter6D stills are PNG and are not re-encoded.
     frame_count = len(list(image_dir.glob("*.jpg"))) + len(
         list(image_dir.glob("*.png"))
     )
-    gate = accept_reconstruction(
-        sparse,
-        frame_count,
-        work_dir / EVIDENCE_DIRNAME,
-        runner=analyzer,
-    )
-    attempts = [_mapper_attempt(MAPPER_LADDER[0], gate, mapper_text, database)]
-    # Only a model that fails the gate is retried, on the same matches.
-    mapper_argv = [str(part) for part in commands[-1]]
-    for rung in MAPPER_LADDER[1:]:
-        if gate["pass"]:
-            break
+    mapper_argv = [str(part) for part in mapper_command]
+    attempts: list[dict[str, Any]] = []
+    gate: dict[str, Any] = {}
+    # Every rung maps the same matches from an empty sparse/; only a model
+    # that fails the gate goes on to the next rung.
+    for rung in mapper_ladder(matcher):
         shutil.rmtree(sparse, ignore_errors=True)
         sparse.mkdir(parents=True)
         gpu_check("colmap")
         step = command_runner([*mapper_argv, *rung[1]])
         if step.get("returncode") != 0:
+            if not attempts:
+                # The plain mapper itself failed (a crash or a timeout): no
+                # model exists to judge, so this is a step failure.
+                return _step_failure("mapper", step, use_gpu)
             attempts.append(
                 {
                     "rung": rung[0],
@@ -184,15 +178,26 @@ def run_colmap_on_images(
                 }
             )
             break
+        refined = None
+        if rung[0] in REFINE_INTRINSICS:
+            refined = _refine_intrinsics(sparse, command_runner)
         gate = accept_reconstruction(
             sparse,
             frame_count,
             work_dir / EVIDENCE_DIRNAME,
             runner=analyzer,
         )
-        attempts.append(_mapper_attempt(rung, gate, _command_text(step), database))
-    reason = gate["reason"]
-    if len(attempts) > 1:
+        attempt = _mapper_attempt(rung, gate, _command_text(step), database)
+        attempt["camera"] = _largest_camera(sparse)
+        if refined is not None:
+            attempt["refine_intrinsics"] = refined
+        attempts.append(attempt)
+        if gate["pass"]:
+            break
+    reason = gate.get("reason") or "no mapper rung produced a model"
+    if not gate.get("pass"):
+        reason = f"{reason} | likely cause: {diagnose(database, attempts)}"
+    if len(attempts) > 1 or not gate.get("pass"):
         reason = f"{reason} | mapper attempts: {attempt_summary(attempts)}"
     registered: dict[str, list[str] | None] = {}
     name_errors: dict[str, str] = {}
@@ -208,18 +213,100 @@ def run_colmap_on_images(
             except ValueError as exc:
                 registered[model.name] = None
                 name_errors[model.name] = str(exc)
+    passed = bool(gate.get("pass"))
+    winner = next((a["rung"] for a in attempts if a.get("pass")), None)
     return {
-        "ok": bool(gate["pass"]),
+        "ok": passed,
         "use_gpu": use_gpu,
         "reason": reason,
         "mapper_attempts": attempts,
-        "failed_step": None if gate["pass"] else "reconstruction_gate",
+        "mapper_rung": winner,
+        "failed_step": None if passed else "reconstruction_gate",
         "stderr": "",
         "returncode": 0,
-        "gate_document": gate["document"],
+        "gate_document": gate.get("document"),
         "registered_names": registered,
         "name_errors": name_errors,
     }
+
+
+def _step_failure(name: str, step: dict[str, Any], use_gpu: bool) -> dict[str, Any]:
+    detail = _command_text(step).strip() or f"{name} failed"
+    return {
+        "ok": False,
+        "use_gpu": use_gpu,
+        "reason": detail,
+        "failed_step": name,
+        "stderr": _command_text(step)[-2000:],
+        "returncode": step.get("returncode"),
+        "gate_document": None,
+        "registered_names": {},
+        "name_errors": {},
+    }
+
+
+def _models_by_size(sparse: Path) -> list[Path]:
+    """Model directories, the one with the most registered images first."""
+    sized = []
+    for model in sorted(path for path in sparse.iterdir() if path.is_dir()):
+        try:
+            count = len(registered_image_names((model / "images.bin").read_bytes()))
+        except (OSError, ValueError):
+            continue
+        sized.append((-count, model.name, model))
+    return [model for _, _, model in sorted(sized)]
+
+
+def _largest_camera(sparse: Path) -> dict[str, Any] | None:
+    """The first camera of the largest model, or None when unreadable."""
+    for model in _models_by_size(sparse)[:1]:
+        try:
+            cameras = read_cameras_bin((model / "cameras.bin").read_bytes())
+        except (OSError, ValueError):
+            return None
+        return cameras[0] if cameras else None
+    return None
+
+
+def _refine_intrinsics(
+    sparse: Path, command_runner: Callable[[list[str]], dict[str, Any]]
+) -> dict[str, Any]:
+    """Free focal and distortion in one bundle adjustment of the largest model.
+
+    The refined model replaces the mapped one only when the adjustment
+    exits 0 and its camera passes COLMAP's own bogus-parameter rule
+    (:func:`camera_is_plausible`); otherwise the fixed-intrinsics model is
+    kept and the record says why. Bundle adjustment runs on the CPU.
+    """
+    models = _models_by_size(sparse)
+    if not models:
+        return {"applied": False, "why": "no model"}
+    model = models[0]
+    staged = sparse.parent / f".refine_{model.name}"
+    shutil.rmtree(staged, ignore_errors=True)
+    staged.mkdir(parents=True)
+    step = command_runner(refine_intrinsics_command(model, staged))
+    record: dict[str, Any] = {"model": model.name, "applied": False}
+    try:
+        if step.get("returncode") != 0:
+            record["why"] = f"bundle_adjuster exited {step.get('returncode')}"
+            return record
+        try:
+            cameras = read_cameras_bin((staged / "cameras.bin").read_bytes())
+        except (OSError, ValueError) as exc:
+            record["why"] = f"refined cameras unreadable: {exc}"
+            return record
+        record["cameras"] = cameras
+        bad = [c for c in cameras if not camera_is_plausible(c)]
+        if bad:
+            record["why"] = "refined camera fails COLMAP's bogus-parameter rule"
+            return record
+        for item in staged.iterdir():
+            shutil.copyfile(item, model / item.name)
+        record["applied"] = True
+        return record
+    finally:
+        shutil.rmtree(staged, ignore_errors=True)
 
 
 def _image_names(database: Path) -> dict[int, str]:
@@ -258,6 +345,8 @@ def _mapper_attempt(
             [names.get(a, str(a)), names.get(b, str(b))] for a, b in pairs[:5]
         ],
         "init_pairs_tried": len(pairs),
+        # Why this rung did not end the ladder (None when it passed).
+        "gate_reason": None if gate.get("pass") else gate.get("reason"),
     }
 
 
@@ -335,6 +424,7 @@ def run_run4(
     pose_decision = "reject"
     pose_reason = ""
     use_gpu: bool | None = None
+    mapper_rung: str | None = None
     failed_step: str | None = None
     try:
         sha = checked_out_commit(commit_sha)
@@ -345,7 +435,9 @@ def run_run4(
             )
         gpu = require_gpu_headroom("colmap", query=gpu_query)
         evidence["gpu"]["colmap"] = gpu
-        selection = select_sharpest_per_bin(frames, duration_s, BIN_COUNT)
+        selection = select_sharpest_per_bin(
+            frames, duration_s, bin_count(len(frames), BIN_COUNT)
+        )
         names = [f"{i:04d}.jpg" for i in range(1, len(selection) + 1)]
         evidence["sampling"] = {
             "bin_count": len(selection),
@@ -355,11 +447,17 @@ def run_run4(
             "selected_names": names,
             "bins": selection,
             "definition": (
-                "300 equal bins across the full duration; sharpest "
-                "Laplacian variance; earliest index on ties; no truncation"
+                "300 equal bins across the full duration (every frame when "
+                "the clip has fewer); sharpest Laplacian variance at a long "
+                "side of at most 1920 px; earliest index on ties; no truncation"
             ),
         }
         colmap_result = run_colmap(names, selection)
+        if isinstance(colmap_result.get("use_gpu"), bool):
+            # Recorded on a failure too: run 43469526711 left it null, and
+            # nobody could tell whether SIFT had run on the GPU.
+            use_gpu = colmap_result["use_gpu"]
+        mapper_rung = colmap_result.get("mapper_rung")
         mapper_attempts = colmap_result.get("mapper_attempts")
         if mapper_attempts:
             evidence["mapper_attempts"] = mapper_attempts
@@ -378,11 +476,6 @@ def run_run4(
         if colmap_result.get("ok") is True:
             evidence["pass"] = True
             pose_decision = "accept"
-            use_gpu = (
-                colmap_result.get("use_gpu")
-                if isinstance(colmap_result.get("use_gpu"), bool)
-                else None
-            )
             info["reconstruction"] = "colmap"
         else:
             pose_reason = str(
@@ -416,11 +509,15 @@ def run_run4(
     if evidence.get("mapper_attempts"):
         # Which mapper rung produced the poses, or each one that failed.
         pose_entry["mapper_attempts"] = [
-            {k: item.get(k) for k in ("rung", "pass", "registered", "inputs")}
+            {
+                k: item.get(k)
+                for k in ("rung", "pass", "registered", "inputs", "gate_reason")
+            }
             for item in evidence["mapper_attempts"]
         ]
+        pose_entry["mapper_rung"] = mapper_rung
+    pose_entry["use_gpu"] = use_gpu
     if pose_decision == "accept":
-        pose_entry["use_gpu"] = use_gpu
         sampling = evidence["sampling"] or {}
         pose_entry["frames"] = sampling.get("selected_names")
     else:
@@ -450,6 +547,7 @@ def run_run4(
             "reason": pose_reason,
             "failed_step": failed_step,
             "use_gpu": use_gpu,
+            "mapper_rung": mapper_rung,
         },
     )
     return {

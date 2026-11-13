@@ -55,28 +55,84 @@ def colmap_major(banner):
 MATCHERS = ("sequential_matcher", "exhaustive_matcher")
 
 
-# Mapper retries, applied only after the largest model fails the pose gate
-# (KAN-52). COLMAP 3.11.1 relaxes its initial-pair rule (100 inliers, 16
-# degrees) only when it has built no model at all, and it always keeps its
-# first model however small (incremental_pipeline.cc, Run() and
-# Reconstruct()). On a slow handheld video almost no pair clears 16 degrees,
-# so when one weak, far-apart pair just does, it seeds a model of two images
-# that cannot grow, and relaxation never happens: PutMarkerInCup started from
-# frames 0051 and 0067 (101-107 inliers) and registered 2-6 of 300. Which
-# pair clears the rule moves with run-to-run match noise, which is why the
-# same commands passed and failed. Each rung starts the mapper from the
-# rule COLMAP itself would have relaxed to, on the same matches.
-MAPPER_LADDER = (
-    ("colmap_default", ()),
-    (
-        "relaxed_init",
-        ("--Mapper.init_min_num_inliers", "50", "--Mapper.init_min_tri_angle", "8"),
-    ),
-    (
-        "relaxed_init_more",
-        ("--Mapper.init_min_num_inliers", "25", "--Mapper.init_min_tri_angle", "4"),
-    ),
+# Mapper rungs, tried in order on the same matches until the largest model
+# passes the pose gate (KAN-52). Each is (name, extra mapper flags).
+#
+# Root cause of PutMarkerInCup's 2-6 of 300 on COLMAP 3.11.1: the 300
+# frames of a 15 s clip are 1-2 source frames apart, so inside the
+# sequential matcher's window (offsets 1, 2, 4, 8, 16) parallax is tiny
+# and 126 of 295 neighbouring pairs verify as planar-or-panoramic. There is
+# no focal prior (an MP4 has no EXIF), so the shared camera starts at
+# 1.2 * width and the mapper's bundle adjustment refines focal length and
+# distortion from the first two images on. With that little baseline they
+# are unconstrained: on a fresh run the first model grew to 52 images, its
+# focal ran from 2304 px to 18183 px with k = 1.66, COLMAP's image filter
+# then dropped every image that disagreed, and 4 were left. Having built a
+# model, COLMAP never relaxes its initial-pair rule, and 199 further
+# initial pairs failed. GPU matching noise only moves where this happens.
+#
+# The same matches and the same initial pair (0051/0067) register 300 of
+# 300 when the intrinsics are held during mapping; one bundle adjustment
+# over the finished model then refines them (f 2355 px, k 0.046). So the
+# video ladder holds the intrinsics first and refines them at the end
+# (``REFINE_INTRINSICS``). COLMAP's own rule follows, for a video whose
+# true focal is far from the 1.2 * width guess, then the relaxed initial
+# pairs of PR #99.
+FIXED_INTRINSICS = (
+    "--Mapper.ba_refine_focal_length",
+    "0",
+    "--Mapper.ba_refine_extra_params",
+    "0",
 )
+RELAXED_INIT = (
+    "relaxed_init",
+    ("--Mapper.init_min_num_inliers", "50", "--Mapper.init_min_tri_angle", "8"),
+)
+RELAXED_INIT_MORE = (
+    "relaxed_init_more",
+    ("--Mapper.init_min_num_inliers", "25", "--Mapper.init_min_tri_angle", "4"),
+)
+# A few wide-baseline stills (exhaustive matcher) constrain the intrinsics
+# from the start, so they keep COLMAP's own mapper first.
+MAPPER_LADDER = (("colmap_default", ()), RELAXED_INIT, RELAXED_INIT_MORE)
+VIDEO_MAPPER_LADDER = (
+    ("fixed_intrinsics", FIXED_INTRINSICS),
+    ("colmap_default", ()),
+    RELAXED_INIT,
+    RELAXED_INIT_MORE,
+)
+# Rungs whose models get one intrinsics-refining bundle adjustment.
+REFINE_INTRINSICS = frozenset({"fixed_intrinsics"})
+
+
+def mapper_ladder(matcher):
+    """The mapper rungs for this matcher: video (sequential) or stills."""
+    if matcher not in MATCHERS:
+        raise ValueError(f"unknown COLMAP matcher {matcher}")
+    return VIDEO_MAPPER_LADDER if matcher == MATCHERS[0] else MAPPER_LADDER
+
+
+def refine_intrinsics_command(model_dir, output_dir):
+    """One bundle adjustment over a finished model that frees focal and distortion.
+
+    The principal point stays at the image centre, as the mapper keeps it.
+    Option names are COLMAP 3.11.1's (``colmap bundle_adjuster -h``).
+    """
+    return [
+        "colmap",
+        "bundle_adjuster",
+        "--input_path",
+        str(model_dir),
+        "--output_path",
+        str(output_dir),
+        "--BundleAdjustment.refine_focal_length",
+        "1",
+        "--BundleAdjustment.refine_extra_params",
+        "1",
+        "--BundleAdjustment.refine_principal_point",
+        "0",
+    ]
+
 
 _INIT_PAIR_RE = re.compile(r"Initializing with image pair #(\d+) and #(\d+)")
 

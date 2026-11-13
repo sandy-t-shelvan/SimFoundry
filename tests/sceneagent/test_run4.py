@@ -567,13 +567,29 @@ def test_committed_fruits_file_matches_the_recorded_pin():
     assert info["duration_s"] == pytest.approx(FRUITS_MVHD_DURATION_S)
 
 
-def _ladder_run(tmp_path, registered_per_mapper_run):
-    """A fake COLMAP whose Nth mapper run leaves a model registering the Nth count."""
+def _cameras_bin(focal: float, k: float, width: int = 1920, height: int = 1080) -> bytes:
+    """One SIMPLE_RADIAL camera (model id 2): f, cx, cy, k."""
+    return struct.pack("<Qiiqq4d", 1, 1, 2, width, height, focal, width / 2, height / 2, k)
+
+
+# The live dead-end camera of PutMarkerInCup (fresh run, COLMAP 3.11.1) and
+# the camera one bundle adjustment gave the fixed-intrinsics model.
+DEAD_END_CAMERA = (18182.609107663422, 1.6566732761223824)
+REFINED_CAMERA = (2354.9442467161352, 0.046436828056766959)
+
+
+def _ladder_run(tmp_path, registered_per_mapper_run, *, refined=REFINED_CAMERA, **kwargs):
+    """A fake COLMAP whose Nth mapper run leaves a model registering the Nth count.
+
+    ``bundle_adjuster`` writes ``refined`` (focal, k) as the refined camera,
+    or nothing when it is None.
+    """
     image_dir = tmp_path / "images"
     image_dir.mkdir()
     for index in range(1, 301):
         (image_dir / f"{index:04d}.jpg").write_bytes(b"")
     mapper_calls = []
+    adjuster_calls = []
 
     def runner(argv):
         if argv[1] == "-h":
@@ -587,8 +603,16 @@ def _ladder_run(tmp_path, registered_per_mapper_run):
             (model / "images.bin").write_bytes(
                 _images_bin([f"{i:04d}.jpg" for i in range(1, n + 1)])
             )
+            (model / "cameras.bin").write_bytes(_cameras_bin(2304.0, 0.0))
             log = "Initializing with image pair #51 and #67\n"
             return {"returncode": 0, "stdout": "", "stderr": log}
+        if argv[1] == "bundle_adjuster":
+            adjuster_calls.append(list(argv))
+            if refined is not None:
+                src = Path(argv[argv.index("--input_path") + 1])
+                dst = Path(argv[argv.index("--output_path") + 1])
+                (dst / "images.bin").write_bytes((src / "images.bin").read_bytes())
+                (dst / "cameras.bin").write_bytes(_cameras_bin(*refined))
         return {"returncode": 0, "stdout": "", "stderr": ""}
 
     def analyzer(model):
@@ -606,44 +630,94 @@ def _ladder_run(tmp_path, registered_per_mapper_run):
         gpu_check=lambda stage: {"free_mib": 6144, "retries": 0},
         command_runner=runner,
         analyzer=analyzer,
+        **kwargs,
     )
-    return result, mapper_calls
+    return result, mapper_calls, adjuster_calls
 
 
-def test_a_dead_end_model_is_mapped_again_from_the_relaxed_initial_pair_rule(tmp_path):
-    # KAN-52: COLMAP 3.11.1 kept a two-image model from frames 0051/0067 and,
-    # having a model, never relaxed its initial-pair rule (2-6 of 300).
-    result, calls = _ladder_run(tmp_path, [2, 300])
+def test_a_video_is_mapped_with_fixed_intrinsics_then_refined_once(tmp_path):
+    # KAN-52 root cause: the shared focal and distortion ran away during
+    # mapping (2304 -> 18183 px, k 1.66) and COLMAP's filter dropped the
+    # images. Mapping with them held, then one adjustment, gave 300 of 300.
+    result, calls, adjusted = _ladder_run(tmp_path, [300])
     assert result["ok"] is True
+    assert result["mapper_rung"] == "fixed_intrinsics"
+    assert len(calls) == 1
+    argv = calls[0]["argv"]
+    assert argv[argv.index("--Mapper.ba_refine_focal_length") + 1] == "0"
+    assert argv[argv.index("--Mapper.ba_refine_extra_params") + 1] == "0"
+    assert len(adjusted) == 1
+    ba = adjusted[0]
+    assert ba[ba.index("--BundleAdjustment.refine_focal_length") + 1] == "1"
+    assert ba[ba.index("--BundleAdjustment.refine_extra_params") + 1] == "1"
+    assert ba[ba.index("--BundleAdjustment.refine_principal_point") + 1] == "0"
+    attempt = result["mapper_attempts"][0]
+    assert attempt["refine_intrinsics"]["applied"] is True
+    assert attempt["camera"]["focal_px"] == [pytest.approx(REFINED_CAMERA[0])]
+    model = tmp_path / "work" / "sparse" / "0"
+    assert sorted(p.name for p in (tmp_path / "work").iterdir() if p.name.startswith(".refine")) == []
+    assert (model / "cameras.bin").read_bytes() == _cameras_bin(*REFINED_CAMERA)
+
+
+def test_a_refined_camera_colmap_would_call_bogus_is_not_kept(tmp_path):
+    result, _calls, _adjusted = _ladder_run(tmp_path, [300], refined=DEAD_END_CAMERA)
+    attempt = result["mapper_attempts"][0]
+    assert attempt["refine_intrinsics"]["applied"] is False
+    assert "bogus" in attempt["refine_intrinsics"]["why"]
+    model = tmp_path / "work" / "sparse" / "0"
+    assert (model / "cameras.bin").read_bytes() == _cameras_bin(2304.0, 0.0)
+    assert result["ok"] is True
+
+
+def test_a_failed_rung_falls_back_to_colmaps_own_mapper_from_an_empty_sparse(tmp_path):
+    result, calls, adjusted = _ladder_run(tmp_path, [2, 300])
+    assert result["ok"] is True
+    assert result["mapper_rung"] == "colmap_default"
     assert [a["rung"] for a in result["mapper_attempts"]] == [
+        "fixed_intrinsics",
         "colmap_default",
-        "relaxed_init",
     ]
     assert [a["registered"] for a in result["mapper_attempts"]] == [2, 300]
-    retry = calls[1]["argv"]
+    assert "--Mapper.ba_refine_focal_length" not in calls[1]["argv"]
+    assert calls[1]["stale"] == []  # the dead-end model is gone before the retry
+    assert len(adjusted) == 1  # only the fixed-intrinsics rung is refined
+    first = result["mapper_attempts"][0]
+    assert first["init_pairs"] == [["51", "67"]]
+    assert "registered" in first["gate_reason"]
+    assert result["mapper_attempts"][1]["gate_reason"] is None
+
+
+def test_the_relaxed_initial_pair_rungs_stay_last(tmp_path):
+    result, calls, _adjusted = _ladder_run(tmp_path, [2, 4, 300])
+    assert result["mapper_rung"] == "relaxed_init"
+    retry = calls[2]["argv"]
     assert retry[retry.index("--Mapper.init_min_num_inliers") + 1] == "50"
     assert retry[retry.index("--Mapper.init_min_tri_angle") + 1] == "8"
-    assert calls[1]["stale"] == []  # the dead-end model is gone before the retry
-    assert result["mapper_attempts"][0]["init_pairs"] == [["51", "67"]]
 
 
-def test_a_model_that_passes_is_never_mapped_again(tmp_path):
-    result, calls = _ladder_run(tmp_path, [300])
-    assert result["ok"] is True
-    assert len(calls) == 1
-    assert "--Mapper.init_min_tri_angle" not in calls[0]["argv"]
-    assert [a["rung"] for a in result["mapper_attempts"]] == ["colmap_default"]
-
-
-def test_every_rung_failing_names_each_attempt_in_the_reason(tmp_path):
-    result, calls = _ladder_run(tmp_path, [2, 5, 3])
+def test_every_rung_failing_names_each_attempt_and_a_likely_cause(tmp_path):
+    result, calls, _adjusted = _ladder_run(tmp_path, [2, 5, 3, 4])
     assert result["ok"] is False
+    assert result["mapper_rung"] is None
     assert result["failed_step"] == "reconstruction_gate"
-    assert len(calls) == 3
-    assert "mapper attempts: colmap_default 2/300" in result["reason"]
-    assert "relaxed_init 5/300" in result["reason"]
-    assert "relaxed_init_more 3/300" in result["reason"]
-    assert "first pair 51/67" in result["reason"]
+    assert len(calls) == 4
+    reason = result["reason"]
+    assert "mapper attempts: fixed_intrinsics 2/300" in reason
+    assert "colmap_default 5/300" in reason
+    assert "relaxed_init 3/300" in reason
+    assert "relaxed_init_more 4/300" in reason
+    assert "first pair 51/67" in reason
+    # The fake database has no frames in it, and the reason says so.
+    assert "likely cause: " in reason
+
+
+def test_stills_keep_colmaps_own_mapper_first(tmp_path):
+    # The GraspClutter6D views are a few wide-baseline stills; they pass on
+    # the default mapper and are not refined.
+    result, calls, adjusted = _ladder_run(tmp_path, [300], matcher="exhaustive_matcher")
+    assert result["mapper_rung"] == "colmap_default"
+    assert "--Mapper.ba_refine_focal_length" not in calls[0]["argv"]
+    assert adjusted == []
 
 
 def test_init_pairs_are_read_from_the_mapper_log():
