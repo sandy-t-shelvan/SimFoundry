@@ -51,6 +51,14 @@ def prompt_terms(prompt: str) -> list[str]:
     return [term.strip().lower() for term in prompt.split(".") if term.strip()]
 
 
+def names_term(phrase: str, term: str) -> bool:
+    """Whether ``term`` appears in ``phrase`` as whole words ("box" is not in "mailbox")."""
+    words, want = phrase.lower().split(), term.lower().split()
+    return any(
+        words[i : i + len(want)] == want for i in range(len(words) - len(want) + 1)
+    )
+
+
 def _iou(a: Sequence[float], b: Sequence[float]) -> float:
     ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
     iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
@@ -60,7 +68,12 @@ def _iou(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def filter_detections(
-    detections: list[dict[str, Any]], width: int, height: int, prompt: str = PROMPT
+    detections: list[dict[str, Any]],
+    width: int,
+    height: int,
+    prompt: str = PROMPT,
+    *,
+    single_term: bool = False,
 ) -> list[dict[str, Any]]:
     """Mark each detection ``kept`` or give its ``drop_reason``. Order is kept.
 
@@ -68,6 +81,11 @@ def filter_detections(
     when its phrase names nothing in the prompt, when its box covers more than
     :data:`MAX_BOX_AREA_FRACTION` of the view, or when a higher-scoring kept
     box overlaps it by :data:`DUPLICATE_IOU` or more.
+
+    With ``single_term`` (ours, for video scenes), a phrase that names two or
+    more prompt terms is dropped too: GroundingDINO joins adjacent phrases
+    ("mailbox cube" on Mailbox.mp4, run 43296115235) for a box that is then
+    neither object. The bin keeps its rules, so its score does not move.
     """
     terms = prompt_terms(prompt)
     out = [dict(d, kept=False, drop_reason=None) for d in detections]
@@ -76,6 +94,8 @@ def filter_detections(
         x0, y0, x1, y1 = det["box_xyxy"]
         if not any(term in phrase for term in terms):
             det["drop_reason"] = "phrase not in prompt"
+        elif single_term and sum(names_term(phrase, t) for t in terms) > 1:
+            det["drop_reason"] = "phrase joins several prompt terms"
         elif (x1 - x0) * (y1 - y0) > MAX_BOX_AREA_FRACTION * width * height:
             det["drop_reason"] = "box covers most of the view"
     kept: list[dict[str, Any]] = []

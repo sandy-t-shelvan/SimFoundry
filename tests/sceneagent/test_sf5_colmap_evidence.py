@@ -402,7 +402,7 @@ def test_gpu_budget_is_explicit_and_fail_closed():
 def test_launch_command_is_exact():
     text = render_launch_command(CODE_SHA)
     assert "BLOCKED" not in text
-    assert INSTANCE_ID == "58301075"
+    assert INSTANCE_ID == "60254439"
     assert APPROVED_RELATIVE in text
     assert APPROVED_SHA256 in text
     assert CODE_SHA in text
@@ -1105,6 +1105,34 @@ def test_gpu_query_timeout_fails_closed_and_stops_only_our_stage_child(
     assert code != 0
     ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
     assert ledger["reason"] == "gpu_query_timeout"
+
+
+def test_gpu_query_timeout_exits_3_not_2(tmp_path, monkeypatch):
+    """KAN-29. GpuQueryTimeout is a resource failure, exit 3.
+
+    The reason string is lowercase, so a classifier that only looks for
+    the letters GPU leaves this as identity exit 2.
+    """
+    video, digest = _synthetic_video(tmp_path)
+    _install_stub(tmp_path / "ledger-bin")
+    monkeypatch.setenv(
+        "PATH", str(tmp_path / "ledger-bin") + os.pathsep + os.environ["PATH"]
+    )
+
+    def raise_query_timeout(*_args, **_kwargs):
+        raise GpuQueryTimeout("gpu_query_timeout")
+
+    monkeypatch.setattr(
+        "sceneagent.sf5_colmap_evidence.run_poses", raise_query_timeout
+    )
+    output = tmp_path / "query-timeout-exit" / "run"
+    code = execute(_dry_request(tmp_path, video, digest, output_prefix=str(output)))
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    assert code == 3
+    assert ledger["process_exit"] == 3
+    assert ledger["reason"] == "gpu_query_timeout"
+    assert code != 2
+    assert code != 4
 
 
 def test_colmap_crash_reason_includes_return_code(tmp_path, monkeypatch):
