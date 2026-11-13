@@ -305,3 +305,14 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
         assert Path(relative).stem in video_run.PROMPTS
         assert PIPELINES[name][0][-1] == "inspection views"
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
+
+
+def test_inspection_views_drawn_before_left_out_existed_are_drawn_again(tmp_path):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, ["inspection views"])
+    (out / "settle_summary.json").write_text(json.dumps({"ran": True}))
+    assert not video_run.stage_done(out, "inspect", ("inspection views",))
+    (out / "settle_summary.json").write_text(json.dumps({"ran": True, "left_out": []}))
+    assert video_run.stage_done(out, "inspect", ("inspection views",))

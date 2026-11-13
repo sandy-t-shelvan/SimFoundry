@@ -85,7 +85,38 @@ def settle_summary(out: Path) -> dict[str, Any]:
             for name, motion in sorted(objects.items())
         ],
         "source": "settle.json (sceneagent.settle_run, Isaac Lab 3)",
+        "left_out": left_out(out),
+        "left_out_note": (
+            "Objects found in the video that are NOT in the exported scene or the "
+            "views, because their placement failed the fit check. Report each as "
+            "missing_object."
+        ),
     }
+
+
+def left_out(out: Path) -> list[dict[str, str]]:
+    """Objects the video held that the export dropped, with why (the views lack them).
+
+    Without this the inspector judged a scene missing its cube as complete
+    (run 43359257095: Mailbox, 0 findings).
+    """
+    from sceneagent.physics_props import object_names
+
+    try:
+        export = json.loads((out / "export_evidence.json").read_text(encoding="utf-8"))
+        association = json.loads(
+            (out / "association_evidence.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return []
+    names = object_names(association)
+    dropped = []
+    for name, why in sorted((export.get("excluded_evidence") or {}).items()):
+        number = int(name.rsplit("_", 1)[-1])
+        dropped.append(
+            {"name": f"{name} ({names.get(number, 'object')})", "why": str(why)[:300]}
+        )
+    return dropped
 
 
 def run_inspect(out: Path | str, *, render=None) -> int:

@@ -111,6 +111,9 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         # Placements judged by an earlier gate are judged again.
         icp = _evidence(out, "bin_score.json").get("icp", {})
         return icp.get("gate") == PLACEMENT_GATE_LABEL
+    if name == "inspect":
+        # Views drawn before the summary named what the export left out.
+        return "left_out" in _evidence(out, "settle_summary.json")
     if name == "export":
         # An export made before it recorded each object's box runs again, so
         # a settle reject can say what the bodies were doing.
