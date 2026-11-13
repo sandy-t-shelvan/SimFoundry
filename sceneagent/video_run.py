@@ -32,6 +32,7 @@ from sceneagent.alignment import PLACEMENT_GATE_LABEL
 from sceneagent.bin_association import SAME_PHRASE, VIDEO_KAPPA_SHARE
 from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
+from sceneagent.settle_run import VARIANTS
 
 # Ours: GroundingDINO phrases for the objects Mailbox.mp4 shows (a red
 # mailbox with a lid, a cyan cube). The orchestrator plan (PR #63) that
@@ -100,7 +101,11 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     if name == "export":
         # An export made before it recorded each object's box runs again, so
         # a settle reject can say what the bodies were doing.
-        return "object_boxes" in _evidence(out, "export_evidence.json")
+        # ... and before it wrote the settle's diagnostic copies.
+        evidence = _evidence(out, "export_evidence.json")
+        return "object_boxes" in evidence and evidence.get("settle_variants") == list(
+            VARIANTS
+        )
     return True
 
 

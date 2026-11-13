@@ -175,6 +175,9 @@ def test_an_export_without_object_boxes_runs_again(tmp_path):
     assert not video_run.stage_done(out, "export", ("USD physics export",))
     boxes = {"objects": [], "object_boxes": {}}
     (out / "export_evidence.json").write_text(json.dumps(boxes))
+    assert not video_run.stage_done(out, "export", ("USD physics export",))
+    boxes["settle_variants"] = list(video_run.VARIANTS)
+    (out / "export_evidence.json").write_text(json.dumps(boxes))
     assert video_run.stage_done(out, "export", ("USD physics export",))
 
 

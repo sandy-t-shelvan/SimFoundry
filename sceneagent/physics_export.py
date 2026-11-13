@@ -224,9 +224,17 @@ def _mesh_lines(points: np.ndarray, faces: np.ndarray, indent: str) -> list[str]
 
 
 def _object_block(
-    obj: PlacedObject, points: np.ndarray, resolved: dict[str, Any]
+    obj: PlacedObject,
+    points: np.ndarray,
+    resolved: dict[str, Any],
+    variant: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], list[str]]:
-    """The object's Xform and, when needed, its physics material."""
+    """The object's Xform and, when needed, its physics material.
+
+    ``variant`` (settle diagnostics only, ``settle_run.VARIANTS``) swaps a
+    rigid body's collider approximation or raises its PhysX solver iterations.
+    """
+    variant = variant or {}
     name = token(obj.name)
     centre = points.mean(axis=0)
     local = points - centre
@@ -234,8 +242,11 @@ def _object_block(
     physx = resolved["route"] == "physx"
     rigid = physx and resolved["body_type"] in ("dynamic rigid", "kinematic")
     schemas = []
+    iterations = rigid and "solver_position_iterations" in variant
     if rigid:
         schemas += ["PhysicsRigidBodyAPI", "PhysicsMassAPI"]
+    if iterations:
+        schemas.append("PhysxRigidBodyAPI")
     elif physx and (
         values["mass_kg"] is not None or values["density_kg_m3"] is not None
     ):
@@ -255,6 +266,15 @@ def _object_block(
         lines.append("        bool physics:rigidBodyEnabled = true")
         if resolved["body_type"] == "kinematic":
             lines.append("        bool physics:kinematicEnabled = true")
+    if iterations:
+        lines.append(
+            "        int physxRigidBody:solverPositionIterationCount = "
+            f"{int(variant['solver_position_iterations'])}"
+        )
+        lines.append(
+            "        int physxRigidBody:solverVelocityIterationCount = "
+            f"{int(variant.get('solver_velocity_iterations', 1))}"
+        )
     if physx and values["mass_kg"] is not None:
         lines.append(f"        float physics:mass = {values['mass_kg']!r}")
     if physx and values["density_kg_m3"] is not None:
@@ -281,8 +301,13 @@ def _object_block(
     lines += _mesh_lines(local, obj.faces, "            ")
     if physx:
         lines.append("            bool physics:collisionEnabled = true")
+        approximation = (
+            variant.get("approximation", resolved["approximation"])
+            if rigid
+            else resolved["approximation"]
+        )
         lines.append(
-            f'            uniform token physics:approximation = "{resolved["approximation"]}"'
+            f'            uniform token physics:approximation = "{approximation}"'
         )
         if has_material:
             lines.append(
@@ -318,6 +343,7 @@ def write_physics_stage(
     world_from_scene: np.ndarray | None = None,
     ground_z_m: float | None = 0.0,
     physics_scene: bool = True,
+    variant: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write the placed bin as a USD physics stage; return what was written.
 
@@ -338,7 +364,7 @@ def write_physics_stage(
         seen.add(name)
         resolved = resolve_physics(obj.properties)
         points = stage_points(obj, metres_per_unit, world_from_scene)
-        block, material = _object_block(obj, points, resolved)
+        block, material = _object_block(obj, points, resolved, variant)
         body += block
         looks += material
         summary["objects"].append(
@@ -757,6 +783,17 @@ def export_run(out: Path | str) -> int:
             ground_z_m=None,
             physics_scene=False,
         )
+        # Diagnostic copies the settle runs beside the scene, never judged.
+        for variant_name, variant in settle_run.VARIANTS.items():
+            write_physics_stage(
+                placed,
+                out / "export" / f"scene_settle_{variant_name}.usda",
+                metres_per_unit=metres,
+                world_from_scene=frame,
+                ground_z_m=None,
+                physics_scene=False,
+                variant=variant,
+            )
         write_physics_mjcf(
             placed,
             out / "export" / "scene.xml",
@@ -770,6 +807,7 @@ def export_run(out: Path | str) -> int:
         gates = {obj.name: "accept" for obj in placed}
         evidence.update(diagnose(placed, metres, frame, gates))
         evidence["excluded_gate_rejects"] = excluded
+        evidence["settle_variants"] = list(settle_run.VARIANTS)
         evidence["excluded_evidence"] = why
         evidence.update(
             association_objects=association.get("objects"),

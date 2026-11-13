@@ -119,6 +119,21 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
         assert (tmp_path / "export" / name).is_file()
     settle = (tmp_path / "export" / "scene_settle.usda").read_text()
     assert "PhysicsScene" not in settle and 'def Cube "ground"' not in settle
+    assert "PhysxRigidBodyAPI" not in settle
+    assert 'physics:approximation = "convexHull"' in settle  # the default
+    # The diagnostic copies, one change each.
+    decomposition = (
+        tmp_path / "export" / "scene_settle_decomposition.usda"
+    ).read_text()
+    assert 'physics:approximation = "convexDecomposition"' in decomposition
+    assert "solverPositionIterationCount" not in decomposition
+    iters = (tmp_path / "export" / "scene_settle_iters.usda").read_text()
+    assert '"PhysxRigidBodyAPI"' in iters
+    assert "int physxRigidBody:solverPositionIterationCount = 32" in iters
+    assert "int physxRigidBody:solverVelocityIterationCount = 4" in iters
+    assert 'physics:approximation = "convexHull"' in iters
+    both = (tmp_path / "export" / "scene_settle_decomposition_iters.usda").read_text()
+    assert "convexDecomposition" in both and "solverPositionIterationCount = 32" in both
     evidence = json.loads((tmp_path / "export_evidence.json").read_text())
     # Resting on the table, which is now z = 0, in metres (0.5 m per unit).
     assert abs(evidence["lowest_point_z_m"]["object_0"]) < 0.01
@@ -126,6 +141,7 @@ def test_export_run_writes_a_gravity_aligned_stage(tmp_path, monkeypatch):
     box = evidence["object_boxes"]["object_0"]
     assert abs(box["bottom_z_m"]) < 0.01 and min(box["size_m"]) > 0
     assert evidence["overlapping_boxes"] == []
+    assert evidence["settle_variants"] == list(settle_run.VARIANTS)
     # A gate reject never reaches physics, but is listed with what failed.
     assert evidence["excluded_gate_rejects"] == {"object_1": ["coverage"]}
     assert "object_1" not in evidence["object_boxes"]
@@ -256,7 +272,7 @@ def test_a_settle_reject_carries_the_evidence_a_manifest_can_show(tmp_path):
         "exported 1, 1 left out by the ICP gate",
         "object_1: 0.20x0.10x0.30 m, bottom -0.004 m, gate reject ['p90']",
         "found as cube x1, mailbox x3 in 4 views",
-        "v 0.050->0.022 m/s, w ? rad/s, COM ? m/s, last 0.5 s moved ? m turned ? deg",
+        "v 0.050->0.022 m/s, w ? rad/s, last 0.5 s moved ? m turned ? deg",
         "overlapping boxes: object_1~object_2",
         "object_2 left out: failed ['p90_m'], silhouette 0.60",
     ):
@@ -365,3 +381,50 @@ def test_last_half_second_measures_real_motion_not_frame_velocity():
     assert abs(moved["moved_last_0_5_s_m"] - 0.01) < 1e-9
     assert abs(moved["turned_last_0_5_s_deg"] - 10.0) < 1e-6
     assert settle_run._last_half_second(None, still) == {}
+
+
+def test_window_stats_and_tilt():
+    samples = [
+        (0.03, [0.0, 0.0, 0.1]),
+        (0.01, [0.0, 0.0003, 0.1]),
+        (0.02, [0.0, 0.0, 0.1]),
+    ]
+    stats = settle_run.window_stats(samples)
+    assert stats["max_speed_m_s"] == 0.03
+    assert abs(stats["max_excursion_m"] - 0.0003) < 1e-12
+    assert settle_run.window_stats([]) == {}
+    import math
+
+    assert settle_run.tilt_deg([1.0, 0.0, 0.0, 0.0]) == 0.0
+    half = math.radians(30) / 2  # 30 degrees about x
+    assert abs(settle_run.tilt_deg([math.cos(half), math.sin(half), 0, 0]) - 30) < 1e-9
+    # A turn about z does not tilt.
+    assert settle_run.tilt_deg([math.cos(half), 0, 0, math.sin(half)]) < 1e-9
+
+
+def test_a_settle_reject_lists_each_variant_and_what_was_applied(tmp_path):
+    (tmp_path / "export_evidence.json").write_text(json.dumps({"objects": []}))
+    result = {
+        "objects": {},
+        "variants": {
+            "decomposition": {
+                "objects": {
+                    "object_1": {
+                        "window_2s": {
+                            "max_speed_m_s": 0.004,
+                            "max_excursion_m": 0.0002,
+                        },
+                        "window_end": {"max_speed_m_s": 0.001},
+                    }
+                },
+                "applied": {"object_1": {"approximation": "convexDecomposition"}},
+            },
+            "iters": {"skipped": "TypeError: no translation"},
+        },
+    }
+    line = settle_run.context(tmp_path, result)
+    assert (
+        "variant decomposition object_1: max 0.0040 m/s, excursion 0.0002 m "
+        "(to 4 s: 0.0010 m/s); applied convexDecomposition iters None"
+    ) in line
+    assert "variant iters skipped: TypeError: no translation" in line
