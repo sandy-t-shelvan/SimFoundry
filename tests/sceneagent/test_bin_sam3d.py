@@ -180,3 +180,20 @@ def test_sam3d_is_a_bin_pipeline():
     assert remote_out("sam3d") == REMOTE_BIN_OUT
     assert PIPELINES["sam3d"][0][-1] == "SAM 3D meshes"
     assert "sam3d_evidence.json" in FETCH_NAMES
+
+
+def test_the_worker_builds_dinov2_without_its_weight_download():
+    from sceneagent.sam3d_worker import without_dino_download
+
+    calls = []
+
+    def hub_load(repo_or_dir, model, *args, **kwargs):
+        calls.append((repo_or_dir, model, kwargs))
+        return "model"
+
+    load = without_dino_download(hub_load)
+    assert load("facebookresearch/dinov2", "dinov2_vitb14", source="github") == "model"
+    assert calls[-1][2] == {"source": "github", "pretrained": False}
+    # Anything else goes through untouched.
+    load("other/repo", "m", source="github")
+    assert calls[-1][2] == {"source": "github"}

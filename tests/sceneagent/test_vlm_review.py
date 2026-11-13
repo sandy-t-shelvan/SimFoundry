@@ -231,7 +231,7 @@ def test_the_verdict_workflow_holds_only_the_gemini_key_and_never_reaches_the_bo
     code = "\n".join(
         line for line in text.splitlines() if not line.lstrip().startswith("#")
     )
-    for banned in ("VAST", "SSH", "58301075", "vast_smoke", "pull_request", "push:"):
+    for banned in ("VAST", "SSH", "58301075", "60254439", "vast_smoke", "pull_request", "push:"):
         assert banned not in code, banned
     assert "permissions:\n  contents: read\n  actions: read\n" in text
     assert "write" not in text.split("jobs:")[0]

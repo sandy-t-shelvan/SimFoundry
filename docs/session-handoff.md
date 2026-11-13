@@ -22,10 +22,28 @@ Sandeep asked (2026-11-10) that these follow every result, not only the cut plan
 3. The paper-map artifact, [SceneAgent Paper Map](https://claude.ai/artifact/4mKRLY3RvCZ2LYuntQfiBx): the "Our code" and "To build" lines per block and the status line under the title.
 4. Jira (project KAN): edit the tickets themselves as work lands, not only comments. That covers status (In Progress, In Review; Done stays with QA and PM), done criteria marked met or not met with proof links, and descriptions corrected when scope or box changes. The road to the MVP is epics KAN-33 (Cut 3), KAN-34 (Cut 4) and KAN-35 (Cut 5, MVP), with SF-30 to SF-46 as KAN-36 to KAN-52.
 
-## The GPU box: 58301075
+## The GPU box: 60254439 (from 2026-11-11)
 
-RTX 4090 24 GB, 128 cores, 503 GB RAM, Ubuntu 20.04, driver 595.99, about 170 GB free.
-59601312 was deleted on 2026-11-10; 58301075 is the box again, with the layout it had on 2026-11-08.
+RTX 4090 24 GB, 48 cores, 126 GB RAM, 600 GB disk, driver 595.99, United Kingdom, verified host
+(reliability 0.943), on-demand at $0.533/hour including storage (Sandeep's budget: $0.65/hour).
+Image `pytorch/pytorch:2.5.1-cuda12.1-cudnn9-devel` (Ubuntu 22.04, conda at `/opt/conda`).
+Direct SSH endpoint `[87.192.102.26]:29423`.
+
+How it came about (2026-11-11): 58301075 was stopped, and Sandeep asked for a new box within budget.
+At his instruction this session rented it through the Vast API with his key, which is saved in this
+cloud environment as a network secret for `console.vast.ai` (the GPU workflow still reads its own key
+from the `VAST_API_KEY` Actions secret and still never rents, starts or stops). An earlier rental,
+60253954 ($0.744/hour with storage), was destroyed after about 15 minutes for being over budget. The CI
+public key (`SHA256:QhtGPtd0v6cjom2mHhkWpfibQit+QVIPmLB/u6XUPms`) was copied from 58301075 and attached.
+
+**The new box starts empty.** None of the stack below is on it yet; setting it up is the next step.
+58301075 is stopped, not destroyed: it still holds the stack, the model weights, the GraspClutter6D
+scene and round 3's saved review candidates, and it bills storage while stopped.
+
+## The previous box: 58301075 (stopped)
+
+RTX 4090 24 GB, 128 cores, 503 GB RAM, Ubuntu 20.04, driver 595.99, about 170 GB free, Texas.
+59601312 was deleted on 2026-11-10; 58301075 was the box from then until 2026-11-11.
 
 | Need | Where on 58301075 (probes 42908214934, 42908974589) |
 |---|---|
@@ -66,7 +84,7 @@ A cloud session has no SSH and no GPU. Every GPU step goes through GitHub Action
 
 **Switching to another box** (done twice so far, 59601312 → 58301075 → 59601312):
 
-1. Sandeep starts it; sessions never start, stop or rent instances.
+1. Sandeep starts it. Sessions do not start, stop or rent instances unless Sandeep asks in that session (he did on 2026-11-11, for 60254439).
 2. Attach the CI public key (`simfoundry-gha-59601312`, `SHA256:QhtGPtd0v6cjom2mHhkWpfibQit+QVIPmLB/u6XUPms`)
    with the Vast API `POST /api/v0/instances/<id>/ssh/`, with Sandeep's yes.
 3. Pin its host key in `ci/vast-ssh-known-host` (read twice with ssh-keyscan from a runner) and swap the

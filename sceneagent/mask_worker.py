@@ -28,6 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gdino-config", required=True)
     parser.add_argument("--gdino-weights", required=True)
     parser.add_argument("--sam-weights", required=True)
+    parser.add_argument("--single-term", action="store_true")
     args = parser.parse_args(argv)
 
     import numpy as np
@@ -41,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
     predictor = SamPredictor(sam)
     args.out.mkdir(parents=True, exist_ok=True)
     report: dict[str, list[dict]] = {}
-    for image_path in sorted(args.images.glob("*.png")):
+    # The bin's views are PNG stills; a video's are run4's JPG frames.
+    images = [*args.images.glob("*.png"), *args.images.glob("*.jpg")]
+    for image_path in sorted(images):
         rgb, tensor = load_image(str(image_path))
         height, width = rgb.shape[:2]
         boxes, logits, phrases = predict(
@@ -61,7 +64,9 @@ def main(argv: list[str] | None = None) -> int:
             detections.append(
                 {"phrase": str(phrase), "logit": float(logit), "box_xyxy": box}
             )
-        detections = filter_detections(detections, width, height, args.prompt)
+        detections = filter_detections(
+            detections, width, height, args.prompt, single_term=args.single_term
+        )
         kept = [d for d in detections if d["kept"]]
         masks = np.zeros((len(kept), height, width), dtype=bool)
         if kept:

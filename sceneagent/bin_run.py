@@ -19,9 +19,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import shutil
 import sys
 from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,78 @@ VIEWS = 13
 VIEW_SIZE = (1920, 1080)
 MATCHER = "exhaustive_matcher"
 SOURCE = "GraspClutter6D"
+SCENE_FILE = "scene.json"
+# Paper section 3.1 runs SAM on every 10th view of a capture.
+VIDEO_MASK_STRIDE = 10
+VIDEO_MASK_DIR = "mask_views"
+# Ours: a video view may miss every object (a frame looking past them), so a
+# video keeps going when at least this share of its mask views kept a mask.
+VIDEO_MIN_MASKED_SHARE = 0.8
+
+
+@dataclass(frozen=True)
+class Scene:
+    """What the bin stages need to know about the capture in ``--out``.
+
+    The pose stage writes it to ``scene.json``; every later stage reads it
+    from there. A directory without the file is the bin's (the bin runs
+    predate it), so the bin's behaviour and score do not move.
+    """
+
+    source: str
+    name: str
+    # The ledger's scene_name; each stage checks it is still this scene's.
+    ledger_name: str
+    # Images COLMAP must register into one model.
+    views: int
+    # The ledger item the capture is recorded under before the poses.
+    input_item: str
+    # Where the views that get masks and depth live, under ``--out``.
+    view_dir: str = "images"
+    min_masked_views: int = VIEWS
+    ground_truth: bool = True
+    # None keeps the bin's prompt (mask_filter.PROMPT).
+    prompt: str | None = None
+
+
+BIN_SCENE = Scene(
+    source=SOURCE,
+    name=SCENE,
+    ledger_name=f"{SOURCE} {SCENE}",
+    views=VIEWS,
+    input_item="benchmark scene",
+)
+
+
+def load_scene(out: Path | str) -> Scene:
+    """The scene ``out`` holds: ``scene.json`` if written, else the bin."""
+    path = Path(out) / SCENE_FILE
+    if not path.is_file():
+        return BIN_SCENE
+    return Scene(**json.loads(path.read_text(encoding="utf-8")))
+
+
+def write_scene(out: Path | str, scene: Scene) -> None:
+    Path(out, SCENE_FILE).write_text(
+        json.dumps(asdict(scene), indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def expected_views(out: Path | str, scene: Scene) -> int:
+    """How many views the masks and association must cover.
+
+    The bin: all 13 of its photos, however many are on disk. A video: the
+    mask views its pose stage staged.
+    """
+    if scene == BIN_SCENE:
+        return VIEWS
+    folder = Path(out) / scene.view_dir
+    return len([*folder.glob("*.png"), *folder.glob("*.jpg")])
+
+
+def is_bin(out: Path | str) -> bool:
+    """Only the bin may fall back to posing the GraspClutter6D photos."""
+    return load_scene(out) == BIN_SCENE
 
 
 def view_ids(first: int = CAMERA_FIRST_ID) -> list[int]:
@@ -88,6 +162,9 @@ def run_bin_poses(
 ) -> int:
     """Write plan, ledger and bin evidence. Return 0 only when the poses pass."""
     out, data = Path(out), Path(data)
+    if not is_bin(out):
+        # Restaging the bin photos would delete another capture's frames.
+        raise ValueError(f"{out} holds {load_scene(out).name}, not the bin")
     out.mkdir(parents=True, exist_ok=True)
     write_plan(
         out,
@@ -157,6 +234,78 @@ def run_bin_poses(
         entry["decision"] == "accept" for entry in entries
     )
     return 0 if passed else 1
+
+
+def mask_views(names: list[str], stride: int = VIDEO_MASK_STRIDE) -> list[str]:
+    """Every ``stride``-th posed frame, from the first (paper section 3.1)."""
+    return sorted(names)[::stride]
+
+
+def run_video_poses(
+    video: Path | str,
+    out: Path | str,
+    prompt: str,
+    *,
+    poses: Callable[[list[str]], int] | None = None,
+) -> int:
+    """Pose a video with run4 and lay its output out for the bin stages.
+
+    run4 samples the 300 sharpest-per-bin frames into ``images/`` and runs
+    COLMAP (sequential matcher, incremental mapper: the box has COLMAP
+    3.11.1, which has no global mapper). This adds what the bin stages read:
+    ``bin_evidence.json`` with run4's quality bar, the mask views (every
+    10th frame the chosen model registered) and ``scene.json``.
+    """
+    from sceneagent.bin_association import read_images_bin
+    from sceneagent.run4 import main as run4_main
+    from sceneagent.run4_sampling import BIN_COUNT
+    from sceneagent.video import VIDEO_SOURCE
+
+    out, video = Path(out), Path(video)
+    out.mkdir(parents=True, exist_ok=True)
+    scene = Scene(
+        source=VIDEO_SOURCE,
+        name=video.stem,
+        ledger_name=video.stem,
+        views=BIN_COUNT,
+        input_item="video",
+        view_dir=VIDEO_MASK_DIR,
+        min_masked_views=0,
+        ground_truth=False,
+        prompt=prompt,
+    )
+    # Written before anything else: a stage that finds no scene.json treats
+    # the directory as the bin's.
+    write_scene(out, scene)
+    clear_pose_state(out)
+    shutil.rmtree(out / VIDEO_MASK_DIR, ignore_errors=True)
+    code = (poses or run4_main)([str(video), "--out", str(out)])
+    try:
+        run4 = json.loads((out / "run4_evidence.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        run4 = {}
+    bar = run4.get("quality_bar") or {}
+    (out / "bin_evidence.json").write_text(
+        json.dumps({"scene": scene.name, "quality_bar": bar}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if code != 0 or not bar.get("pass") or bar.get("model") is None:
+        return 1
+    model = out / "sparse" / str(bar["model"])
+    views = mask_views(list(read_images_bin(model / "images.bin")))
+    target = out / VIDEO_MASK_DIR
+    target.mkdir()
+    for view in views:
+        shutil.copyfile(out / "images" / view, target / view)
+    write_scene(
+        out,
+        replace(
+            scene,
+            views=int(bar["inputs"]),
+            min_masked_views=math.ceil(VIDEO_MIN_MASKED_SHARE * len(views)),
+        ),
+    )
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
