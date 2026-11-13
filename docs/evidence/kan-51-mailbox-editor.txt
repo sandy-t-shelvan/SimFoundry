@@ -1,0 +1,12 @@
+Mailbox editor round trip, 2026-11-13.
+
+Source: scene.usda from the passing mailbox run 43384974056, imported by
+export_import.py with no template. object_1 has no joints, so there was no
+lid limit to edit. Mass in the editor was the asset value 1.863703 kg.
+It was set to 2.5 kg and saved as
+mailbox_scene_state_light_edit_20261113_142212_243372_67c90698.json.
+The exported JSON was not overwritten. After reload the mass field was 2.5.
+ground_plane_info is present.
+
+settle.py and parity_check.py were not run. The simfoundry env is not on
+box 60254439, and this document is not restorable without a template.
