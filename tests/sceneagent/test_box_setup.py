@@ -26,8 +26,9 @@ def test_the_setup_script_parses_and_names_every_stage():
     subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
     text = SCRIPT.read_text(encoding="utf-8")
     stages = text.split('STAGES="', 1)[1].split('"', 1)[0].split()
-    assert stages[0] == "apt" and stages[-1] == "isaaclab"
-    assert stages[-2] == "sam3d_weights"
+    assert stages[0] == "apt" and stages[-1] == "physgaussian"
+    assert stages[-2] == "isaaclab"
+    assert stages[-3] == "sam3d_weights"
     for name in stages:
         assert f"s_{name}() {{" in text
 
@@ -158,3 +159,15 @@ def test_the_fixes_found_on_the_box_stay_in_the_script():
     assert "os._exit(0)" in check
     assert "cube_height_m" in text
     assert 'env["LIDRA_SKIP_INIT"] = "true"' in text
+
+
+def test_physgaussian_is_pinned_for_deformable_objects_only():
+    text = SCRIPT.read_text(encoding="utf-8")
+    stage = text.split("s_physgaussian() {", 1)[1].split("\n}", 1)[0]
+    assert "8339ed6aa2cd5d50e1001a254a3d95aea678a956" in text
+    assert "warp_lang==0.10.1" in stage
+    assert "taichi==1.5.0" in stage
+    assert 'import warp, taichi' in stage
+    assert "python=3.10" in stage
+    assert "run_sand" not in stage
+    assert '"physgaussian": commit' in text
