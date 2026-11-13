@@ -105,7 +105,10 @@ def apply_completion(
 
 
 def live_articulate() -> dict[str, str]:
-    """The installed entry point cannot take PartSAM meshes. Stop."""
+    """Articulate Anything is skipped. It cannot take these part meshes.
+
+    The Mailbox joint is a proposal in ``hinge_proposal``, not this call.
+    """
     if ARTICULATE_TAKES_PART_MESHES:
         raise RuntimeError("part-mesh input appeared; this stop is out of date")
     return {"status": "stopped", "reason": STOP_REASON}
