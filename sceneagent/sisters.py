@@ -200,6 +200,98 @@ def appearance_sister(size, hue_degrees, mottle, speckle, noise, name):
     return report
 
 
+def _relation(dx, dy):
+    """Quadrant of an offset. Ties on the axes stay with the larger component."""
+    if abs(dx) >= abs(dy):
+        return "left_of" if dx < 0 else "right_of"
+    return "behind" if dy > 0 else "in_front_of"
+
+
+def sample_layouts(anchor_xy, radius_m, n=8, seed=0, z_m=0.0):
+    """Poses sampled around a task anchor, in the simulator's scene frame.
+
+    Metres, Z up, yaw about Z. The radius is a disk, not the four cardinal
+    offsets from :func:`scene_sisters`. This does not start a simulator.
+    The same seed returns the same poses.
+    """
+    count = int(n)
+    if count < 1:
+        raise ValueError("n must be at least 1")
+    radius = float(radius_m)
+    if radius <= 0:
+        raise ValueError("radius_m must be positive")
+    ax, ay = float(anchor_xy[0]), float(anchor_xy[1])
+    rng = np.random.default_rng(int(seed))
+    poses = []
+    for index in range(count):
+        angle = float(rng.uniform(0.0, 2.0 * np.pi))
+        distance = float(rng.uniform(0.25 * radius, radius))
+        dx = distance * float(np.cos(angle))
+        dy = distance * float(np.sin(angle))
+        poses.append(
+            {
+                "index": index,
+                "relation": _relation(dx, dy),
+                "anchor_xy_m": [ax, ay],
+                "object_xyz_m": [ax + dx, ay + dy, float(z_m)],
+                "yaw_rad": float(rng.uniform(-np.pi, np.pi)),
+                "gap_m": float(np.hypot(dx, dy)),
+            }
+        )
+    return {
+        "anchor_xy_m": [ax, ay],
+        "anchor_z_m": float(z_m),
+        "radius_m": radius,
+        "seed": int(seed),
+        "n": count,
+        "poses": poses,
+    }
+
+
+# Model-free instruction variants. Not a VLM sample.
+_TASK_TEMPLATES = (
+    "put the {manipulated} into the {target}",
+    "move the {manipulated} so it ends inside the {target}",
+    "place the {manipulated} inside the {target}",
+    "set the {manipulated} down in the {target}",
+)
+
+
+def sample_task_sisters(instruction, manipulated, target, n=3, seed=0):
+    """The capture instruction plus templates drawn from a fixed list.
+
+    Every instruction still asks for the object to end inside the target.
+    ``n`` is how many templates are drawn. The draw is seeded.
+    """
+    count = int(n)
+    if count < 1 or count > len(_TASK_TEMPLATES):
+        raise ValueError(f"n must be from 1 to {len(_TASK_TEMPLATES)}")
+    rng = np.random.default_rng(int(seed))
+    order = rng.permutation(len(_TASK_TEMPLATES))
+    rows = [
+        {
+            "instruction": instruction,
+            "goal": "inside",
+            "manipulated": manipulated,
+            "target": target,
+            "source": "capture",
+        }
+    ]
+    for slot in order[:count]:
+        template = _TASK_TEMPLATES[int(slot)]
+        rows.append(
+            {
+                "instruction": template.format(manipulated=manipulated, target=target),
+                "goal": "inside",
+                "manipulated": manipulated,
+                "target": target,
+                "source": "model_free_sample",
+                "seed": int(seed),
+            }
+        )
+    return rows
+
+
 def scene_sisters(anchor_xy, gap_m, relations=None):
     """Layouts around a task anchor.
 

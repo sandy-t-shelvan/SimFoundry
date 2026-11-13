@@ -19,6 +19,8 @@ from sceneagent.report import render_report
 from sceneagent.sisters import (
     appearance_sister,
     geometry_sisters,
+    sample_layouts,
+    sample_task_sisters,
     scene_sisters,
     task_sisters,
 )
@@ -196,13 +198,18 @@ def run_capture(capture, out_dir):
             }
         )
 
-    layouts = scene_sisters(
-        task.get("anchor_xy_m") or (0.0, 0.0),
-        float(task.get("gap_m") or 0.05),
-    )
+    anchor = task.get("anchor_xy_m") or (0.0, 0.0)
+    gap = float(task.get("gap_m") or 0.05)
+    layouts = scene_sisters(anchor, gap)
+    sampled = sample_layouts(anchor, gap, seed=0)
     instructions = task_sisters(task["instruction"], manipulated_name, target_name)
+    varied = sample_task_sisters(
+        task["instruction"], manipulated_name, target_name, seed=0
+    )
     _write(out / "scene_sisters.json", layouts)
+    _write(out / "layouts.json", sampled)
     _write(out / "task_sisters.json", instructions)
+    _write(out / "task_instructions.json", varied)
     ledger.append(
         {
             "item": "scene_sisters",
