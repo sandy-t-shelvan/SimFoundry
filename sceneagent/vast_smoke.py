@@ -220,6 +220,7 @@ PIPELINES = {
             "ICP residuals",
             "USD physics export",
             "Isaac Lab settle",
+            "inspection views",
         ),
         "GraspClutter6D 000091",
     ),

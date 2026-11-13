@@ -343,10 +343,39 @@ def test_bin_settle_runs_the_settle_only_after_an_accepted_export(tmp_path):
         calls.append(out)
         return 0
 
-    assert run_bin_settle(tmp_path, export=lambda out: 1, settle=settle) == 1
+    def inspect(out):
+        return 0
+
+    assert (
+        run_bin_settle(tmp_path, export=lambda out: 1, settle=settle, inspect=inspect)
+        == 1
+    )
     assert calls == []
-    assert run_bin_settle(tmp_path, export=lambda out: 0, settle=settle) == 0
+    assert (
+        run_bin_settle(tmp_path, export=lambda out: 0, settle=settle, inspect=inspect)
+        == 0
+    )
     assert calls == [tmp_path]
+
+
+def test_bin_settle_inspects_only_a_settled_bin(tmp_path):
+    """SF-22 on the bin: the views are drawn after an accepted settle, never before."""
+    from sceneagent.bin_settle import run_bin_settle
+
+    inspected = []
+
+    def inspect(out):
+        inspected.append(out)
+        return 0
+
+    ok = lambda out: 0
+    assert (
+        run_bin_settle(tmp_path, export=ok, settle=lambda out: 1, inspect=inspect) == 1
+    )
+    assert inspected == []
+    assert run_bin_settle(tmp_path, export=ok, settle=ok, inspect=inspect) == 0
+    assert inspected == [tmp_path]
+    assert run_bin_settle(tmp_path, export=ok, settle=ok, inspect=lambda out: 1) == 1
 
 
 def test_the_bin_settle_pipeline_runs_in_the_bin_dir():
@@ -367,7 +396,11 @@ def test_the_bin_settle_pipeline_runs_in_the_bin_dir():
         "--out",
         REMOTE_BIN_OUT,
     ]
-    assert PIPELINES["bin_settle"][0][-2:] == ("USD physics export", "Isaac Lab settle")
+    assert PIPELINES["bin_settle"][0][-3:] == (
+        "USD physics export",
+        "Isaac Lab settle",
+        "inspection views",
+    )
 
 
 def test_extent_is_the_middle_ninety_percent_box_in_metres():
