@@ -35,6 +35,16 @@ def test_a_partial_run_packages_and_names_what_is_missing(tmp_path):
         verify_package(run / "package")
 
 
+def test_joints_json_is_not_listed_missing_when_it_was_copied(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "joints.json").write_text("{}\n", encoding="utf-8")
+    manifest = build_package(run, tmp_path / "pkg")
+    assert "joints.json" in [item["path"] for item in manifest["files"]]
+    assert "joints" not in manifest["missing"]
+    assert "background" in manifest["missing"]
+
+
 def test_the_manifest_matches_the_bytes(tmp_path):
     run = tmp_path / "run"
     (run / "export").mkdir(parents=True)

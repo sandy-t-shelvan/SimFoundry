@@ -27,8 +27,15 @@ _FILES = (
     ("step_verdicts.json", "reports/step_verdicts.json"),
     ("inspection/isaac_lab.json", "reports/isaac_lab.json"),
 )
-# Named in ``missing`` when absent, even if other files were copied.
-_REQUIRED = ("scene.usda", "scene.xml", "background", "joints", "scene_state.json")
+# Name recorded under ``missing``, and the package path that satisfies it.
+# ``joints`` is the name; the file is ``joints.json``.
+_COVERS = {
+    "scene.usda": "scene.usda",
+    "scene.xml": "scene.xml",
+    "background": "background/",
+    "joints": "joints.json",
+    "scene_state.json": "scene_state.json",
+}
 
 
 def build_package(run_dir, out_dir) -> dict[str, Any]:
@@ -36,7 +43,7 @@ def build_package(run_dir, out_dir) -> dict[str, Any]:
     run = Path(run_dir)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    present = {name: False for name in _REQUIRED}
+    present = {name: False for name in _COVERS}
     copied: list[str] = []
     for source_rel, dest_rel in _files(run):
         source = run / source_rel
@@ -46,8 +53,8 @@ def build_package(run_dir, out_dir) -> dict[str, Any]:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         copied.append(dest_rel)
-        for name in _REQUIRED:
-            if dest_rel == name or dest_rel.startswith(name + "/"):
+        for name, token in _COVERS.items():
+            if dest_rel == token or (token.endswith("/") and dest_rel.startswith(token)):
                 present[name] = True
     files = [_entry(out, relative) for relative in sorted(copied)]
     manifest = {
