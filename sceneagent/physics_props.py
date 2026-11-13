@@ -468,6 +468,29 @@ def object_names(association: Mapping[str, Any]) -> dict[int, str]:
     return names
 
 
+def _prior_inputs(
+    out: Path, checkpoint: Path | None
+) -> tuple[Path | None, Path | None]:
+    """Packs and the pinned checkpoint when both are present, else option B.
+
+    A checkpoint file whose SHA-256 is not the pinned prior is a reject, not
+    a silent fallback.
+    """
+    from sceneagent.fitted_prior import (
+        CHECKPOINT_RELATIVE,
+        PRIOR_REPO,
+        checked_checkpoint,
+    )
+
+    packs = out / "prior_input"
+    if not any(packs.glob("object_*.npy")):
+        return None, None
+    path = Path(checkpoint) if checkpoint else Path(PRIOR_REPO) / CHECKPOINT_RELATIVE
+    if not path.is_file():
+        return None, None
+    return packs, checked_checkpoint(path)
+
+
 def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
     """Write ``physics/object_<n>.json`` for every placed object; one ledger item.
 
@@ -498,7 +521,16 @@ def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
         ]
         if not objects:
             raise ValueError("no placed object")
-        result = write_property_set(objects, None, out, checkpoint=checkpoint)
+        packs, used = _prior_inputs(out, checkpoint)
+        if used is not None and packs is not None:
+            objects = [
+                obj
+                for obj in objects
+                if (packs / f"object_{obj['object']}.npy").is_file()
+            ]
+            if not objects:
+                raise ValueError("prior packs match no placed object")
+        result = write_property_set(objects, packs, out, checkpoint=used)
         entry.update(
             decision="accept",
             use_gpu=False,

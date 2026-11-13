@@ -60,7 +60,10 @@ STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("association", ("Gaussian association",)),
     ("sam3d", ("SAM 3D meshes",)),
     ("place", ("ICP residuals",)),
-    # §3.4 record per placed object (KAN-40; option B for the MVP: no prior).
+    # Fitted splat packs for the prior (KAN-39). Option B remains when the
+    # packs or the pinned checkpoint are absent.
+    ("prior_input", ("fitted splat prior input",)),
+    # §3.4 record per placed object (KAN-40).
     ("physics", ("§3.4 properties",)),
     # KAN-41: the placed scene as USD (gravity aligned on the support plane),
     # then 2 s in Isaac Lab.
@@ -139,6 +142,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
     from sceneagent.bin_place import run_bin_place
     from sceneagent.bin_sam3d import run_bin_sam3d
     from sceneagent.bin_splat import run_bin_splat
+    from sceneagent.fitted_prior import run_fitted_prior
     from sceneagent.inspect_run import run_inspect
     from sceneagent.physics_export import export_run
     from sceneagent.physics_props import run_physics
@@ -151,6 +155,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
         "association": lambda: run_bin_association(out),
         "sam3d": lambda: run_bin_sam3d(out),
         "place": lambda: run_bin_place(out),
+        "prior_input": lambda: run_fitted_prior(out),
         "physics": lambda: run_physics(out),
         "export": lambda: export_run(out),
         "settle": lambda: run_settle(out),
