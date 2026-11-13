@@ -53,7 +53,7 @@ from sceneagent.run4_sampling import (
     extract_selected_command,
     ffprobe_command,
     parse_probe,
-    select_sharpest_per_bin,
+    select_frames,
 )
 from sceneagent.simfoundry_python import (
     PinnedInterpreterMissing,
@@ -390,12 +390,13 @@ def run_run4(
             )
         gpu = require_gpu_headroom("colmap", query=gpu_query)
         evidence["gpu"]["colmap"] = gpu
-        selection = select_sharpest_per_bin(
+        selection, binning = select_frames(
             frames, duration_s, bin_count(len(frames), BIN_COUNT)
         )
         names = [f"{i:04d}.jpg" for i in range(1, len(selection) + 1)]
         evidence["sampling"] = {
             "bin_count": len(selection),
+            "binning": binning,
             "duration_s": duration_s,
             "decoded_frames": len(frames),
             "selected_indices": [row["chosen_index"] for row in selection],

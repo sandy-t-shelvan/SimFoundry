@@ -25,6 +25,7 @@ from sceneagent.run4_sampling import (
     bin_count,
     decode_all_command,
     extract_selected_command,
+    select_frames,
     select_sharpest_per_bin,
 )
 
@@ -320,3 +321,27 @@ def test_self_calibration_leaves_the_camera_alone_when_it_cannot_estimate(tmp_pa
     params, prior = sqlite3.connect(db).execute("SELECT params, prior_focal_length FROM cameras").fetchone()
     assert np.frombuffer(params, dtype=np.float64)[0] == 2304.0 and prior == 0
     assert self_calibrate(tmp_path / "missing.db")["ok"] is False
+
+
+def test_a_variable_rate_clip_falls_back_to_equal_count_bins():
+    # Objectron's laptop clip: 303 frames in 10.16 s with gaps up to 0.1 s;
+    # equal-time bins left some empty and the clip failed before COLMAP.
+    times = [i / 30.0 for i in range(303)]
+    for i in range(150, 303):
+        times[i] += 0.1  # one 0.1 s gap
+    frames = [{"index": i, "time": t, "score": float(i % 7)} for i, t in enumerate(times)]
+    duration = times[-1]
+    with pytest.raises(ValueError, match="empty time bin"):
+        select_sharpest_per_bin(frames, duration, 300)
+    rows, binning = select_frames(frames, duration, bin_count(len(frames)))
+    assert binning == "index"
+    chosen = [r["chosen_index"] for r in rows]
+    assert len(chosen) == 300 and len(set(chosen)) == 300 and chosen == sorted(chosen)
+    assert sum(r["candidates"] for r in rows) == 303
+
+
+def test_a_clip_that_sampled_before_samples_the_same_frames():
+    frames = _frames(1440, fps=24.0)
+    rows, binning = select_frames(frames, 60.0, 300)
+    assert binning == "time"
+    assert rows == select_sharpest_per_bin(frames, 60.0, 300)

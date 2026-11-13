@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import Any
 
 BIN_COUNT = 300
+EMPTY_BIN = "empty time bin; no duplication"
 
 # Committed docs/assets/example_videos/Fruits.mp4, read from this tree.
 # mvhd timescale 1000 reports 15.067 s. ffprobe on that file reported
@@ -163,7 +164,7 @@ def select_sharpest_per_bin(
             )
         ]
         if not candidates:
-            raise ValueError("empty time bin; no duplication")
+            raise ValueError(EMPTY_BIN)
         best = min(
             candidates, key=lambda frame: (-float(frame["score"]), frame["index"])
         )
@@ -185,6 +186,51 @@ def select_sharpest_per_bin(
     if len(chosen) != n:
         raise ValueError("selected frame count is not the bin count")
     return chosen
+
+
+
+
+def select_frames(
+    frames: Sequence[dict[str, Any]],
+    duration: float,
+    n: int = BIN_COUNT,
+) -> tuple[list[dict[str, Any]], str]:
+    """Equal-time bins, or equal-count bins when a timestamp gap empties one.
+
+    Returns the rows and ``"time"`` or ``"index"``. A phone clip can be
+    variable-rate: Objectron's laptop video has 303 frames in 10.16 s with
+    gaps up to 0.1 s, so 300 equal-time bins left some empty and the clip
+    failed before COLMAP. Time bins stay first, so every clip that sampled
+    before samples the same frames now. The fallback splits the frames, in
+    order, into ``n`` runs whose lengths differ by at most one and keeps the
+    sharpest of each; it never duplicates a frame.
+    """
+    try:
+        return select_sharpest_per_bin(frames, duration, n), "time"
+    except ValueError as exc:
+        if str(exc) != EMPTY_BIN:
+            raise
+    if n > len(frames):
+        raise ValueError("more bins than frames")
+    rows: list[dict[str, Any]] = []
+    for index in range(n):
+        start = index * len(frames) // n
+        stop = (index + 1) * len(frames) // n
+        group = frames[start:stop]
+        best = min(group, key=lambda f: (-float(f["score"]), f["index"]))
+        rows.append(
+            {
+                "bin": index,
+                "left": float(group[0]["time"]),
+                "right": float(group[-1]["time"]),
+                "last_right_inclusive": True,
+                "chosen_index": best["index"],
+                "chosen_time": float(best["time"]),
+                "score": float(best["score"]),
+                "candidates": len(group),
+            }
+        )
+    return rows, "index"
 
 
 def _balanced(terms: Sequence[str]) -> str:
