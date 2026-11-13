@@ -66,6 +66,9 @@ STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # then 2 s in Isaac Lab.
     ("export", ("USD physics export",)),
     ("settle", ("Isaac Lab settle",)),
+    # KAN-23: the inspector's views of the settled scene; the fix report is
+    # written on the runner (workflow sceneagent-inspector-report).
+    ("inspect", ("inspection views",)),
 )
 
 
@@ -133,6 +136,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
     from sceneagent.bin_place import run_bin_place
     from sceneagent.bin_sam3d import run_bin_sam3d
     from sceneagent.bin_splat import run_bin_splat
+    from sceneagent.inspect_run import run_inspect
     from sceneagent.physics_export import export_run
     from sceneagent.physics_props import run_physics
     from sceneagent.settle_run import run_settle
@@ -147,6 +151,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
         "physics": lambda: run_physics(out),
         "export": lambda: export_run(out),
         "settle": lambda: run_settle(out),
+        "inspect": lambda: run_inspect(out),
     }
 
 

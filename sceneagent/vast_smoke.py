@@ -240,6 +240,7 @@ PIPELINES = {
                 "§3.4 properties",
                 "USD physics export",
                 "Isaac Lab settle",
+                "inspection views",
             ),
             relative,
         )
@@ -363,6 +364,9 @@ FETCH_NAMES = (
     "export_evidence.json",
     "settle.json",
     "settle_frame.png",
+    "inspection_sheet.png",
+    "inspection_views.zip",
+    "settle_summary.json",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -397,6 +401,9 @@ PUBLISHED_NAMES = frozenset(
         "export_evidence.json",
         "settle.json",
         "settle_frame.png",
+        "inspection_sheet.png",
+        "inspection_views.zip",
+        "settle_summary.json",
     }
 )
 PUBLIC_FIELDS = (
