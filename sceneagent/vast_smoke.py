@@ -367,6 +367,7 @@ FETCH_NAMES = (
     "inspection_sheet.png",
     "inspection_views.zip",
     "settle_summary.json",
+    "gaussian_overlap.json",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -404,6 +405,7 @@ PUBLISHED_NAMES = frozenset(
         "inspection_sheet.png",
         "inspection_views.zip",
         "settle_summary.json",
+        "gaussian_overlap.json",
     }
 )
 PUBLIC_FIELDS = (
@@ -1023,6 +1025,10 @@ def build_remote_shell(
             f"{py} -c 'import py7zr' 2>/dev/null || {py} -m pip install --quiet "
             f"--target {shlex.quote(REMOTE_PYDEPS)} {PY7ZR_PIN}"
         )
+    if pipeline == "mailbox":
+        # KAN-54: read the existing objects.npz and record shared fractions.
+        # Association, the gates, and the other videos are unchanged.
+        lines.append(f"{py} -m sceneagent.gaussian_overlap --out {shlex.quote(out)}")
     lines += [
         quoted,
     ]
