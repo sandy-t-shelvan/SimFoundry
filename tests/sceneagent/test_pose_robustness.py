@@ -8,6 +8,7 @@ import sqlite3
 import struct
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from sceneagent.bin_run import clear_pose_state
@@ -18,6 +19,7 @@ from sceneagent.colmap_stage import (
     pose_commands,
     refine_intrinsics_command,
 )
+from sceneagent.focal_prior import estimate_focal, self_calibrate
 from sceneagent.pose_diagnosis import (
     camera_is_plausible,
     diagnose,
@@ -249,3 +251,91 @@ def test_diagnosis_names_diverged_intrinsics_with_the_camera(tmp_path):
 
 def test_diagnosis_never_raises_on_a_missing_database(tmp_path):
     assert diagnose(tmp_path / "missing.db", []).startswith("match database unreadable")
+
+
+def _rotation(axis, angle):
+    axis = np.asarray(axis, float) / np.linalg.norm(axis)
+    k = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
+    return np.eye(3) + np.sin(angle) * k + (1 - np.cos(angle)) * k @ k
+
+
+def _orbit_fundamentals(focal, width=1920, height=1080, count=60, seed=0):
+    """F between neighbouring views of a camera orbiting a point 1 m away."""
+    rng = np.random.default_rng(seed)
+    k = np.array([[focal, 0, width / 2], [0, focal, height / 2], [0, 0, 1.0]])
+    k_inv = np.linalg.inv(k)
+    out = []
+    for i in range(count):
+        r = _rotation(rng.normal(size=3), np.radians(rng.uniform(2, 8)))
+        t = rng.normal(size=3)
+        t /= np.linalg.norm(t)
+        t_cross = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]])
+        f = k_inv.T @ (t_cross @ r) @ k_inv
+        out.append(f / np.linalg.norm(f))
+    return np.array(out), np.full(count, 200.0)
+
+
+@pytest.mark.parametrize("focal", [874.0, 1663.0, 2600.0])
+def test_the_focal_is_recovered_from_fundamental_matrices(focal):
+    fundamentals, weights = _orbit_fundamentals(focal)
+    record = estimate_focal(fundamentals, weights, 1920, 1080)
+    assert record["ok"] is True
+    assert record["focal_px"] == pytest.approx(focal, rel=0.01)
+    assert record["cost"] < 1e-3
+
+
+def test_too_few_pairs_or_an_edge_minimum_is_not_a_focal():
+    fundamentals, weights = _orbit_fundamentals(1663.0, count=5)
+    record = estimate_focal(fundamentals, weights, 1920, 1080)
+    assert record["ok"] is False and "needs 20" in record["why"]
+    fundamentals, weights = _orbit_fundamentals(100.0)  # far below 0.3 * 1920
+    record = estimate_focal(fundamentals, weights, 1920, 1080)
+    assert record["ok"] is False and "edge" in record["why"]
+
+
+def _colmap_like_database(path, fundamentals, weights):
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE cameras (camera_id INTEGER, model INTEGER, width INTEGER,"
+        " height INTEGER, params BLOB, prior_focal_length INTEGER)"
+    )
+    con.execute(
+        "INSERT INTO cameras VALUES (1, 2, 1920, 1080, ?, 0)",
+        (np.array([2304.0, 960.0, 540.0, 0.3]).tobytes(),),
+    )
+    con.execute("CREATE TABLE two_view_geometries (pair_id INTEGER, rows INTEGER, config INTEGER, F BLOB)")
+    for i, (f, w) in enumerate(zip(fundamentals, weights, strict=True)):
+        con.execute(
+            "INSERT INTO two_view_geometries VALUES (?, ?, 3, ?)",
+            (i, int(w), np.ascontiguousarray(f).tobytes()),
+        )
+    # A planar pair and a weak pair are ignored.
+    con.execute("INSERT INTO two_view_geometries VALUES (998, 500, 6, ?)", (np.eye(3).tobytes(),))
+    con.execute("INSERT INTO two_view_geometries VALUES (999, 10, 3, ?)", (np.eye(3).tobytes(),))
+    con.commit()
+    con.close()
+    return path
+
+
+def test_self_calibration_writes_the_focal_as_the_cameras_prior(tmp_path):
+    fundamentals, weights = _orbit_fundamentals(1663.0)
+    db = _colmap_like_database(tmp_path / "database.db", fundamentals, weights)
+    record = self_calibrate(db)
+    assert record["ok"] is True and record["applied"] is True
+    assert record["pairs"] == 60
+    con = sqlite3.connect(db)
+    params, prior = con.execute("SELECT params, prior_focal_length FROM cameras").fetchone()
+    values = np.frombuffer(params, dtype=np.float64)
+    assert values[0] == pytest.approx(1663.0, rel=0.01)
+    assert list(values[1:]) == [960.0, 540.0, 0.0]
+    assert prior == 1
+
+
+def test_self_calibration_leaves_the_camera_alone_when_it_cannot_estimate(tmp_path):
+    fundamentals, weights = _orbit_fundamentals(1663.0, count=3)
+    db = _colmap_like_database(tmp_path / "database.db", fundamentals, weights)
+    record = self_calibrate(db)
+    assert record["ok"] is False
+    params, prior = sqlite3.connect(db).execute("SELECT params, prior_focal_length FROM cameras").fetchone()
+    assert np.frombuffer(params, dtype=np.float64)[0] == 2304.0 and prior == 0
+    assert self_calibrate(tmp_path / "missing.db")["ok"] is False

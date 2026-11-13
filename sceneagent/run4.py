@@ -36,6 +36,7 @@ from sceneagent.colmap_stage import (
     refine_intrinsics_command,
     use_gpu_from_banner,
 )
+from sceneagent.focal_prior import self_calibrate
 from sceneagent.gpu_headroom import (
     COLMAP_MIN_FREE_MIB,
     SPLATFACTO_MIN_FREE_MIB,
@@ -154,6 +155,11 @@ def run_colmap_on_images(
     frame_count = len(list(image_dir.glob("*.jpg"))) + len(
         list(image_dir.glob("*.png"))
     )
+    focal_prior: dict[str, Any] | None = None
+    if matcher == MATCHER:
+        # A video has no EXIF focal; start its camera at the focal its own
+        # matches imply rather than COLMAP's 1.2 * size guess (focal_prior.py).
+        focal_prior = self_calibrate(database)
     mapper_argv = [str(part) for part in mapper_command]
     attempts: list[dict[str, Any]] = []
     gate: dict[str, Any] = {}
@@ -221,6 +227,7 @@ def run_colmap_on_images(
         "reason": reason,
         "mapper_attempts": attempts,
         "mapper_rung": winner,
+        "focal_prior": focal_prior,
         "failed_step": None if passed else "reconstruction_gate",
         "stderr": "",
         "returncode": 0,
@@ -458,6 +465,8 @@ def run_run4(
             # nobody could tell whether SIFT had run on the GPU.
             use_gpu = colmap_result["use_gpu"]
         mapper_rung = colmap_result.get("mapper_rung")
+        if colmap_result.get("focal_prior") is not None:
+            evidence["focal_prior"] = colmap_result["focal_prior"]
         mapper_attempts = colmap_result.get("mapper_attempts")
         if mapper_attempts:
             evidence["mapper_attempts"] = mapper_attempts
@@ -516,6 +525,11 @@ def run_run4(
             for item in evidence["mapper_attempts"]
         ]
         pose_entry["mapper_rung"] = mapper_rung
+    if evidence.get("focal_prior") is not None:
+        prior = evidence["focal_prior"]
+        pose_entry["focal_prior"] = {
+            k: prior.get(k) for k in ("ok", "focal_px", "pairs", "why") if k in prior
+        }
     pose_entry["use_gpu"] = use_gpu
     if pose_decision == "accept":
         sampling = evidence["sampling"] or {}

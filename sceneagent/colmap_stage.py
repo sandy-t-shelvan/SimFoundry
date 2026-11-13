@@ -72,12 +72,14 @@ MATCHERS = ("sequential_matcher", "exhaustive_matcher")
 # initial pairs failed. GPU matching noise only moves where this happens.
 #
 # The same matches and the same initial pair (0051/0067) register 300 of
-# 300 when the intrinsics are held during mapping; one bundle adjustment
-# over the finished model then refines them (f 2355 px, k 0.046). So the
-# video ladder holds the intrinsics first and refines them at the end
-# (``REFINE_INTRINSICS``). COLMAP's own rule follows, for a video whose
-# true focal is far from the 1.2 * width guess, then the relaxed initial
-# pairs of PR #99.
+# 300 when the intrinsics are held during mapping. Held at the 2304 px
+# guess, though, the geometry is wrong (the model that placed has f 1663
+# px, k 0.02), and one refining bundle adjustment settles at 2355-2464 px,
+# so every placement failed. So a video's camera first starts at the focal
+# its own matches imply (``focal_prior.self_calibrate``, within 4 % on the
+# repo videos), the mapper holds it, and one bundle adjustment over the
+# finished model refines focal and distortion (``REFINE_INTRINSICS``).
+# COLMAP's own rule follows, then the relaxed initial pairs of PR #99.
 FIXED_INTRINSICS = (
     "--Mapper.ba_refine_focal_length",
     "0",
