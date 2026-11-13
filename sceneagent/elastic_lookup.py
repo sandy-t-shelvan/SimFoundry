@@ -77,6 +77,7 @@ def lookup_class(
         str(reply.get("text") or ""),
         list(reply.get("urls") or []),
     )
+    record["model_id"] = reply.get("model_id")
     stored[key] = record
     return record
 

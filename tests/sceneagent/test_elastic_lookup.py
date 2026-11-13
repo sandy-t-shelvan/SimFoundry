@@ -33,7 +33,7 @@ class Stub:
     def generate_images(self, prompt, images=(), search=False):
         self.prompts.append(prompt)
         assert search is True
-        return {"text": self.text, "urls": list(self.urls)}
+        return {"text": self.text, "urls": list(self.urls), "model_id": "stub-model"}
 
 
 def test_a_grounded_in_range_reply_is_a_web_lookup_and_is_cached():
@@ -47,6 +47,7 @@ def test_a_grounded_in_range_reply_is_a_web_lookup_and_is_cached():
     assert first["youngs_modulus_pa"] == pytest.approx(2e6)
     assert first["poisson_ratio"] == pytest.approx(0.3)
     assert first["urls"] == [URL]
+    assert first["model_id"] == "stub-model"
 
 
 def test_urls_come_from_grounding_metadata_not_the_reply_text():
@@ -100,6 +101,15 @@ def test_particle_params_traces_the_lookup_and_not_a_default():
     assert unresolved["youngs_modulus_pa"] is None
     assert "youngs_modulus_pa: unresolved" in unresolved["log"]
     assert "poisson_ratio: unresolved" in unresolved["log"]
+
+
+def test_active_model_id_follows_one_constant(monkeypatch):
+    from sceneagent.gemini_client import DEFAULT_MODEL_ID, active_model_id
+
+    monkeypatch.delenv("GEMINI_MODEL_ID", raising=False)
+    assert active_model_id() == DEFAULT_MODEL_ID
+    monkeypatch.setenv("GEMINI_MODEL_ID", "override-id")
+    assert active_model_id() == "override-id"
 
 
 def test_only_soft_objects_are_looked_up_and_a_missing_key_is_not_echoed(monkeypatch):
