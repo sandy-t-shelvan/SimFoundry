@@ -451,6 +451,72 @@ def write_property_set(
     return {"records": records, "summary": summary}
 
 
+PROPERTIES_ITEM = "§3.4 properties"
+
+
+def object_names(association: Mapping[str, Any]) -> dict[int, str]:
+    """Each association object's most frequent GroundingDINO phrase, its name here."""
+    names = {}
+    for obj in association.get("object_list", []):
+        counts: dict[str, int] = {}
+        for mask in obj.get("masks", []):
+            phrase = str(mask.get("phrase") or "object")
+            counts[phrase] = counts.get(phrase, 0) + 1
+        names[int(obj["object"])] = (
+            max(sorted(counts), key=lambda p: counts[p]) if counts else "object"
+        )
+    return names
+
+
+def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
+    """Write ``physics/object_<n>.json`` for every placed object; one ledger item.
+
+    The MVP path (Sandeep, 2026-11-13, option B): no prior checkpoint, so the
+    material is equation (2) over the object's own phrase (``keyword_material``)
+    and the other §3.4 fields are null with their source, which the export
+    leaves to its defaults. The prior joins once SAM 3D meshes are textured and
+    KAN-39 packs them (``--packs``, ``--checkpoint``).
+    """
+    out = Path(out)
+    ledger_path = out / "ledger.json"
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ledger = {"entries": []}
+    entries = [e for e in ledger.get("entries", []) if e.get("item") != PROPERTIES_ITEM]
+    entry: dict[str, Any] = {"item": PROPERTIES_ITEM}
+    try:
+        association = json.loads(
+            (out / "association_evidence.json").read_text(encoding="utf-8")
+        )
+        placement = json.loads((out / "bin_score.json").read_text(encoding="utf-8"))
+        names = object_names(association)
+        objects = [
+            {"object": int(r["object"]), "name": names.get(int(r["object"]), "object")}
+            for r in placement["icp"]["objects"]
+            if r.get("placed")
+        ]
+        if not objects:
+            raise ValueError("no placed object")
+        result = write_property_set(objects, None, out, checkpoint=checkpoint)
+        entry.update(
+            decision="accept",
+            use_gpu=False,
+            objects=len(objects),
+            prior=result["summary"]["prior"] is not None,
+            materials={
+                f"object_{r['object_number']}": r["material_class"]
+                for r in result["records"]
+            },
+        )
+    except (OSError, ValueError, KeyError) as exc:
+        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[:800])
+    entries.append(entry)
+    ledger["entries"] = entries
+    ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    return 0 if entry["decision"] == "accept" else 1
+
+
 def _read_json(path: Path | None) -> Any:
     if path is None:
         return None

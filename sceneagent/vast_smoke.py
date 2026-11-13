@@ -237,6 +237,7 @@ PIPELINES = {
                 "Gaussian association",
                 "SAM 3D meshes",
                 "ICP residuals",
+                "§3.4 properties",
                 "USD physics export",
                 "Isaac Lab settle",
             ),
