@@ -100,6 +100,15 @@ REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
 REMOTE_ISAACLAB_OUT = "/workspace/sf4-smoke/isaaclab"
 # The Mailbox slice's own run dir, so the bin's results are never overwritten.
 REMOTE_MAILBOX_OUT = "/workspace/sf4-smoke/mailbox"
+# KAN-48 / KAN-52: each example video the box may run through video_run,
+# by pipeline name. Each has its own run dir (remote_out). PutCupInBowl is
+# the development video; PutMarkerInCup is kept for the MVP acceptance run
+# and is not tuned on.
+VIDEO_PIPELINES = {
+    "mailbox": MAILBOX_RELATIVE,
+    "putcupinbowl": "docs/assets/example_videos/PutCupInBowl.mp4",
+    "putmarkerincup": "docs/assets/example_videos/PutMarkerInCup.mp4",
+}
 ISAACLAB_PYTHON = "/root/.local/share/mamba/envs/isaaclab/bin/python3"
 # The setup stages run detached on the box (setsid nohup), so a dropped
 # runner does not stop them; each run waits this long, then reports what is
@@ -218,20 +227,23 @@ PIPELINES = {
     "probe": ((), "host inventory"),
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
     "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
-    "mailbox": (
-        (
-            "video",
-            "COLMAP camera poses",
-            "full-scene splat",
-            "SAM masks",
-            "Gaussian association",
-            "SAM 3D meshes",
-            "ICP residuals",
-            "USD physics export",
-            "Isaac Lab settle",
-        ),
-        MAILBOX_RELATIVE,
-    ),
+    **{
+        name: (
+            (
+                "video",
+                "COLMAP camera poses",
+                "full-scene splat",
+                "SAM masks",
+                "Gaussian association",
+                "SAM 3D meshes",
+                "ICP residuals",
+                "USD physics export",
+                "Isaac Lab settle",
+            ),
+            relative,
+        )
+        for name, relative in VIDEO_PIPELINES.items()
+    },
 }
 # GraspClutter6D pipelines. They share one ledger in REMOTE_BIN_OUT, so each is
 # judged on its own items only (a masks run must not fail on an earlier splat
@@ -270,6 +282,8 @@ def remote_out(pipeline: str) -> str:
         return REMOTE_ISAACLAB_OUT
     if pipeline == "mailbox":
         return REMOTE_MAILBOX_OUT
+    if pipeline in VIDEO_PIPELINES:
+        return f"/workspace/sf4-smoke/{pipeline}"
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
 
 
@@ -864,12 +878,12 @@ def build_remote_command(
         return ["/bin/sh", "-c", "host inventory", "--out", out]
     if pipeline == "setup":
         return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
-    if pipeline == "mailbox":
+    if pipeline in VIDEO_PIPELINES:
         return [
             REMOTE_PYTHON,
             "-m",
             "sceneagent.video_run",
-            f"{repo}/{MAILBOX_RELATIVE}",
+            f"{repo}/{VIDEO_PIPELINES[pipeline]}",
             "--out",
             out,
         ]
@@ -1125,7 +1139,7 @@ def rsync_invocations(
     known_hosts: str,
     repo_dir: str,
 ) -> list[tuple[list[str], Path]]:
-    """Copy ``sceneagent``, Fruits.mp4 and Mailbox.mp4. The rest stays home."""
+    """Copy ``sceneagent``, Fruits.mp4 and the VIDEO_PIPELINES videos. The rest stays home."""
     repo = require_remote_dir(repo_dir)
     remote = f"root@{host}:{repo}/"
     ssh_e = shlex.join(ssh_base_argv(key_path, known_hosts, port))
@@ -1161,7 +1175,7 @@ def rsync_invocations(
                 "-e",
                 ssh_e,
                 FRUITS_RELATIVE,
-                *[m for m in (MAILBOX_RELATIVE,) if (checkout / m).is_file()],
+                *[m for m in VIDEO_PIPELINES.values() if (checkout / m).is_file()],
                 remote,
             ],
             checkout,
@@ -1198,7 +1212,7 @@ def iter_shipped_files(checkout: Path) -> list[Path]:
             if _ship_excluded(relative):
                 continue
             shipped.append(path)
-    for relative in (FRUITS_RELATIVE, MAILBOX_RELATIVE):
+    for relative in (FRUITS_RELATIVE, *VIDEO_PIPELINES.values()):
         video = root / relative
         if video.is_file() and not _ship_excluded(relative):
             shipped.append(video)

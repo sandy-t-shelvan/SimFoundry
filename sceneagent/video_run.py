@@ -37,7 +37,15 @@ from sceneagent.settle_run import VARIANTS
 # Ours: GroundingDINO phrases for the objects Mailbox.mp4 shows (a red
 # mailbox with a lid, a cyan cube). The orchestrator plan (PR #63) that
 # would write this per video is after the MVP.
-PROMPTS = {"Mailbox": "mailbox . cube ."}
+PROMPTS = {
+    "Mailbox": "mailbox . cube .",
+    # Development video: an orange bowl, a white paper cup and a marker on a
+    # desk (a frame at 2 s).
+    "PutCupInBowl": "bowl . cup . marker .",
+    # The MVP acceptance video, from its title only: nothing in it was looked
+    # at or tuned on.
+    "PutMarkerInCup": "marker . cup .",
+}
 # No new stage starts after this many seconds, so a long stage (the splat's
 # train step may take up to an hour) still ends inside the job's 6,600 s.
 START_BUDGET_S = 2400.0

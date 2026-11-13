@@ -281,3 +281,16 @@ def test_the_bin_scene_is_unchanged_by_a_video_copy():
     # replace() on the frozen record must not leak into the bin default.
     replace(BIN_SCENE, name="other")
     assert BIN_SCENE.name == "000091"
+
+
+def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
+    from sceneagent.vast_smoke import VIDEO_PIPELINES
+
+    for name, relative in VIDEO_PIPELINES.items():
+        out = remote_out(name)
+        assert out.endswith("/" + name)
+        argv = build_remote_command("/w/repo", out, pipeline=name)
+        assert argv[-3:] == [f"/w/repo/{relative}", "--out", out]
+        assert Path(relative).stem in video_run.PROMPTS
+        assert PIPELINES[name][0][-1] == "Isaac Lab settle"
+    assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
