@@ -2474,7 +2474,6 @@ class SshRemote:
         self.tmp.cleanup()
 
     def run(self, checkout: Path, local_run: Path) -> int:
-        self._sync(checkout)
         # Attributes, not new run() arguments: tests inject remotes whose
         # run() takes only the checkout and the local directory.
         pipeline = getattr(self, "pipeline", "sceneagent")
@@ -2483,10 +2482,13 @@ class SshRemote:
             pipeline = "sceneagent"
         if not isinstance(commit_sha, str):
             commit_sha = ""
+        # The proposal is part of the tree the box runs. Write it before
+        # the copy, or the box only sees the checkout from before the call.
         if pipeline == "articulate":
             from sceneagent.articulate_run import prepare_for_box
 
             prepare_for_box(checkout)
+        self._sync(checkout)
         if pipeline == "setup":
             self.hf_token_sent = self._send_hf_token(os.environ.get(HF_TOKEN_ENV, ""))
         code = self._bash(
