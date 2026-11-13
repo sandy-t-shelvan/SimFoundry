@@ -106,7 +106,7 @@ def _sequential_pose_commands(database, image_dir, sparse_dir, use_gpu, major=3)
                 "--FeatureMatching.use_gpu",
                 gpu,
                 "--SequentialMatching.overlap",
-                "5",
+                "10",
             ],
             [
                 "colmap",
@@ -150,8 +150,10 @@ def _sequential_pose_commands(database, image_dir, sparse_dir, use_gpu, major=3)
             database,
             "--SiftMatching.use_gpu",
             gpu,
+            # Overlap 5 left PutMarkerInCup on a two-image model. Overlap 10,
+            # COLMAP's own default, registered all 300 of those frames.
             "--SequentialMatching.overlap",
-            "5",
+            "10",
         ],
         [
             "colmap",
