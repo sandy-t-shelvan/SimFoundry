@@ -19,7 +19,7 @@ on:
       pipeline:
         description: GPU pipeline to run
         type: choice
-        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup, articulate]
+        options: [run4, bin, splat, masks, association, sam3d, place, review, review_vlm, review_candidates, review_accept, mapper, probe, claude_install, setup, isaaclab_render, mailbox, bin_settle, putcupinbowl, putmarkerincup, articulate]
         default: run4
   pull_request_target:
     types: [labeled]
@@ -208,6 +208,7 @@ jobs:
             sf4-artifacts/review_sheets.zip
             sf4-artifacts/mapper_compare.json
             sf4-artifacts/inventory.txt
+            sf4-artifacts/claude_install.txt
             sf4-artifacts/setup_evidence.json
             sf4-artifacts/isaaclab_render.png
             sf4-artifacts/isaaclab_render.log

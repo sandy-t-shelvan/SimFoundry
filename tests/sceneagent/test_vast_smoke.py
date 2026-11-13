@@ -821,7 +821,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         1,
     )
     assert (
-        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate pipeline choice"
+        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/claude_install/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate pipeline choice"
         in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
@@ -2729,6 +2729,47 @@ def test_probe_runs_here_and_its_manifest_passes_on_the_inventory(tmp_path):
     )
     assert missing["passed"] is False
     assert missing["failure_reason"] == "inventory.txt was not written"
+
+
+
+def test_claude_install_is_plain_shell_and_never_prints_the_environment():
+    from sceneagent.vast_smoke import REMOTE_CLAUDE_OUT, remote_out
+
+    assert remote_out("claude_install") == REMOTE_CLAUDE_OUT
+    script = build_remote_shell(REMOTE_REPO, REMOTE_CLAUDE_OUT, pipeline="claude_install")
+    assert "pinned interpreter missing" not in script
+    assert f"{REMOTE_PYTHON} -m" not in script
+    assert "https://claude.ai/install.sh" in script
+    assert f"rm -f {REMOTE_CLAUDE_OUT}/claude_install.txt" in script
+    # Install only: no login, no token, no environment dump.
+    for banned in ("printenv", "\nenv", " env ", "export -p", "setup-token", "claude login", "auth login"):
+        assert banned not in script
+
+
+def test_claude_install_passes_only_on_an_installed_version(tmp_path):
+    from sceneagent.vast_smoke import claude_install_version
+
+    out = tmp_path / "run"
+    out.mkdir()
+    command = build_remote_command(REMOTE_REPO, str(out), pipeline="claude_install")
+    missing = collect_artifact_manifest(
+        out, command=command, instance_id=60254439, pipeline="claude_install"
+    )
+    assert missing["passed"] is False
+    assert missing["failure_reason"] == "claude_install.txt names no installed version"
+    report = out / "claude_install.txt"
+    report.write_text("## result\nclaude_version: missing\n")
+    assert claude_install_version(out) is None
+    failed = collect_artifact_manifest(
+        out, command=command, instance_id=60254439, pipeline="claude_install"
+    )
+    assert failed["passed"] is False and failed["complete"] is False
+    report.write_text("## result\nclaude_version: 2.3.1 (Claude Code)\n")
+    ok = collect_artifact_manifest(
+        out, command=command, instance_id=60254439, pipeline="claude_install"
+    )
+    assert ok["passed"] is True
+    assert ok["claude_version"] == "2.3.1 (Claude Code)"
 
 
 def test_bin_shell_puts_cuda_colmap_on_path_and_py7zr_outside_the_shared_env():

@@ -100,6 +100,9 @@ REMOTE_SETUP_OUT = "/workspace/sf4-smoke/setup"
 REMOTE_ISAACLAB_OUT = "/workspace/sf4-smoke/isaaclab"
 # The Mailbox slice's own run dir, so the bin's results are never overwritten.
 REMOTE_MAILBOX_OUT = "/workspace/sf4-smoke/mailbox"
+# claude_install writes only its report here; Claude Code itself lands in
+# /root/.local, where the installer puts it.
+REMOTE_CLAUDE_OUT = "/workspace/sf4-smoke/claude_install"
 # KAN-48 / KAN-52: each example video the box may run through video_run,
 # by pipeline name. Each has its own run dir (remote_out). PutCupInBowl is
 # the development video; PutMarkerInCup is kept for the MVP acceptance run
@@ -225,6 +228,7 @@ PIPELINES = {
     ),
     "mapper": (("mapper comparison",), "GraspClutter6D 000091 and Fruits frames"),
     "probe": ((), "host inventory"),
+    "claude_install": ((), "Claude Code install (claude.ai/install.sh)"),
     "setup": (("box setup",), "GPU stack install (sceneagent/box_setup.sh)"),
     "isaaclab_render": (("Isaac Lab render",), "Isaac Lab cube on a ground plane"),
     "articulate": (("articulated motion",), "proposed joints"),
@@ -288,6 +292,8 @@ def remote_out(pipeline: str) -> str:
         return "/workspace/sf4-smoke/articulate"
     if pipeline == "mailbox":
         return REMOTE_MAILBOX_OUT
+    if pipeline == "claude_install":
+        return REMOTE_CLAUDE_OUT
     if pipeline in VIDEO_PIPELINES:
         return f"/workspace/sf4-smoke/{pipeline}"
     return REMOTE_BIN_OUT if pipeline in BIN_PIPELINES else REMOTE_OUT
@@ -334,6 +340,31 @@ section da3; for py in /opt/conda/bin/python3 /opt/conda/envs/*/bin/python3 /roo
 # Grounded-SAM-2's GroundingDINO imports itself as grounding_dino.*, so it needs its checkout root on the path.
 section gdino; G=/root/SceneagentX/third_party/Grounded-SAM-2; P=/root/.local/share/mamba/envs/gsam2/bin/python3; [ -x "$P" ] && (cd /tmp && PYTHONPATH="$G:/workspace/sf4-smoke/pydeps-gsam2" timeout 300 "$P" -c 'from groundingdino.util.inference import load_model; print("gdino import ok"); import segment_anything; print("segment_anything ok")' 2>&1 | public | tail -2)
 """
+# Installs Claude Code so the box can run its own session over Remote Control.
+# It installs only: logging in is a browser sign-in the owner does over SSH,
+# so no credential ever reaches the box through this workflow. Idempotent: an
+# existing install is reported, not reinstalled. Never prints the environment.
+CLAUDE_INSTALL_SCRIPT = r"""
+section() { printf '\n## %s\n' "$1"; }
+section date; date -u
+section before; ls -l /root/.local/bin/claude 2>&1
+section install
+if [ -x /root/.local/bin/claude ]; then
+  echo "already installed"
+elif command -v curl >/dev/null 2>&1; then
+  curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -20
+else
+  echo "curl missing"
+fi
+# The installer leaves PATH to the shell rc; add it once so a later SSH login finds claude.
+grep -qs 'HOME/.local/bin' /root/.bashrc || echo 'export PATH="$HOME/.local/bin:$PATH"' >> /root/.bashrc
+section result
+if [ -x /root/.local/bin/claude ]; then
+  printf 'claude_version: %s\n' "$(timeout 60 /root/.local/bin/claude --version 2>&1 | head -1)"
+else
+  echo "claude_version: missing"
+fi
+"""
 # gc6d_fetch needs py7zr; installed only when the pinned env lacks it.
 PY7ZR_PIN = "py7zr==1.1.4"
 FETCH_NAMES = (
@@ -360,6 +391,7 @@ FETCH_NAMES = (
     "bin_review_accept.json",
     "mapper_compare.json",
     "inventory.txt",
+    "claude_install.txt",
     "setup_evidence.json",
     "isaaclab_render.png",
     "isaaclab_render.log",
@@ -401,6 +433,7 @@ PUBLISHED_NAMES = frozenset(
         "bin_review_accept.json",
         "mapper_compare.json",
         "inventory.txt",
+        "claude_install.txt",
         "setup_evidence.json",
         "isaaclab_render.png",
         "isaaclab_render.log",
@@ -896,6 +929,8 @@ def build_remote_command(
         return [REMOTE_PYTHON, "-m", "sceneagent.mapper_compare", "--out", out]
     if pipeline == "probe":
         return ["/bin/sh", "-c", "host inventory", "--out", out]
+    if pipeline == "claude_install":
+        return ["/bin/sh", "-c", "claude install", "--out", out]
     if pipeline == "setup":
         return ["/bin/bash", f"{repo}/sceneagent/box_setup.sh", "run", out]
     if pipeline in VIDEO_PIPELINES:
@@ -938,6 +973,24 @@ def build_remote_command(
             raise InstanceNotApproved("refusing commit sha")
         argv.extend(["--commit-sha", commit_sha])
     return argv
+
+
+# Pipelines whose result is one text report rather than a plan and a ledger.
+REPORT_PIPELINES = frozenset({"probe", "claude_install"})
+CLAUDE_REPORT = "claude_install.txt"
+
+
+def claude_install_version(run_dir: str | Path) -> str | None:
+    """The version line from a claude_install report, or None if not installed."""
+    report = Path(run_dir) / CLAUDE_REPORT
+    if not report.is_file():
+        return None
+    for line in report.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("claude_version: "):
+            value = line.split(": ", 1)[1].strip()
+            if re.search(r"\d+\.\d+", value):
+                return value
+    return None
 
 
 def host_probe_command(out_dir: str) -> str:
@@ -992,6 +1045,15 @@ def build_remote_shell(
         script = (
             f"mkdir -p {shlex.quote(out)}\n{{\n{PROBE_SCRIPT}\n}} > "
             f"{shlex.quote(out + '/inventory.txt')} 2>&1\necho inventory written\n"
+        )
+        _reject_secret_text(script)
+        return script
+    if pipeline == "claude_install":
+        # Plain shell like the probe: it must run on a box with no pinned env.
+        report = shlex.quote(out + "/" + CLAUDE_REPORT)
+        script = (
+            f"mkdir -p {shlex.quote(out)}\nrm -f {report}\n{{\n{CLAUDE_INSTALL_SCRIPT}\n}} > "
+            f"{report} 2>&1\necho claude install report written\n"
         )
         _reject_secret_text(script)
         return script
@@ -2113,7 +2175,12 @@ def collect_artifact_manifest(
         inventory = run_dir / "inventory.txt"
         missing_files = [] if inventory.is_file() else ["inventory"]
         reason = None if inventory.is_file() else "inventory.txt was not written"
-    passed = (pipeline == "probe" and reason is None) or (
+    if pipeline == "claude_install":
+        # No plan or ledger either; the report must name an installed version.
+        version = claude_install_version(run_dir)
+        missing_files = [] if version else ["claude_install"]
+        reason = None if version else "claude_install.txt names no installed version"
+    passed = (pipeline in REPORT_PIPELINES and reason is None) or (
         ledger_bytes is not None
         and plan_path.is_file()
         and not missing_items
@@ -2154,6 +2221,9 @@ def collect_artifact_manifest(
         manifest["ssh"] = _public_ssh_report(ssh)
     if pipeline == "probe":
         manifest["complete"] = (run_dir / "inventory.txt").is_file()
+    elif pipeline == "claude_install":
+        manifest["claude_version"] = claude_install_version(run_dir)
+        manifest["complete"] = manifest["claude_version"] is not None
     else:
         manifest["complete"] = plan_path.is_file() and ledger_path.is_file()
     if not manifest["complete"]:
