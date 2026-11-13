@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Mailbox hinge proposal. The client is a stub, so CI makes no call."""
+"""Articulation proposals. The Mailbox lid is one object. The client is a stub."""
 
 from __future__ import annotations
 
@@ -8,122 +8,128 @@ import json
 
 import pytest
 
-from sceneagent.hinge_proposal import (
-    SOURCE,
-    MissingGeminiKeyError,
-    client_from_environ,
-    part_summary,
-    propose_hinge,
-    shared_region,
-)
-from sceneagent.mailbox_hinge import MAILBOX_OBJECT, parts_manifest
+from sceneagent.gemini_client import MissingGeminiKeyError, client_from_environ
+from sceneagent.hinge_proposal import SOURCE, propose_articulation
+from sceneagent.vlm_check import advise
 
-BODY = {
-    "name": "body",
-    "face_count": 12,
-    "mesh_path": "body.glb",
-    "bbox_min": [0.0, 0.0, 0.0],
-    "bbox_max": [0.2, 0.2, 0.2],
-}
-LID = {
-    "name": "lid",
-    "face_count": 8,
-    "mesh_path": "lid.glb",
-    "bbox_min": [0.0, 0.0, 0.2],
-    "bbox_max": [0.2, 0.2, 0.25],
-}
+BODY = {"name": "body", "bbox_min": [0, 0, 0], "bbox_max": [0.2, 0.2, 0.2]}
+LID = {"name": "lid", "bbox_min": [0, 0, 0.2], "bbox_max": [0.2, 0.2, 0.25]}
+FRAMES = [b"frame-a", b"frame-b", b"frame-c"]
 GOOD = json.dumps(
     {
-        "axis": [0, 1, 0],
-        "pivot": [0.0, 0.0, 0.2],
-        "lower": 0.0,
-        "upper": 1.2,
-        "rationale": "The lid turns about the shared top edge.",
+        "joints": [
+            {
+                "type": "revolute",
+                "parent": "body",
+                "child": "lid",
+                "axis": [0, 1, 0],
+                "pivot": [0, 0, 0.2],
+                "lower": 0,
+                "upper": 1.2,
+                "rationale": "The lid turns about the shared top edge.",
+            }
+        ]
     }
 )
-BAD_AXIS = json.dumps(
+BAD = json.dumps(
     {
-        "axis": [2, 0, 0],
-        "pivot": [0.0, 0.0, 0.2],
-        "lower": 0.0,
-        "upper": 1.2,
-        "rationale": "A long axis.",
+        "joints": [
+            {
+                "type": "revolute",
+                "parent": "body",
+                "child": "lid",
+                "axis": [2, 0, 0],
+                "pivot": [0, 0, 0.2],
+                "lower": 0,
+                "upper": 1.2,
+                "rationale": "A long axis.",
+            }
+        ]
     }
 )
-FRAMES = [b"frame-a", b"frame-b", b"frame-c"]
 
 
 class Stub:
     def __init__(self, replies):
         self.replies = list(replies)
-        self.prompts = []
+        self.images = []
 
-    def generate(self, prompt, frames):
-        self.prompts.append(prompt)
-        assert frames == FRAMES or len(frames) in (2, 3, 4)
+    def generate_images(self, prompt, images=(), search=False):
+        self.images.append(images)
         return {"text": self.replies.pop(0)}
 
 
-def _manifest():
-    return parts_manifest(
-        MAILBOX_OBJECT,
-        [
-            {key: BODY[key] for key in ("name", "face_count", "mesh_path")},
-            {key: LID[key] for key in ("name", "face_count", "mesh_path")},
-        ],
+def _mailbox():
+    return [{"name": "object_1", "parts": [BODY, LID]}]
+
+
+def test_the_mailbox_lid_is_one_revolute_and_images_are_sent():
+    stub = Stub([GOOD])
+    record = propose_articulation(_mailbox(), FRAMES, stub)
+    obj = record["objects"][0]
+    assert obj["status"] == "ok" and obj["source"] == SOURCE
+    assert obj["joints"][0]["type"] == "revolute"
+    assert stub.images == [tuple(FRAMES)] or stub.images == [FRAMES]
+    assert "measured" not in obj["source"]
+
+
+def test_a_bad_axis_is_retried_once_then_a_second_reject_is_unresolved():
+    stub = Stub([BAD, GOOD])
+    ok = propose_articulation(_mailbox(), FRAMES, stub)
+    assert ok["objects"][0]["status"] == "ok"
+    assert len(stub.images) == 2
+    stub = Stub([BAD, BAD])
+    stopped = propose_articulation(_mailbox(), FRAMES, stub)
+    assert stopped["objects"][0]["status"] == "unresolved"
+    assert stopped["objects"][0]["joints"] == []
+    assert len(stub.images) == 2
+
+
+def test_one_part_stays_rigid_and_does_not_call():
+    stub = Stub([GOOD])
+    record = propose_articulation([{"name": "mug", "parts": [BODY]}], FRAMES, stub)
+    assert record["objects"][0]["status"] == "rigid"
+    assert stub.images == []
+
+
+def test_frames_are_required():
+    with pytest.raises(ValueError, match="2 to 4"):
+        propose_articulation(_mailbox(), [b"only"], Stub([GOOD]))
+
+
+def test_the_advisory_check_does_not_change_a_source():
+    stub = Stub(["yes, the lid opens"])
+    report = advise(FRAMES, "does the lid open?", stub)
+    assert report["advisory"] is True and report["label"] == "vlm_check"
+    assert report["verdict"] == "yes"
+
+
+def test_articulate_is_a_pipeline_and_angles_span_the_limits():
+    from sceneagent.articulate_drive import ZIP_NAME, angles, movable
+    from sceneagent.vast_smoke import (
+        FETCH_NAMES,
+        PIPELINES,
+        PUBLISHED_NAMES,
+        build_remote_command,
     )
 
-
-def test_the_summary_names_the_shared_edge():
-    summary = part_summary(BODY, LID)
-    assert summary["contact"] == {"min": [0.0, 0.0, 0.2], "max": [0.2, 0.2, 0.2]}
-    assert shared_region([0, 0, 0], [1, 1, 1], [2, 2, 2], [3, 3, 3]) is None
-
-
-def test_a_valid_reply_is_one_revolute_proposal():
-    stub = Stub([GOOD])
-    summary = part_summary(BODY, LID)
-    record = propose_hinge(_manifest(), summary, FRAMES, stub)
-    assert record["status"] == "ok"
-    assert record["source"] == SOURCE
-    assert record["joint"]["type"] == "revolute"
-    assert record["joint"]["axis"] == [0.0, 1.0, 0.0]
-    assert record["joint"]["origin"] == [0.0, 0.0, 0.2]
-    assert "lid_hinge" in record["urdf"]
-    assert record["attempts"][0]["model_reply"] == GOOD
-    assert record["attempts"][0]["error"] is None
-    assert len(stub.prompts) == 1
-    assert "measured" not in record["source"]
+    assert "articulate" in PIPELINES
+    argv = build_remote_command(
+        "/w/repo", "/workspace/sf4-smoke/articulate", pipeline="articulate"
+    )
+    assert "articulate_drive.py" in argv[4]
+    assert "gemini" not in " ".join(argv).lower()
+    assert angles(0.0, 1.4)[0] == 0.0
+    assert angles(0.0, 1.4)[-1] == pytest.approx(1.4)
+    assert len(angles(0.0, 1.4)) == 8
+    assert movable(
+        {"objects": [{"joints": [{"type": "revolute"}, {"type": "fixed"}]}]}
+    ) == [{"type": "revolute"}]
+    for name in (ZIP_NAME, "articulate_proposal.json", "vlm_check.json"):
+        assert name in FETCH_NAMES and name in PUBLISHED_NAMES
 
 
-def test_a_rejected_axis_is_retried_once_then_resolved():
-    stub = Stub([BAD_AXIS, GOOD])
-    record = propose_hinge(_manifest(), part_summary(BODY, LID), FRAMES, stub)
-    assert record["status"] == "ok"
-    assert len(stub.prompts) == 2
-    assert "not unit length" in stub.prompts[1]
-    assert record["attempts"][0]["error"]
-    assert record["attempts"][1]["model_reply"] == GOOD
-
-
-def test_two_rejections_stop_unresolved():
-    stub = Stub([BAD_AXIS, BAD_AXIS])
-    record = propose_hinge(_manifest(), part_summary(BODY, LID), FRAMES, stub)
-    assert record["status"] == "unresolved"
-    assert record["source"] == SOURCE
-    assert record["joint"] is None and record["urdf"] is None
-    assert len(record["attempts"]) == 2
-    assert len(stub.prompts) == 2
-
-
-def test_frame_count_is_checked_before_a_call():
-    stub = Stub([GOOD])
-    with pytest.raises(ValueError, match="2 to 4"):
-        propose_hinge(_manifest(), part_summary(BODY, LID), [b"only"], stub)
-    assert stub.prompts == []
-
-
-def test_a_missing_key_is_not_echoed(monkeypatch):
+def test_the_shared_client_hides_the_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(MissingGeminiKeyError, match="missing or empty"):
         client_from_environ()
