@@ -54,7 +54,9 @@ def build_package(run_dir, out_dir) -> dict[str, Any]:
         shutil.copyfile(source, destination)
         copied.append(dest_rel)
         for name, token in _COVERS.items():
-            if dest_rel == token or (token.endswith("/") and dest_rel.startswith(token)):
+            if dest_rel == token or (
+                token.endswith("/") and dest_rel.startswith(token)
+            ):
                 present[name] = True
     files = [_entry(out, relative) for relative in sorted(copied)]
     manifest = {
