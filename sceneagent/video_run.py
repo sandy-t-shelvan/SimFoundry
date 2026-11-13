@@ -33,6 +33,7 @@ from sceneagent.bin_association import SAME_PHRASE, VIDEO_KAPPA_SHARE
 from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
 from sceneagent.settle_run import VARIANTS
+from sceneagent.step_critic import REVIEW_ZIP
 
 # Ours: GroundingDINO phrases for the objects Mailbox.mp4 shows (a red
 # mailbox with a lid, a cyan cube). The orchestrator plan (PR #63) that
@@ -72,6 +73,10 @@ STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
     # KAN-23: the inspector's views of the settled scene; the fix report is
     # written on the runner (workflow sceneagent-inspector-report).
     ("inspect", ("inspection views",)),
+    # SF-18 (KAN-19): the stage review images the step critic judges on the
+    # runner (sceneagent-mvp-review). Last, because every stage after one
+    # that runs is run again, and this one only reads what the others wrote.
+    ("review", ("step review images",)),
 )
 
 
@@ -117,6 +122,8 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
     if name == "inspect":
         # Views drawn before the summary named what the export left out.
         return "left_out" in _evidence(out, "settle_summary.json")
+    if name == "review":
+        return (out / REVIEW_ZIP).is_file()
     if name == "export":
         # An export made before it recorded each object's box runs again, so
         # a settle reject can say what the bodies were doing.
@@ -147,6 +154,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
     from sceneagent.physics_export import export_run
     from sceneagent.physics_props import run_physics
     from sceneagent.settle_run import run_settle
+    from sceneagent.step_critic import run_review
 
     return {
         "poses": lambda: run_video_poses(video, out, prompt),
@@ -160,6 +168,7 @@ def default_stages(video: Path, out: Path, prompt: str) -> dict[str, Callable[[]
         "export": lambda: export_run(out),
         "settle": lambda: run_settle(out),
         "inspect": lambda: run_inspect(out),
+        "review": lambda: run_review(out),
     }
 
 

@@ -181,6 +181,38 @@ def test_the_masks_review_image_outlines_each_kept_mask(tmp_path):
         )
 
 
+def test_the_masks_image_reads_a_video_scene_s_own_view_folder(tmp_path):
+    import dataclasses
+
+    from sceneagent.bin_run import BIN_SCENE, write_scene
+
+    out = _masks_run(tmp_path)
+    (out / "images").rename(out / "mask_views")
+    write_scene(out, dataclasses.replace(BIN_SCENE, view_dir="mask_views"))
+    assert sc.render_masks(out).is_file()
+
+
+def test_the_review_stage_packs_the_images_and_writes_one_ledger_item(tmp_path):
+    out = _masks_run(tmp_path)
+    (out / "ledger.json").write_text(
+        json.dumps({"entries": [{"item": sc.REVIEW_ITEM, "decision": "reject"}]})
+    )
+    assert sc.run_review(out) == 0
+    entries = json.loads((out / "ledger.json").read_text())["entries"]
+    assert [e["item"] for e in entries] == [sc.REVIEW_ITEM]
+    assert entries[0]["decision"] == "accept"
+    assert entries[0]["stages"] == ["masks"]
+    assert (out / sc.REVIEW_ZIP).is_file()
+
+
+def test_the_review_stage_rejects_when_there_is_nothing_to_draw(tmp_path):
+    out = tmp_path / "empty"
+    out.mkdir()
+    assert sc.run_review(out) == 1
+    entry = json.loads((out / "ledger.json").read_text())["entries"][0]
+    assert entry["decision"] == "reject" and "detections.json" in entry["reason"]
+
+
 def test_the_cli_judges_a_zip_with_an_injected_harness(tmp_path):
     out = _masks_run(tmp_path)
     assert sc.main(["render-masks", "--out", str(out)]) == 0

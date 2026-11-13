@@ -210,6 +210,7 @@ def test_the_run_resumes_and_reruns_everything_after_a_stage_that_ran(tmp_path):
         "export",
         "settle",
         "inspect",
+        "review",
     ]
     record = json.loads((out / video_run.RECORD).read_text())
     assert record["complete"] and set(record["stages"]) == set(calls)
@@ -277,14 +278,16 @@ def test_the_mailbox_pipeline_has_its_own_dir_and_ships_the_video():
         "--out",
         REMOTE_MAILBOX_OUT,
     ]
-    assert PIPELINES["mailbox"][0][-6:] == (
+    assert PIPELINES["mailbox"][0][-7:] == (
         bin_place.ICP_ITEM,
         "fitted splat prior input",
         "§3.4 properties",
         "USD physics export",
         "Isaac Lab settle",
         "inspection views",
+        "step review images",
     )
+    assert "review_steps.zip" in FETCH_NAMES and "review_steps.zip" in PUBLISHED_NAMES
     assert bin_place.SCORE_ITEM not in PIPELINES["mailbox"][0]
     for name in (video_run.RECORD, "scene.json"):
         assert name in FETCH_NAMES and name in PUBLISHED_NAMES
@@ -305,11 +308,13 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
         argv = build_remote_command("/w/repo", out, pipeline=name)
         assert argv[-3:] == [f"/w/repo/{relative}", "--out", out]
         assert Path(relative).stem in video_run.PROMPTS
-        assert PIPELINES[name][0][-1] == "inspection views"
+        assert PIPELINES[name][0][-2:] == ("inspection views", "step review images")
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
 
 
-def test_the_package_command_runs_a_known_video_through_video_run(tmp_path, monkeypatch):
+def test_the_package_command_runs_a_known_video_through_video_run(
+    tmp_path, monkeypatch
+):
     seen = {}
 
     def fake_main(argv=None):
@@ -364,3 +369,14 @@ def test_inspection_views_drawn_before_left_out_existed_are_drawn_again(tmp_path
     assert not video_run.stage_done(out, "inspect", ("inspection views",))
     (out / "settle_summary.json").write_text(json.dumps({"ran": True, "left_out": []}))
     assert video_run.stage_done(out, "inspect", ("inspection views",))
+
+
+def test_the_review_stage_is_last_and_done_only_with_its_zip(tmp_path):
+    """SF-18: the critic's images come last, so drawing them never reruns the GPU stages."""
+    assert video_run.STAGES[-1] == ("review", ("step review images",))
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    _ledger(out, ["step review images"])
+    assert not video_run.stage_done(out, "review", ("step review images",))
+    (out / "review_steps.zip").write_bytes(b"PK")
+    assert video_run.stage_done(out, "review", ("step review images",))

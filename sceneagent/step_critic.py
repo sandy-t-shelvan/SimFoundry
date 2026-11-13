@@ -11,6 +11,7 @@ rejected stage once, carrying the note. Same split as the SF-19 reviewer
 (:mod:`sceneagent.vlm_review`): the key never reaches the box.
 
     python -m sceneagent.step_critic render-masks --out OUT        # box, CPU
+    python -m sceneagent.step_critic review --out OUT              # box, CPU, ledger
     python -m sceneagent.step_critic judge --images review_steps.zip --out-dir DIR  # runner
 
 ``judge`` writes ``DIR/review/<stage>.json`` (image, verdict, reason, model)
@@ -21,6 +22,11 @@ The prompts are ours (the paper does not publish its critic prompts), one per
 stage, each hashed into the verdict file. The masks stage is hooked first:
 ``render_masks`` draws its review image from the masks stage's own outputs.
 The other stages have prompts here; their review images come later.
+
+``run_review`` is ``video_run``'s last stage ("step review images"): it draws
+the masks image, packs ``review_steps.zip`` for the runner, and writes one
+ledger item. It is last because ``video_run`` re-runs every stage after one
+that runs, and this stage only reads what earlier stages wrote.
 """
 
 from __future__ import annotations
@@ -51,8 +57,9 @@ TILE_PX = 512
 MAX_VIEWS = 6
 
 _COMMON = """\
-You are the step-runner critic in a pipeline that rebuilds a cluttered bin of
-household objects from photos. Judge only what the image shows. Answer as
+You are the step-runner critic in a pipeline that rebuilds a scene of
+household objects (a cluttered bin, or a tabletop filmed on video) from
+photos or video frames. Judge only what the image shows. Answer as
 JSON: {"verdict": "accept" or "reject", "reason": "<one short sentence naming
 what you saw>", "retry_note": "<for a reject, one short instruction for
 re-running this step; empty for an accept>"}.
@@ -65,7 +72,7 @@ This step segments objects in the input photos. The image tiles up to six
 photos; each detected object's mask is outlined in its own colour and
 labelled with the detector's phrase. Accept when every clearly visible object
 has one outline that follows it, and no outline covers several objects, the
-bin itself, or the floor. Reject when objects are missed, merged, split, or
+bin or table itself, or the floor. Reject when objects are missed, merged, split, or
 when the container or background is outlined as an object.
 """,
     "gaussians": _COMMON
@@ -330,13 +337,18 @@ def draw_masks_tile(
 def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
     """The masks stage's review image from its own outputs; returns the PNG path.
 
-    Reads ``masks/detections.json``, ``masks/<view>.npz`` and ``images/<view>``
-    as :mod:`sceneagent.mask_worker` writes them. Views are taken in name
-    order so the same run always draws the same image.
+    Reads ``masks/detections.json``, ``masks/<view>.npz`` and the scene's
+    view folder (``images/`` for the bin, the video's mask views otherwise)
+    as :mod:`sceneagent.mask_worker` and :mod:`sceneagent.bin_masks` write
+    them. Views are taken in name order so the same run always draws the same
+    image.
     """
     from PIL import Image
 
+    from sceneagent.bin_run import load_scene
+
     out = Path(out)
+    view_dir = out / load_scene(out).view_dir
     detections = json.loads(
         (out / "masks" / "detections.json").read_text(encoding="utf-8")
     )
@@ -347,7 +359,7 @@ def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
             key=lambda d: d["mask_index"],
         )
         stack = np.load(out / "masks" / f"{Path(view).stem}.npz")["masks"]
-        with Image.open(out / "images" / view) as handle:
+        with Image.open(view_dir / view) as handle:
             photo = np.array(handle.convert("RGB"))
         labels = [str(d.get("phrase", "")) for d in kept]
         tiles.append(draw_masks_tile(photo, stack[: len(kept)], labels))
@@ -377,6 +389,40 @@ def pack_review_images(out: Path) -> Path:
     return archive_path
 
 
+REVIEW_ITEM = "step review images"
+
+
+def run_review(out: Path | str) -> int:
+    """Draw and pack the stage review images; one ledger item. 0 on accept."""
+    out = Path(out)
+    ledger_path = out / "ledger.json"
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ledger = {"entries": []}
+    entries = [e for e in ledger.get("entries", []) if e.get("item") != REVIEW_ITEM]
+    entry: dict[str, Any] = {"item": REVIEW_ITEM, "use_gpu": False}
+    try:
+        render_masks(out)
+        archive = pack_review_images(out)
+        with zipfile.ZipFile(archive) as packed:
+            stages = sorted(Path(name).stem for name in packed.namelist())
+        if not stages:
+            raise ValueError("no stage image was drawn")
+        entry.update(
+            decision="accept",
+            stages=stages,
+            zip=REVIEW_ZIP,
+            note="judged on the runner (sceneagent-mvp-review)",
+        )
+    except (OSError, ValueError, KeyError) as exc:
+        entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[:800])
+    entries.append(entry)
+    ledger["entries"] = entries
+    ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+    return 0 if entry["decision"] == "accept" else 1
+
+
 def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -384,6 +430,10 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
         "render-masks", help="draw the masks stage's review image (box)"
     )
     render.add_argument("--out", type=Path, required=True)
+    review = sub.add_parser(
+        "review", help="draw and pack the review images, with a ledger item (box)"
+    )
+    review.add_argument("--out", type=Path, required=True)
     judge = sub.add_parser(
         "judge", help="ask the VLM to judge each stage image (runner)"
     )
@@ -393,6 +443,8 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
         "--source-run", default="", help="gpu-smoke run id the images came from"
     )
     args = parser.parse_args(argv)
+    if args.command == "review":
+        return run_review(args.out)
     if args.command == "render-masks":
         path = render_masks(args.out)
         print(
