@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 from sceneagent import bin_place, bin_run, video_run
+from sceneagent.scene_objects import lookup_prompt
+
+ROOT = Path(__file__).resolve().parents[2]
 from sceneagent.bin_run import BIN_SCENE, Scene, load_scene, mask_views, write_scene
 from sceneagent.vast_smoke import (
     FETCH_NAMES,
@@ -304,7 +307,8 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
         assert out.endswith("/" + name)
         argv = build_remote_command("/w/repo", out, pipeline=name)
         assert argv[-3:] == [f"/w/repo/{relative}", "--out", out]
-        assert Path(relative).stem in video_run.PROMPTS
+        # KAN-56: its prompt is the committed verdict for its bytes.
+        assert lookup_prompt(ROOT / relative) is not None, relative
         assert PIPELINES[name][0][-1] == "inspection views"
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
 
