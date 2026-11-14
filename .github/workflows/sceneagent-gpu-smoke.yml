@@ -225,6 +225,7 @@ jobs:
             sf4-artifacts/vlm_check.json
             sf4-artifacts/soft_press_params.json
             sf4-artifacts/soft_press_status.txt
+            sf4-artifacts/soft_press_frames.zip
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.

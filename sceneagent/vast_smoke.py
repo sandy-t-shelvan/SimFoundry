@@ -79,6 +79,9 @@ ALLOWED_INSTANCE_ID = 60254439
 # The remote script uses this file and no other interpreter. A missing or
 # non-executable path exits 127. PATH is not a fallback.
 REMOTE_PYTHON = SIMFOUNDRY_PYTHON
+# PhysGaussian is not the sa env. Taichi 1.5.0 needs Python 3.10, which
+# box_setup.sh installs at this path and nowhere else.
+PHYSGAUSSIAN_PYTHON = "/root/.local/share/mamba/envs/physgaussian/bin/python3"
 # COLMAP 3.11.1 with CUDA on 58301075 (probe run 42908214934); /usr/bin/colmap
 # there is 3.6 without CUDA. Placed after the interpreter's bin on PATH, before
 # everything else.
@@ -380,6 +383,7 @@ FETCH_NAMES = (
     "vlm_check.json",
     "soft_press_params.json",
     "soft_press_status.txt",
+    "soft_press_frames.zip",
 )
 # The fetched files that become the workflow artifact. One list, so a new
 # evidence file cannot be fetched and then silently dropped (run 42942342408
@@ -423,6 +427,7 @@ PUBLISHED_NAMES = frozenset(
         "vlm_check.json",
         "soft_press_params.json",
         "soft_press_status.txt",
+        "soft_press_frames.zip",
     }
 )
 PUBLIC_FIELDS = (
@@ -939,7 +944,10 @@ def build_remote_command(
         ]
     if pipeline == "soft_press":
         return [
-            REMOTE_PYTHON,
+            "env",
+            "-u",
+            "PYTHONPATH",
+            PHYSGAUSSIAN_PYTHON,
             f"{repo}/sceneagent/soft_press_drive.py",
             "--params",
             f"{repo}/sceneagent/soft_press_params.json",
@@ -2516,11 +2524,11 @@ class SshRemote:
             from sceneagent.articulate_run import prepare_for_box
 
             prepare_for_box(checkout)
-        self._sync(checkout)
         if pipeline == "soft_press":
             from sceneagent.soft_press import prepare_for_box
 
             prepare_for_box(checkout)
+        self._sync(checkout)
         if pipeline == "setup":
             self.hf_token_sent = self._send_hf_token(os.environ.get(HF_TOKEN_ENV, ""))
         code = self._bash(
