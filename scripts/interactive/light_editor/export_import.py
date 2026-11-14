@@ -34,9 +34,13 @@ scene, and the template's editable props are dropped. Without one the document
 opens in the editor but is marked not restorable until composed onto a
 template.
 
-Objects keep the export's stage-frame poses (metres, Z up). No joints are read:
-SF-35 exports rigid objects; articulated objects come with SF-39, and the
-joints panel reads them from each object's own USD once its asset has them.
+Objects keep the export's stage-frame poses (metres, Z up). An object with
+revolute or prismatic joints under it (SF-39) keeps them: its asset is a copy of
+the object's own prim tree -- links, meshes and joints -- rather than one merged
+mesh, because the joints panel reads joint names, axes and limits from each
+object's own USD (``scene_io.read_usd_joints``) and drops a ``joint_limits``
+entry whose joint the asset does not name. Such an asset's root is not a rigid
+body (its links are), so no friction is keyed by the object's name for it.
 
 Usage::
 
@@ -167,6 +171,8 @@ def read_export_stage(stage_path):
             "metadata": metadata,
             "joints": _joint_records(prim),
         })
+        if objects[-1]["joints"]:
+            objects[-1]["articulated_usda"] = _articulated_asset_text(stage, prim)
     return {"objects": objects, "ground_z_m": ground_z}
 
 
@@ -199,6 +205,33 @@ def _joint_records(prim):
             "upper": upper,
         })
     return found
+
+
+def _articulated_asset_text(stage, prim):
+    """The object's prim tree as its own USD: links, meshes and joints.
+
+    The copy is made from the flattened stage so references and payloads come
+    along. ``Sdf.CopySpec`` remaps joint body targets that point inside the
+    copied tree. The root's own transform is dropped: the scene's
+    ``root_link`` pose places the object, and keeping both would apply it twice.
+    """
+    from pxr import Sdf, Usd, UsdGeom
+
+    name = prim_token(prim.GetName())
+    flat = stage.Flatten()
+    layer = Sdf.Layer.CreateAnonymous(".usda")
+    root_path = Sdf.Path(f"/{name}")
+    if not Sdf.CopySpec(flat, prim.GetPath(), layer, root_path):
+        raise SceneEditError(f"could not copy {prim.GetPath()} out of the export")
+    root = layer.GetPrimAtPath(root_path)
+    for prop in list(root.properties):
+        if prop.name.startswith("xformOp"):
+            root.RemoveProperty(prop)
+    layer.defaultPrim = name
+    copy = Usd.Stage.Open(layer)
+    UsdGeom.SetStageUpAxis(copy, UsdGeom.GetStageUpAxis(stage))
+    UsdGeom.SetStageMetersPerUnit(copy, UsdGeom.GetStageMetersPerUnit(stage))
+    return layer.ExportToString()
 
 
 def body_type(record):
@@ -374,7 +407,8 @@ def object_specs(records, scene_json_path):
             raise SceneEditError(f"two exported objects map to the name {name!r}")
         seen.add(name)
         usd = assets / f"{name}.usda"
-        usd.write_text(object_asset_text(record), encoding="utf-8")
+        articulated = record.get("articulated_usda")
+        usd.write_text(articulated or object_asset_text(record), encoding="utf-8")
         category = str((record.get("metadata") or {}).get("material") or "object")
         spec = object_spec(
             name, usd.relative_to(scene_dir).as_posix(), usd, prim_token(category),
@@ -383,7 +417,7 @@ def object_specs(records, scene_json_path):
         )
         args = spec["init_info"]["args"]
         args.update(_constructor_flags(record))
-        materials = _materials(record, name)
+        materials = None if articulated else _materials(record, name)
         if materials:
             args["link_physics_materials"] = materials
         _apply_joints(spec, record)
