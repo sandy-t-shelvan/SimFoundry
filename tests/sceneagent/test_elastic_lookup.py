@@ -116,10 +116,10 @@ def test_only_soft_objects_are_looked_up_and_a_missing_key_is_not_echoed(monkeyp
     stub = Stub()
     objects = [
         {
-            "object": "sponge",
+            "object": "dough",
             "body_type": "soft deformable",
             "deformability": 0.2,
-            "material_class": "rubber and foam",
+            "material_class": "food and organic matter",
             "mass_kg": 0.05,
             "rigidity": 0.2,
             "n_gaussians": 10,
@@ -135,7 +135,7 @@ def test_only_soft_objects_are_looked_up_and_a_missing_key_is_not_echoed(monkeyp
         },
     ]
     traced = trace_soft_objects(objects, stub)
-    assert [row["object"] for row in traced] == ["sponge"]
+    assert [row["object"] for row in traced] == ["dough"]  # not in the table
     assert stub.prompts and "glass and ceramic" not in stub.prompts[0]
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(MissingGeminiKeyError, match="missing or empty"):
@@ -156,7 +156,10 @@ def test_the_table_answers_by_keyword_then_class_default_and_carries_its_sources
     assert can["material"] == "aluminum"
     pot = table_lookup("metal", "pot")
     assert pot["material"].startswith("steel")  # class default
-    assert table_lookup("rubber and foam", "kitchen sponge") is None  # no foam row
+    sponge = table_lookup("rubber and foam", "kitchen sponge")
+    assert sponge["material"].startswith("flexible open-cell polyurethane foam")
+    assert 1e3 < sponge["youngs_modulus_pa"] < 1e5  # kPa, not rubber's MPa
+    assert table_lookup("rubber and foam", "ball") is None  # no class default
     assert table_lookup("fabric", "towel") is None
 
 
@@ -182,7 +185,7 @@ def test_a_table_miss_falls_back_to_the_grounded_lookup_and_a_hit_does_not_call(
     )
     assert Client.calls == 0 and hit[0]["elastic_source"] == "material_table"
     miss = trace_soft_objects(
-        [dict(soft, object="sponge", material_class="rubber and foam")], Client()
+        [dict(soft, object="towel", material_class="fabric")], Client()
     )
     assert Client.calls == 1 and miss[0]["elastic_source"] == "unresolved"
 

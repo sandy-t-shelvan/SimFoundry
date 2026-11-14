@@ -1,64 +1,193 @@
 {
-  "note": "Young's modulus and Poisson's ratio by material, each row read from the cited page (2026-11-14). A row is used only when it has both numbers. A class default is used only where one material stands in for the class; 'rubber and foam' has none, because foam (kPa) and rubber (MPa) differ by orders of magnitude. Anything not covered falls back to the grounded web lookup.",
+  "note": "Young's modulus and Poisson's ratio by material, each row read from the cited page (2026-11-14). A row is used only when it has both numbers. A class default is used only where one material stands in for the class; 'rubber and foam' has none, because foam (kPa) and rubber (MPa) differ by orders of magnitude: each is matched by name. Anything not covered falls back to the grounded web lookup.",
   "rows": [
     {
       "material": "rubber",
       "material_class": "rubber and foam",
-      "keywords": ["rubber"],
+      "keywords": [
+        "rubber"
+      ],
       "class_default": false,
-      "youngs_modulus_pa": {"low": 1.0e7, "high": 1.0e8, "typical": 3.2e7},
-      "poisson_ratio": {"low": 0.48, "high": 0.4999, "typical": 0.49},
+      "youngs_modulus_pa": {
+        "low": 10000000.0,
+        "high": 100000000.0,
+        "typical": 32000000.0
+      },
+      "poisson_ratio": {
+        "low": 0.48,
+        "high": 0.4999,
+        "typical": 0.49
+      },
       "sources": [
-        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Rubber, small strain 0.01 - 0.1", "unit": "GPa"},
-        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Rubber 0.48 - ~0.5", "unit": "-"}
+        {
+          "url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html",
+          "quote": "Rubber, small strain 0.01 - 0.1",
+          "unit": "GPa"
+        },
+        {
+          "url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html",
+          "quote": "Rubber 0.48 - ~0.5",
+          "unit": "-"
+        }
       ]
+    },
+    {
+      "material": "flexible open-cell polyurethane foam (0.03 g/cm^3)",
+      "material_class": "rubber and foam",
+      "keywords": [
+        "foam",
+        "sponge",
+        "polyurethane",
+        "cushion",
+        "pillow",
+        "mattress"
+      ],
+      "class_default": false,
+      "youngs_modulus_pa": {
+        "low": 9000.0,
+        "high": 47000.0,
+        "typical": 20000.0
+      },
+      "poisson_ratio": {
+        "low": 0.1,
+        "high": 0.4999,
+        "typical": 0.3
+      },
+      "sources": [
+        {
+          "url": "https://lakeslab.ep.wisc.edu/BulkModFoam07.pdf",
+          "quote": "Young's moduli of the 25.4 mm, 60 ppi cube (Figure 2) were 47, 34 and 37 kPa ... Young's moduli were 9, 9 and 20 kPa (10 ppi); B. Moore, T. Jaglinski, D.S. Stone, R.S. Lakes, On the Bulk Modulus of Open Cell Foams, Cellular Polymers 26(1), 2007",
+          "unit": "kPa"
+        },
+        {
+          "url": "https://en.wikipedia.org/wiki/Poisson%27s_ratio",
+          "quote": "foam 0.1-0.5 (0.3)",
+          "unit": "-"
+        }
+      ],
+      "typical_is": "median of the nine measured moduli (9, 9, 20, 15, 15, 37.5, 47, 34, 37 kPa)"
     },
     {
       "material": "polystyrene",
       "material_class": "plastic",
-      "keywords": ["polystyrene", "plastic"],
+      "keywords": [
+        "polystyrene",
+        "plastic"
+      ],
       "class_default": true,
-      "youngs_modulus_pa": {"low": 3.0e9, "high": 3.5e9, "typical": 3.25e9},
-      "poisson_ratio": {"low": 0.34, "high": 0.34, "typical": 0.34},
+      "youngs_modulus_pa": {
+        "low": 3000000000.0,
+        "high": 3500000000.0,
+        "typical": 3250000000.0
+      },
+      "poisson_ratio": {
+        "low": 0.34,
+        "high": 0.34,
+        "typical": 0.34
+      },
       "sources": [
-        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Polystyrene, PS 3 - 3.5", "unit": "GPa"},
-        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Polystyrene 0.34", "unit": "-"}
+        {
+          "url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html",
+          "quote": "Polystyrene, PS 3 - 3.5",
+          "unit": "GPa"
+        },
+        {
+          "url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html",
+          "quote": "Polystyrene 0.34",
+          "unit": "-"
+        }
       ]
     },
     {
       "material": "aluminum",
       "material_class": "metal",
-      "keywords": ["aluminum", "aluminium"],
+      "keywords": [
+        "aluminum",
+        "aluminium"
+      ],
       "class_default": false,
-      "youngs_modulus_pa": {"low": 6.9e10, "high": 6.9e10, "typical": 6.9e10},
-      "poisson_ratio": {"low": 0.334, "high": 0.334, "typical": 0.334},
+      "youngs_modulus_pa": {
+        "low": 69000000000.0,
+        "high": 69000000000.0,
+        "typical": 69000000000.0
+      },
+      "poisson_ratio": {
+        "low": 0.334,
+        "high": 0.334,
+        "typical": 0.334
+      },
       "sources": [
-        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Aluminum 69", "unit": "GPa"},
-        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Aluminum 0.334", "unit": "-"}
+        {
+          "url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html",
+          "quote": "Aluminum 69",
+          "unit": "GPa"
+        },
+        {
+          "url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html",
+          "quote": "Aluminum 0.334",
+          "unit": "-"
+        }
       ]
     },
     {
       "material": "steel (structural / mild)",
       "material_class": "metal",
-      "keywords": ["steel", "iron"],
+      "keywords": [
+        "steel",
+        "iron"
+      ],
       "class_default": true,
-      "youngs_modulus_pa": {"low": 2.0e11, "high": 2.0e11, "typical": 2.0e11},
-      "poisson_ratio": {"low": 0.303, "high": 0.303, "typical": 0.303},
+      "youngs_modulus_pa": {
+        "low": 200000000000.0,
+        "high": 200000000000.0,
+        "typical": 200000000000.0
+      },
+      "poisson_ratio": {
+        "low": 0.303,
+        "high": 0.303,
+        "typical": 0.303
+      },
       "sources": [
-        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Steel, Structural ASTM-A36 200", "unit": "GPa"},
-        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Steel, mild 0.303", "unit": "-"}
+        {
+          "url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html",
+          "quote": "Steel, Structural ASTM-A36 200",
+          "unit": "GPa"
+        },
+        {
+          "url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html",
+          "quote": "Steel, mild 0.303",
+          "unit": "-"
+        }
       ]
     },
     {
       "material": "soda glass",
       "material_class": "glass and ceramic",
-      "keywords": ["glass"],
+      "keywords": [
+        "glass"
+      ],
       "class_default": true,
-      "youngs_modulus_pa": {"low": 5.0e10, "high": 9.0e10, "typical": 7.0e10},
-      "poisson_ratio": {"low": 0.22, "high": 0.22, "typical": 0.22},
+      "youngs_modulus_pa": {
+        "low": 50000000000.0,
+        "high": 90000000000.0,
+        "typical": 70000000000.0
+      },
+      "poisson_ratio": {
+        "low": 0.22,
+        "high": 0.22,
+        "typical": 0.22
+      },
       "sources": [
-        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Glass 50 - 90", "unit": "GPa"},
-        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Glass, Soda 0.22", "unit": "-"}
+        {
+          "url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html",
+          "quote": "Glass 50 - 90",
+          "unit": "GPa"
+        },
+        {
+          "url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html",
+          "quote": "Glass, Soda 0.22",
+          "unit": "-"
+        }
       ]
     }
   ]
