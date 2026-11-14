@@ -188,8 +188,6 @@ def select_sharpest_per_bin(
     return chosen
 
 
-
-
 def select_frames(
     frames: Sequence[dict[str, Any]],
     duration: float,
