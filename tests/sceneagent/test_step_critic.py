@@ -216,3 +216,159 @@ def test_the_critic_never_reads_a_key_itself():
     source = inspect.getsource(sc)
     assert "os.environ" not in source and "load_gemini_api_key" not in source
     assert "import os" not in source
+
+
+def _reject(note="split the cup from the marker", prompt="paper cup . marker ."):
+    return json.dumps(
+        {
+            "verdict": "reject",
+            "reason": "one outline covers the cup and the marker",
+            "retry_note": note,
+            "retry_prompt": prompt,
+        }
+    )
+
+
+def test_a_retry_prompt_must_already_be_detector_phrases():
+    assert sc.retry_prompt("paper cup . marker .") == "paper cup . marker ."
+    assert sc.retry_prompt(" red  mug.blue scissors ") == "red mug . blue scissors ."
+    for bad in ("", None, "Mug . <b>", "a . b . c . d . e . f . g .", 3, "mug; rm"):
+        assert sc.retry_prompt(bad) == ""
+    # An accept carries no retry prompt, whatever the model wrote.
+    accept = json.dumps({"verdict": "accept", "reason": "ok", "retry_prompt": "a ."})
+    assert "retry_prompt" not in sc.parse_step_verdict(accept)
+    assert sc.parse_step_verdict(_reject())["retry_prompt"] == "paper cup . marker ."
+
+
+def test_a_reject_reruns_the_stage_once_with_the_note_and_both_go_to_the_ledger(
+    tmp_path,
+):
+    out = _masks_run(tmp_path)
+    (out / "ledger.json").write_text(
+        json.dumps({"entries": [{"item": "SAM masks", "decision": "accept"}]})
+    )
+    harness = FakeHarness([_reject(), _reply("accept", "one outline per object")])
+    reruns = []
+
+    def rerun(path, request):
+        reruns.append(request)
+        return 0
+
+    record = sc.review_and_retry(out, harness, "masks", rerun=rerun)
+    assert reruns == [
+        {
+            "stage": "masks",
+            "note": "split the cup from the marker",
+            "prompt": "paper cup . marker .",
+        }
+    ]
+    assert record["outcome"] == "accept" and record["vlm_calls"] == 2
+    assert [a["verdict"] for a in record["attempts"]] == ["reject", "accept"]
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert [(e["item"], e["decision"], e.get("attempt")) for e in lines] == [
+        ("SAM masks", "accept", None),
+        ("step review (masks)", "reject", 0),
+        ("step review (masks)", "accept", 1),
+    ]
+    assert lines[1]["retry_note"] == "split the cup from the marker"
+    assert lines[1]["retry_prompt"] == "paper cup . marker ."
+    for attempt, verdict in ((0, "reject"), (1, "accept")):
+        folder = out / sc.CRITIC_DIR / f"attempt-{attempt}"
+        review = json.loads((folder / "review" / "masks.json").read_text())
+        assert review["verdict"] == verdict and review["model"] == "gemini-3.8-flash"
+        assert (folder / "review_steps" / "masks.png").is_file()
+    assert json.loads((out / sc.CRITIC_DIR / "loop.json").read_text()) == record
+
+
+def test_a_second_reject_is_logged_and_never_re_run(tmp_path):
+    out = _masks_run(tmp_path)
+    harness = FakeHarness([_reject(), _reject("still merged")])
+    reruns = []
+    record = sc.review_and_retry(
+        out, harness, "masks", rerun=lambda p, r: reruns.append(r) or 0
+    )
+    assert len(reruns) == 1 and record["outcome"] == "reject"
+    assert harness.call_count == 2
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert [(e["decision"], e["attempt"]) for e in lines] == [
+        ("reject", 0),
+        ("reject", 1),
+    ]
+
+
+def test_a_reject_without_a_prompt_logs_a_skipped_retry(tmp_path):
+    out = _masks_run(tmp_path)
+    harness = FakeHarness([_reject(prompt="")])
+    record = sc.review_and_retry(
+        out, harness, "masks", rerun=lambda p, r: pytest.fail("must not re-run")
+    )
+    assert record["outcome"] == "reject, retry skipped"
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert [(e["item"], e["decision"]) for e in lines] == [
+        ("step review (masks)", "reject"),
+        ("step retry (masks)", "skipped"),
+    ]
+
+
+def test_an_accept_needs_no_retry_and_the_cli_reports_it(tmp_path, capsys):
+    out = _masks_run(tmp_path)
+    harness = FakeHarness([_reply("accept", "fine")])
+    assert sc.main(["review", "--out", str(out)], harness=harness) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == {"outcome": "accept", "model": "gemini-3.8-flash", "vlm_calls": 1}
+
+
+def test_the_masks_retry_runs_the_mask_stage_with_the_critics_prompt(tmp_path):
+    from sceneagent import bin_masks
+
+    out = tmp_path / "video"
+    (out / "mask_views").mkdir(parents=True)
+    (out / "mask_views" / "0001.jpg").write_bytes(b"x")
+    (out / "scene.json").write_text(
+        json.dumps(
+            {
+                "source": "simfoundry_example_video",
+                "name": "V",
+                "ledger_name": "V",
+                "views": 1,
+                "input_item": "video",
+                "view_dir": "mask_views",
+                "min_masked_views": 1,
+                "ground_truth": False,
+                "prompt": "block . mailbox .",
+            }
+        )
+    )
+    seen = []
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    def runner(argv, **kwargs):
+        seen.append(argv)
+        if "sceneagent.mask_worker" in argv:
+            (out / "masks").mkdir(exist_ok=True)
+            (out / "masks" / "detections.json").write_text(
+                json.dumps({"0001.jpg": [{"phrase": "green cube", "kept": True}]})
+            )
+        return Done()
+
+    code = bin_masks.run_bin_masks(
+        out,
+        runner=runner,
+        weights=dict,
+        prompt="green cube . red mailbox .",
+        critic_note="the black panel is outlined",
+    )
+    assert code == 0
+    worker = seen[-1]
+    assert worker[worker.index("--prompt") + 1] == "green cube . red mailbox ."
+    evidence = json.loads((out / "masks_evidence.json").read_text())
+    assert evidence["prompt_source"] == "step critic retry (gemini note)"
+    assert evidence["critic_retry"] == {
+        "note": "the black panel is outlined",
+        "scene_prompt": "block . mailbox .",
+    }
+    line = json.loads((out / "ledger.json").read_text())["entries"][-1]
+    assert line["attempt"] == 1 and line["critic_note"] == "the black panel is outlined"
