@@ -230,7 +230,10 @@ def test_a_failed_fit_is_a_fallback_and_the_stage_still_accepts(tmp_path):
     entry = json.loads((out / "ledger.json").read_text())["entries"][-1]
     assert entry["decision"] == "accept" and entry["failed"] == 2
     assert "only 3 views" in entry["reason"] and "constant" in entry["reason"]
-    assert [row["plan_source"] for row in entry["fallbacks"]] == ["fallback", "fallback"]
+    assert [row["plan_source"] for row in entry["fallbacks"]] == [
+        "fallback",
+        "fallback",
+    ]
     assert all(row["reason"] for row in entry["fallbacks"])
 
 
@@ -261,3 +264,37 @@ def test_an_unpinned_prior_checkout_is_refused_before_any_fit(tmp_path):
     assert [c[0] for c in box.calls] == ["git"]  # the driver never ran
     entry = json.loads((out / "ledger.json").read_text())["entries"][-1]
     assert "not the pinned" in entry["reason"]
+
+
+def test_the_prior_stage_lifts_its_packs_onto_the_scene_gaussians(tmp_path):
+    pytest.importorskip("trimesh")
+    out = _bin(tmp_path)
+    (out / "association").mkdir()
+    np.savez_compressed(
+        out / "association" / "objects.npz",
+        object_3=np.array([0, 1], np.int32),
+        object_5=np.array([2], np.int32),
+    )
+    (out / "association_evidence.json").write_text(
+        json.dumps({"inputs": {"positions": 4}})
+    )
+    box = _Box(fp.PRIOR_COMMIT, {3: _pack(64, 3), 5: _pack(100, 5)})
+    assert fp.run_fitted_prior(out, runner=box, prior_repo=tmp_path / "prior") == 0
+    entry = json.loads((out / "ledger.json").read_text())["entries"][-1]
+    assert entry["features"] == "features shape 4 x 896"
+    features = np.load(out / "features" / "features.npz")["features"]
+    assert features.shape == (4, 896) and np.isnan(features[3]).all()
+    lift = json.loads((out / "prior_input_ledger.json").read_text())["feature_lift"]
+    assert lift["objects"] == {"object_3": 2, "object_5": 1}
+
+
+def test_a_lift_without_association_is_recorded_and_the_packs_stay(tmp_path):
+    pytest.importorskip("trimesh")
+    out = _bin(tmp_path)
+    box = _Box(fp.PRIOR_COMMIT, {3: _pack(64, 3), 5: _pack(100, 5)})
+    assert fp.run_fitted_prior(out, runner=box, prior_repo=tmp_path / "prior") == 0
+    evidence = json.loads((out / "prior_input_ledger.json").read_text())
+    assert "FileNotFoundError" in evidence["feature_lift"]["error"]
+    assert (
+        "features" not in json.loads((out / "ledger.json").read_text())["entries"][-1]
+    )

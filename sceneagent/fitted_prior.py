@@ -52,6 +52,7 @@ from typing import Any
 import numpy as np
 
 from sceneagent.bin_run import load_scene
+from sceneagent.feature_lift import run_feature_lift
 
 ITEM = "fitted splat prior input"
 REQUIRED = ("SAM 3D meshes", ITEM)
@@ -464,6 +465,16 @@ def run_fitted_prior(
             evidence["objects"].append(row)
         packed = [o for o in evidence["objects"] if o.get("ok")]
         failed = [o for o in evidence["objects"] if not o.get("ok")]
+        if packed:
+            # KAN-18: the packs' DINOv2 and OpenCLIP columns onto the scene's
+            # Gaussians. A lift that fails is recorded; it does not undo the
+            # packs the prior needs.
+            try:
+                lifted = run_feature_lift(out)
+                evidence["feature_lift"] = lifted
+                entry["features"] = lifted["shape_line"]
+            except (OSError, ValueError, KeyError) as exc:
+                evidence["feature_lift"] = {"error": f"{type(exc).__name__}: {exc}"}
         # One object the prior cannot fit does not fail the run. It keeps the
         # export's default physics and is not prior-backed.
         entry.update(
