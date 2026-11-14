@@ -86,6 +86,7 @@ def particle_params(
         f"stiffness: {stiffness:g}",
     ]
     result: dict[str, Any] = {
+        "mass_kg": mass,
         "particle_mass": particle_mass,
         "stiffness": stiffness,
         "log": log,
