@@ -1,0 +1,65 @@
+{
+  "note": "Young's modulus and Poisson's ratio by material, each row read from the cited page (2026-11-14). A row is used only when it has both numbers. A class default is used only where one material stands in for the class; 'rubber and foam' has none, because foam (kPa) and rubber (MPa) differ by orders of magnitude. Anything not covered falls back to the grounded web lookup.",
+  "rows": [
+    {
+      "material": "rubber",
+      "material_class": "rubber and foam",
+      "keywords": ["rubber"],
+      "class_default": false,
+      "youngs_modulus_pa": {"low": 1.0e7, "high": 1.0e8, "typical": 3.2e7},
+      "poisson_ratio": {"low": 0.48, "high": 0.4999, "typical": 0.49},
+      "sources": [
+        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Rubber, small strain 0.01 - 0.1", "unit": "GPa"},
+        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Rubber 0.48 - ~0.5", "unit": "-"}
+      ]
+    },
+    {
+      "material": "polystyrene",
+      "material_class": "plastic",
+      "keywords": ["polystyrene", "plastic"],
+      "class_default": true,
+      "youngs_modulus_pa": {"low": 3.0e9, "high": 3.5e9, "typical": 3.25e9},
+      "poisson_ratio": {"low": 0.34, "high": 0.34, "typical": 0.34},
+      "sources": [
+        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Polystyrene, PS 3 - 3.5", "unit": "GPa"},
+        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Polystyrene 0.34", "unit": "-"}
+      ]
+    },
+    {
+      "material": "aluminum",
+      "material_class": "metal",
+      "keywords": ["aluminum", "aluminium"],
+      "class_default": false,
+      "youngs_modulus_pa": {"low": 6.9e10, "high": 6.9e10, "typical": 6.9e10},
+      "poisson_ratio": {"low": 0.334, "high": 0.334, "typical": 0.334},
+      "sources": [
+        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Aluminum 69", "unit": "GPa"},
+        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Aluminum 0.334", "unit": "-"}
+      ]
+    },
+    {
+      "material": "steel (structural / mild)",
+      "material_class": "metal",
+      "keywords": ["steel", "iron"],
+      "class_default": true,
+      "youngs_modulus_pa": {"low": 2.0e11, "high": 2.0e11, "typical": 2.0e11},
+      "poisson_ratio": {"low": 0.303, "high": 0.303, "typical": 0.303},
+      "sources": [
+        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Steel, Structural ASTM-A36 200", "unit": "GPa"},
+        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Steel, mild 0.303", "unit": "-"}
+      ]
+    },
+    {
+      "material": "soda glass",
+      "material_class": "glass and ceramic",
+      "keywords": ["glass"],
+      "class_default": true,
+      "youngs_modulus_pa": {"low": 5.0e10, "high": 9.0e10, "typical": 7.0e10},
+      "poisson_ratio": {"low": 0.22, "high": 0.22, "typical": 0.22},
+      "sources": [
+        {"url": "https://www.engineeringtoolbox.com/young-modulus-d_417.html", "quote": "Glass 50 - 90", "unit": "GPa"},
+        {"url": "https://www.engineeringtoolbox.com/poissons-ratio-d_1224.html", "quote": "Glass, Soda 0.22", "unit": "-"}
+      ]
+    }
+  ]
+}

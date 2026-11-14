@@ -143,3 +143,57 @@ def test_only_soft_objects_are_looked_up_and_a_missing_key_is_not_echoed(monkeyp
     monkeypatch.setenv("GEMINI_API_KEY", "super-secret-value")
     client = client_from_environ()
     assert "super-secret-value" not in repr(client)
+
+
+def test_the_table_answers_by_keyword_then_class_default_and_carries_its_sources():
+    from sceneagent.elastic_lookup import TABLE_SOURCE, table_lookup
+
+    tyre = table_lookup("rubber and foam", "rubber duck")
+    assert tyre["material"] == "rubber" and tyre["source"] == TABLE_SOURCE
+    assert 0 < tyre["poisson_ratio"] < 0.5 and tyre["youngs_modulus_pa"] > 0
+    assert tyre["urls"] and all(u.startswith("https://") for u in tyre["urls"])
+    can = table_lookup("metal", "aluminium can")
+    assert can["material"] == "aluminum"
+    pot = table_lookup("metal", "pot")
+    assert pot["material"].startswith("steel")  # class default
+    assert table_lookup("rubber and foam", "kitchen sponge") is None  # no foam row
+    assert table_lookup("fabric", "towel") is None
+
+
+def test_a_table_miss_falls_back_to_the_grounded_lookup_and_a_hit_does_not_call():
+    from sceneagent.elastic_lookup import trace_soft_objects
+
+    class Client:
+        calls = 0
+
+        def generate_images(self, prompt, images=(), search=False):
+            Client.calls += 1
+            return {"text": "{}", "urls": [], "http_status": 200}
+
+    soft = {
+        "body_type": "soft deformable",
+        "deformability": 0.8,
+        "mass_kg": 0.05,
+        "rigidity": 0.2,
+        "n_gaussians": 100,
+    }
+    hit = trace_soft_objects(
+        [dict(soft, object="rubber ball", material_class="rubber and foam")], Client()
+    )
+    assert Client.calls == 0 and hit[0]["elastic_source"] == "material_table"
+    miss = trace_soft_objects(
+        [dict(soft, object="sponge", material_class="rubber and foam")], Client()
+    )
+    assert Client.calls == 1 and miss[0]["elastic_source"] == "unresolved"
+
+
+def test_every_table_row_is_complete_and_in_range():
+    import json
+
+    from sceneagent.elastic_lookup import TABLE_PATH
+
+    for row in json.loads(TABLE_PATH.read_text(encoding="utf-8"))["rows"]:
+        e, nu = row["youngs_modulus_pa"], row["poisson_ratio"]
+        assert 0 < e["low"] <= e["typical"] <= e["high"]
+        assert 0 < nu["low"] <= nu["typical"] <= nu["high"] < 0.5
+        assert len(row["sources"]) == 2 and all(s["quote"] for s in row["sources"])

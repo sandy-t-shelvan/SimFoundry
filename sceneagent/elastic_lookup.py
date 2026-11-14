@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Young's modulus and Poisson's ratio from one grounded Gemini call per class.
+"""Young's modulus and Poisson's ratio: a sourced table first, then one grounded call.
+
+``elastic_table.json`` holds rows read from cited pages; the paper's §3.4 says
+these come from "a lookup by material". A row matches when one of its keywords
+is a word of the object's name, else when it is its class's default. Only on a
+miss does the grounded Gemini lookup below run (one call per class, cached).
 
 The note does not publish these numbers. A value is kept only when the reply
 parses, the grounding metadata has a source URL, and the numbers sit in
@@ -15,13 +20,17 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from sceneagent.soft_route import particle_params, route
 
 SOURCE = "web_lookup"
+TABLE_SOURCE = "material_table"
 UNRESOLVED = "unresolved"
+TABLE_PATH = Path(__file__).with_name("elastic_table.json")
 
 
 def prompt_for_class(material_class: str) -> str:
@@ -57,6 +66,34 @@ def interpret(material_class: str, text: str, urls: Sequence[str]) -> dict[str, 
     record["source"] = SOURCE
     record["urls"] = sources
     return record
+
+
+def table_lookup(
+    material_class: str, object_name: str = "", table_path: Path = TABLE_PATH
+) -> dict[str, Any] | None:
+    """The table row for an object, or None. A keyword in the name beats the class default."""
+    rows = json.loads(table_path.read_text(encoding="utf-8"))["rows"]
+    words = set(re.findall(r"[a-z]+", str(object_name or "").casefold()))
+    cls = " ".join(str(material_class or "").split()).casefold()
+    in_class = [r for r in rows if r["material_class"].casefold() == cls]
+    chosen = next(
+        (r for r in in_class if words & {k.casefold() for k in r["keywords"]}), None
+    ) or next((r for r in in_class if r.get("class_default")), None)
+    if chosen is None:
+        return None
+    return {
+        "material_class": str(material_class),
+        "material": chosen["material"],
+        "youngs_modulus_pa": float(chosen["youngs_modulus_pa"]["typical"]),
+        "poisson_ratio": float(chosen["poisson_ratio"]["typical"]),
+        "youngs_modulus_range_pa": [
+            float(chosen["youngs_modulus_pa"]["low"]),
+            float(chosen["youngs_modulus_pa"]["high"]),
+        ],
+        "source": TABLE_SOURCE,
+        "urls": [src["url"] for src in chosen["sources"]],
+        "quotes": [src["quote"] for src in chosen["sources"]],
+    }
 
 
 def lookup_class(
@@ -95,7 +132,9 @@ def trace_soft_objects(
         if decision != "physgaussian":
             continue
         material = obj.get("material_class") or obj.get("material") or ""
-        elastic = lookup_class(str(material), client, stored)
+        elastic = table_lookup(
+            str(material), str(obj.get("object") or "")
+        ) or lookup_class(str(material), client, stored)
         params = particle_params(obj, int(obj["n_gaussians"]), elastic)
         traced.append(
             {"object": obj.get("object"), "route": decision, "reason": reason, **params}
