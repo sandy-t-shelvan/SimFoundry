@@ -67,7 +67,7 @@ jobs:
             printf '%s\n' '{"skipped":"no review_steps.zip in the smoke artifact"}' > review-out/critic_skipped.json
           fi
           python -m sceneagent.plan_runner plan --out-dir review-out --source-run "$SMOKE_RUN" || plan=$?
-          python -m sceneagent.inspector report --views review-input/inspection_views.zip --settle review-input/settle_summary.json --out review-out/isaac_lab.json --source-run "$SMOKE_RUN"
+          python -m sceneagent.inspector report --views review-input/inspection_views.zip --settle review-input/settle_summary.json --out review-out/isaac_lab.json --source-run "$SMOKE_RUN" --frame review-input/settle_frame.png
           printf '{"critic_exit":%s,"plan_exit":%s}\n' "$critic" "$plan" > review-out/review_exits.json
 
       - name: Upload the review
