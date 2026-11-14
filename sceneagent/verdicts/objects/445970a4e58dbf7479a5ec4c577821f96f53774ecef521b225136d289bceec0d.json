@@ -1,0 +1,28 @@
+{
+  "video_sha256": "445970a4e58dbf7479a5ec4c577821f96f53774ecef521b225136d289bceec0d",
+  "video_name": "PutMarkerInCup.mp4",
+  "frame_times_s": [
+    2.489,
+    7.467,
+    12.445
+  ],
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "59f247261e89cf2e1f919f94e08f3573ce65e32127e8c6d2fce26851bca21182",
+  "source": "ours: prompt and schema in sceneagent/scene_objects.py",
+  "ok": true,
+  "objects": [
+    {
+      "name": "paper cup",
+      "movable_by_hand": true
+    },
+    {
+      "name": "scissors",
+      "movable_by_hand": true
+    },
+    {
+      "name": "marker",
+      "movable_by_hand": true
+    }
+  ],
+  "prompt": "paper cup . scissors . marker ."
+}

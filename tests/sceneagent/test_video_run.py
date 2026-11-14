@@ -11,6 +11,9 @@ from pathlib import Path
 import pytest
 
 from sceneagent import bin_place, bin_run, video_run
+from sceneagent.scene_objects import lookup_prompt
+
+ROOT = Path(__file__).resolve().parents[2]
 from sceneagent.bin_run import BIN_SCENE, Scene, load_scene, mask_views, write_scene
 from sceneagent.vast_smoke import (
     FETCH_NAMES,
@@ -304,7 +307,8 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
         assert out.endswith("/" + name)
         argv = build_remote_command("/w/repo", out, pipeline=name)
         assert argv[-3:] == [f"/w/repo/{relative}", "--out", out]
-        assert Path(relative).stem in video_run.PROMPTS
+        # KAN-56: its prompt is the committed verdict for its bytes.
+        assert lookup_prompt(ROOT / relative) is not None, relative
         assert PIPELINES[name][0][-1] == "inspection views"
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
 
@@ -319,13 +323,22 @@ def test_the_package_command_runs_a_known_video_through_video_run(tmp_path, monk
     monkeypatch.setattr("sceneagent.video_run.main", fake_main)
     from sceneagent.__main__ import main
 
-    video = tmp_path / "Mailbox.mp4"
-    video.write_bytes(b"not a video")
+    # KAN-56: a known video is known by its bytes, not its name.
+    import shutil
+
+    video = tmp_path / "renamed_copy.mp4"
+    shutil.copyfile(ROOT / "docs/assets/example_videos/Mailbox.mp4", video)
     assert main([str(video), "--out", str(tmp_path / "out")]) == 0
     assert seen["argv"] == [str(video), "--out", str(tmp_path / "out")]
     with pytest.raises(SystemExit) as caught:
         main([str(video), "--out", str(tmp_path / "capped"), "--fps", "0"])
     assert caught.value.code == 2
+    seen.clear()
+    impostor = tmp_path / "Mailbox.mp4"
+    impostor.write_bytes(b"not a video")
+    with pytest.raises(ValueError, match="not an mp4"):
+        main([str(impostor), "--out", str(tmp_path / "other")])
+    assert seen == {}
 
 
 def test_an_explicit_prompt_is_forwarded_to_the_video_pipeline(tmp_path, monkeypatch):

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -52,6 +53,49 @@ def colmap_major(banner):
 
 
 MATCHERS = ("sequential_matcher", "exhaustive_matcher")
+
+
+# Mapper rungs, tried in order on the same matches until the largest model
+# passes the pose gate (KAN-52). Each is (name, extra mapper flags).
+#
+# PutMarkerInCup on COLMAP 3.11.1 (fresh runs on box 60254439, each model
+# compared with the trajectory of the model that placed): the mapper always
+# starts from frames 0051/0067, 16 apart, a low-parallax pair that grows a
+# depth-reversed model (camera rotations 140-177 degrees off). Left alone,
+# its intrinsics run away (2304 -> 18183 px, k 1.66), COLMAP's bogus-camera
+# filter drops the images and it dies at 2-6 frames. Holding the
+# intrinsics fixed only keeps that wrong model alive: it reached 300 of 300
+# at 1.3 px and passed the pose gate, and every placement then failed. So
+# the runaway is the useful signal here, and the rungs never hold them.
+#
+# Having built a model, COLMAP does not relax its initial-pair rule. The
+# relaxed rung starts a second model from 0114/0130, which registers 300 of
+# 300 and matches the placed trajectory to 0.4 % and 1.1 degrees when the
+# camera starts at the self-calibrated focal (focal_prior.py).
+RELAXED_INIT = (
+    "relaxed_init",
+    ("--Mapper.init_min_num_inliers", "50", "--Mapper.init_min_tri_angle", "8"),
+)
+RELAXED_INIT_MORE = (
+    "relaxed_init_more",
+    ("--Mapper.init_min_num_inliers", "25", "--Mapper.init_min_tri_angle", "4"),
+)
+MAPPER_LADDER = (("colmap_default", ()), RELAXED_INIT, RELAXED_INIT_MORE)
+
+
+def mapper_ladder(matcher):
+    """The mapper rungs: the same for a video and for stills."""
+    if matcher not in MATCHERS:
+        raise ValueError(f"unknown COLMAP matcher {matcher}")
+    return MAPPER_LADDER
+
+
+_INIT_PAIR_RE = re.compile(r"Initializing with image pair #(\d+) and #(\d+)")
+
+
+def init_pairs_from_log(text):
+    """Every initial pair the mapper tried, as (image_id1, image_id2), in order."""
+    return [(int(a), int(b)) for a, b in _INIT_PAIR_RE.findall(text or "")]
 
 
 def pose_commands(

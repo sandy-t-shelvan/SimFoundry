@@ -134,10 +134,25 @@ def stage_views(scene_dir: Path, image_dir: Path, ids: list[int]) -> list[str]:
 
 
 def clear_pose_state(out: Path) -> None:
-    """Remove the staged images, COLMAP database and models from ``out``."""
-    shutil.rmtree(out / "images", ignore_errors=True)
-    shutil.rmtree(out / "sparse", ignore_errors=True)
-    (out / "database.db").unlink(missing_ok=True)
+    """Remove everything an earlier pose attempt left in ``out``.
+
+    The staged images, the COLMAP database (with its WAL and SHM side
+    files, so no match survives into a fresh database), the models, the
+    gate's analyzer evidence and the pose records. A rerun must never judge
+    or extend a previous attempt's matches.
+    """
+    from sceneagent.reconstruction_gate import EVIDENCE_DIRNAME
+
+    for name in ("images", "sparse", EVIDENCE_DIRNAME):
+        shutil.rmtree(out / name, ignore_errors=True)
+    for name in (
+        "database.db",
+        "database.db-wal",
+        "database.db-shm",
+        "colmap_poses.json",
+        "run4_evidence.json",
+    ):
+        (out / name).unlink(missing_ok=True)
 
 
 def _default_colmap(image_dir: Path, work_dir: Path) -> dict[str, Any]:

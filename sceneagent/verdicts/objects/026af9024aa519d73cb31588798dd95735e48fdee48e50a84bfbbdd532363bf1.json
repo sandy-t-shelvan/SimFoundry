@@ -1,0 +1,28 @@
+{
+  "video_sha256": "026af9024aa519d73cb31588798dd95735e48fdee48e50a84bfbbdd532363bf1",
+  "video_name": "PutCupInBowl.mp4",
+  "frame_times_s": [
+    2.55,
+    7.65,
+    12.75
+  ],
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "59f247261e89cf2e1f919f94e08f3573ce65e32127e8c6d2fce26851bca21182",
+  "source": "ours: prompt and schema in sceneagent/scene_objects.py",
+  "ok": true,
+  "objects": [
+    {
+      "name": "bowl",
+      "movable_by_hand": true
+    },
+    {
+      "name": "paper cup",
+      "movable_by_hand": true
+    },
+    {
+      "name": "pen",
+      "movable_by_hand": true
+    }
+  ],
+  "prompt": "bowl . paper cup . pen ."
+}

@@ -1,0 +1,20 @@
+{
+  "video_sha256": "584e47314c44f3d220bc45d456c4b19cec1cdfc3b5a5390e9f4cdcfc626abeb6",
+  "video_name": "bike_batch-1_0.MOV",
+  "frame_times_s": [
+    2.233,
+    6.7,
+    11.167
+  ],
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "59f247261e89cf2e1f919f94e08f3573ce65e32127e8c6d2fce26851bca21182",
+  "source": "ours: prompt and schema in sceneagent/scene_objects.py",
+  "ok": true,
+  "objects": [
+    {
+      "name": "motorcycle",
+      "movable_by_hand": false
+    }
+  ],
+  "prompt": "motorcycle ."
+}

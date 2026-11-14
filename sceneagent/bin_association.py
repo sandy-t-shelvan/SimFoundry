@@ -655,6 +655,11 @@ def associate(
         "objects": objects,
         "min_object_views": min_views,
         "same_phrase": False,
+        # Recorded for video_run's resume check. It used to be stored only
+        # when same_phrase was set, which was the old stand-in for "this is
+        # a video". Phrases no longer split groups, so that condition is
+        # never true and a finished video association looked stale forever.
+        "video_kappa_share": VIDEO_KAPPA_SHARE if video else None,
         "dropped_objects": dropped,
         "scene": scene.name,
         "ground_truth": scene.ground_truth,
@@ -719,9 +724,7 @@ def evidence_from(result: dict[str, Any]) -> dict[str, Any]:
             },
             "kappa": KAPPA,
             "kappa_rule": KAPPA_RULE,
-            "video_kappa_share": VIDEO_KAPPA_SHARE
-            if result.get("same_phrase")
-            else None,
+            "video_kappa_share": result.get("video_kappa_share"),
             "units": "paper units: splat lengths x unit.to_paper_units",
         },
         "inputs": {

@@ -32,20 +32,9 @@ from sceneagent.alignment import PLACEMENT_GATE_LABEL
 from sceneagent.bin_association import SAME_PHRASE, VIDEO_KAPPA_SHARE
 from sceneagent.bin_masks import JOINED_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
+from sceneagent.scene_objects import MissingPromptError, resolve_prompt
 from sceneagent.settle_run import VARIANTS
 
-# Ours: GroundingDINO phrases for the objects Mailbox.mp4 shows (a red
-# mailbox with a lid, a cyan cube). The orchestrator plan (PR #63) that
-# would write this per video is after the MVP.
-PROMPTS = {
-    "Mailbox": "mailbox . cube .",
-    # Development video: an orange bowl, a white paper cup and a marker on a
-    # desk (a frame at 2 s).
-    "PutCupInBowl": "bowl . cup . marker .",
-    # The MVP acceptance video, from its title only: nothing in it was looked
-    # at or tuned on.
-    "PutMarkerInCup": "marker . cup .",
-}
 # No new stage starts after this many seconds, so a long stage (the splat's
 # train step may take up to an hour) still ends inside the job's 6,600 s.
 START_BUDGET_S = 2400.0
@@ -210,6 +199,12 @@ def run_video(
                 record["stopped"] = f"{name} failed (exit {code})"
                 break
         try:
+            from sceneagent.step_critic import render_review_images
+
+            render_review_images(out)
+        except (OSError, ValueError, ImportError):
+            pass
+        try:
             from sceneagent.packager import build_package
 
             build_package(out, out / "package")
@@ -238,11 +233,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("video", type=Path)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--prompt", default=None)
+    parser.add_argument(
+        "--prompt",
+        default=None,
+        help=(
+            "GroundingDINO phrases ('a . b .'). Default: the committed verdict "
+            "for this video's bytes (sceneagent/scene_objects.py, KAN-56)."
+        ),
+    )
     args = parser.parse_args(argv)
-    prompt = args.prompt or PROMPTS.get(args.video.stem)
-    if not prompt:
-        print(f"no prompt for {args.video.stem}; pass --prompt", file=sys.stderr)
+    try:
+        prompt = resolve_prompt(args.video, args.prompt)
+    except MissingPromptError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
     return run_video(args.video, args.out, prompt)
 
