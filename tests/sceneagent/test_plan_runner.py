@@ -8,10 +8,12 @@ The harness is a fake; nothing opens a socket.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from sceneagent import plan_runner as pr
+from sceneagent import video_run as vr
 from sceneagent.agent_loop import ALLOWED_STEPS, default_plan
 from sceneagent.gemini_client import active_model_id
 from sceneagent.orchestrator import InvalidPlanError, later_conversion
@@ -189,3 +191,104 @@ def test_the_cli_writes_plan_and_transcript(tmp_path, capsys):
             ["plan", "--out-dir", str(tmp_path), "--source-run", "../x"],
             harness=harness,
         )
+
+
+def _box_ledger(tmp_path, **override):
+    """A finished video_run ledger: the item names video_run.STAGES writes."""
+    entries = [
+        {"item": item, "decision": "accept"} for _, items in vr.STAGES for item in items
+    ]
+    for item, decision in override.items():
+        entries.append({"item": item, "decision": decision, "reason": "too far"})
+    path = tmp_path / "box" / "ledger.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+    return path
+
+
+def test_every_evidence_item_is_one_the_video_run_writes():
+    written = {item for _, items in vr.STAGES for item in items}
+    assert set(pr.LEDGER_EVIDENCE) <= set(ALLOWED_STEPS)
+    for items in pr.LEDGER_EVIDENCE.values():
+        assert items and set(items) <= written
+    assert pr.LEDGER_EVIDENCE["sam3d"] == ("SAM 3D meshes",)
+    assert pr.LEDGER_EVIDENCE["icp"] == ("ICP residuals",)
+    assert pr.LEDGER_EVIDENCE["isaac_mesh"] == ("USD physics export",)
+
+
+def test_ledger_tools_accept_only_what_the_box_accepted(tmp_path):
+    # The later ICP line is the decision, as video_run.accepted reads it.
+    tools = pr.ledger_tools(_box_ledger(tmp_path, **{"ICP residuals": "reject"}))
+    assert set(tools) == set(ALLOWED_STEPS)
+    sam3d = tools["sam3d"]({})
+    assert sam3d["ok"] and "'SAM 3D meshes' accept" in sam3d["reason"]
+    icp = tools["icp"]({})
+    assert not icp["ok"] and "'ICP residuals' is 'reject' (too far)" in icp["reason"]
+    partsam = tools["partsam"]({})
+    assert not partsam["ok"] and "no box stage produces partsam" in partsam["reason"]
+
+
+def test_a_missing_evidence_item_is_a_reject(tmp_path):
+    path = tmp_path / "ledger.json"
+    path.write_text(
+        json.dumps({"entries": [{"item": "inspection views", "decision": "accept"}]}),
+        encoding="utf-8",
+    )
+    result = pr.ledger_tools(path)["isaac_inspector"]({})
+    assert not result["ok"]
+    assert "'Isaac Lab settle' missing from the ledger" in result["reason"]
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a ledger"):
+        pr.ledger_tools(path)
+
+
+def test_the_cli_replays_a_ledger_and_writes_only_the_planned_procedures(
+    tmp_path, capsys
+):
+    path, _ = _committed(tmp_path)
+    ledger = _box_ledger(tmp_path)
+    out = tmp_path / "run"
+    assert (
+        pr.main(
+            ["run", "--plan", str(path), "--out", str(out), "--ledger", str(ledger)]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["steps"] == ORDER
+    decisions = {
+        e["item"]: e["decision"]
+        for e in json.loads((out / "ledger.json").read_text(encoding="utf-8"))[
+            "entries"
+        ]
+    }
+    assert decisions == {
+        "sam3d": "accept",
+        "icp": "accept",
+        "partsam": "reject",
+        "articulate": "reject",
+        "material_vote": "accept",
+    }
+    # Procedures for the plan's stages only, not for every allowed stage.
+    assert sorted(p.stem for p in (out / "procedures").glob("*.md")) == sorted(ORDER)
+    md = (out / "procedures" / "articulate.md").read_text(encoding="utf-8")
+    assert "Run articulate and check it." in md and "no box stage produces" in md
+    # The source ledger is read, never appended to.
+    assert "partsam" not in ledger.read_text(encoding="utf-8")
+    with pytest.raises(SystemExit):
+        pr.main(
+            [
+                "run",
+                "--plan",
+                str(path),
+                "--out",
+                str(ledger.parent),
+                "--ledger",
+                str(ledger),
+            ]
+        )
+
+
+def test_the_committed_plan_is_the_harness_plan_and_loads():
+    plan = pr.load_plan(Path(pr.__file__).resolve().parents[1] / pr.PLAN_RELATIVE)
+    assert plan["plan_source"] == "harness" and plan["forced"] is False
+    assert plan["vlm_calls"] == 1 and plan["steps"]
