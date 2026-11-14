@@ -63,24 +63,44 @@ def targets(lower: float, upper: float) -> list[float]:
     return up + up[-2::-1]
 
 
-def build_usd(path: Path, joint: dict, body, lid) -> dict:
+def build_usd(path: Path, joint: dict, body, lid, name: str = "mailbox") -> dict:
+    """The articulated object in the physics export's layout.
+
+    ``/World/<name>`` is the object (the light editor's ``export_import`` reads
+    each child of ``/World`` with a direct mesh as one object and every joint
+    under it as that object's DOFs): an invisible ``proxy`` mesh of the whole
+    object for the editor, the ``body`` and ``lid`` rigid links, the fixed base
+    joint and the ``hinge``. The proxy has no physics and is not rendered.
+    """
     from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics, Vt  # type: ignore[import-not-found]
 
     stage = Usd.Stage.CreateNew(str(path))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
-    root = UsdGeom.Xform.Define(stage, "/mailbox")
-    stage.SetDefaultPrim(root.GetPrim())
+    world = UsdGeom.Xform.Define(stage, "/World")
+    stage.SetDefaultPrim(world.GetPrim())
+    obj = f"/World/{name}"
+    root = UsdGeom.Xform.Define(stage, obj)
     UsdPhysics.ArticulationRootAPI.Apply(root.GetPrim())
+    proxy = UsdGeom.Mesh.Define(stage, f"{obj}/proxy")
+    offset = len(body[0])
+    proxy.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*v) for v in body[0] + lid[0]]))
+    proxy.CreateFaceVertexCountsAttr(Vt.IntArray([3] * (len(body[1]) + len(lid[1]))))
+    proxy.CreateFaceVertexIndicesAttr(
+        Vt.IntArray(
+            [i for f in body[1] for i in f] + [i + offset for f in lid[1] for i in f]
+        )
+    )
+    proxy.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
     links = {}
-    for name, (verts, faces), colour, approx in (
+    for link, (verts, faces), colour, approx in (
         ("body", body, (0.75, 0.08, 0.08), "convexDecomposition"),
         ("lid", lid, (0.85, 0.12, 0.12), "convexHull"),
     ):
-        xf = UsdGeom.Xform.Define(stage, f"/mailbox/{name}")
+        xf = UsdGeom.Xform.Define(stage, f"{obj}/{link}")
         UsdPhysics.RigidBodyAPI.Apply(xf.GetPrim())
-        UsdPhysics.MassAPI.Apply(xf.GetPrim()).CreateMassAttr(ASSUMED_MASS_KG[name])
-        mesh = UsdGeom.Mesh.Define(stage, f"/mailbox/{name}/mesh")
+        UsdPhysics.MassAPI.Apply(xf.GetPrim()).CreateMassAttr(ASSUMED_MASS_KG[link])
+        mesh = UsdGeom.Mesh.Define(stage, f"{obj}/{link}/mesh")
         mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*v) for v in verts]))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(faces)))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([i for f in faces for i in f]))
@@ -90,15 +110,15 @@ def build_usd(path: Path, joint: dict, body, lid) -> dict:
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(
             approx
         )
-        links[name] = xf
+        links[link] = xf
     # Fixed base: a fixed joint with only body1 attaches the body to the world.
-    base = UsdPhysics.FixedJoint.Define(stage, "/mailbox/base_joint")
-    base.CreateBody1Rel().SetTargets([Sdf.Path("/mailbox/body")])
+    base = UsdPhysics.FixedJoint.Define(stage, f"{obj}/base_joint")
+    base.CreateBody1Rel().SetTargets([Sdf.Path(f"{obj}/body")])
     token, sign = axis_token(joint["axis"])
     lo, hi = sorted((sign * joint["lower"], sign * joint["upper"]))
-    hinge = UsdPhysics.RevoluteJoint.Define(stage, "/mailbox/hinge")
-    hinge.CreateBody0Rel().SetTargets([Sdf.Path("/mailbox/body")])
-    hinge.CreateBody1Rel().SetTargets([Sdf.Path("/mailbox/lid")])
+    hinge = UsdPhysics.RevoluteJoint.Define(stage, f"{obj}/hinge")
+    hinge.CreateBody0Rel().SetTargets([Sdf.Path(f"{obj}/body")])
+    hinge.CreateBody1Rel().SetTargets([Sdf.Path(f"{obj}/lid")])
     hinge.CreateAxisAttr(token)
     pivot = Gf.Vec3f(*joint["pivot_m"])
     hinge.CreateLocalPos0Attr(pivot)  # body frame = world at rest

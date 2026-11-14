@@ -117,8 +117,94 @@ def metric_frame(
     return scale, transform
 
 
+def link_joints(
+    body: Sequence[str], lid: Sequence[str], joint: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """The proposed joint, plus a fixed joint tying every other part to its link's root.
+
+    One URDF link per PartSAM part (KAN-44 dc2): the body's parts are fixed to
+    the joint's parent part and the lid's to its child part.
+    """
+    joints = [
+        dict(joint, name=joint.get("name") or f"{joint['parent']}_to_{joint['child']}")
+    ]
+    for root, members in ((joint["parent"], body), (joint["child"], lid)):
+        for name in members:
+            if name != root:
+                joints.append(
+                    {
+                        "name": f"{root}_fixed_{name}",
+                        "type": "fixed",
+                        "parent": root,
+                        "child": name,
+                        "axis": [1.0, 0.0, 0.0],
+                        "origin": [0.0, 0.0, 0.0],
+                    }
+                )
+    return joints
+
+
+def write_urdf(
+    name: str,
+    parts: Sequence[dict[str, Any]],
+    joints: Sequence[dict[str, Any]],
+    scale: float,
+    mesh_dir: str = "parts",
+) -> str:
+    """URDF with one link per part (its mesh, metres) and every joint.
+
+    Checked by ``mailbox_hinge.problems``: every part has a link, axes are
+    unit length and movable limits are ordered. The meshes keep SAM 3D's
+    Y-up frame; ``scale`` (metres per mesh unit) is applied to the meshes and
+    the joint origins.
+    """
+    from xml.sax.saxutils import escape
+
+    from sceneagent.mailbox_hinge import problems
+
+    manifest = {"object": name, "parts": [{"name": str(p["name"])} for p in parts]}
+    problems(manifest, joints)
+    s = f"{scale:.9g}"
+    lines = [
+        f'<robot name="{escape(name)}">',
+        "  <!-- meshes are SAM 3D's Y-up frame, in metres -->",
+    ]
+    for part in parts:
+        mesh = f"{mesh_dir}/{Path(str(part['mesh'])).name}"
+        geometry = f'<geometry><mesh filename="{escape(mesh)}" scale="{s} {s} {s}"/></geometry>'
+        lines += [
+            f'  <link name="{escape(str(part["name"]))}">',
+            f"    <visual>{geometry}</visual>",
+            f"    <collision>{geometry}</collision>",
+            "  </link>",
+        ]
+    for joint in joints:
+        origin = " ".join(f"{float(v) * scale:.6g}" for v in joint["origin"])
+        axis = " ".join(f"{float(v):g}" for v in joint["axis"])
+        lines += [
+            f'  <joint name="{escape(str(joint["name"]))}" type="{escape(str(joint["type"]))}">',
+            f'    <parent link="{escape(str(joint["parent"]))}"/>',
+            f'    <child link="{escape(str(joint["child"]))}"/>',
+            f'    <origin xyz="{origin}" rpy="0 0 0"/>',
+        ]
+        if joint["type"] in MOVABLE:
+            lower, upper = float(joint["lower"]), float(joint["upper"])
+            lines += [
+                f'    <axis xyz="{axis}"/>',
+                f'    <limit lower="{lower:g}" upper="{upper:g}" effort="1" velocity="1"/>',
+            ]
+        lines.append("  </joint>")
+    lines += ["</robot>", ""]
+    return "\n".join(lines)
+
+
 def prepare(
-    parts_dir: Path, proposal_path: Path, run: Path, object_number: int, out: Path
+    parts_dir: Path,
+    proposal_path: Path,
+    run: Path,
+    object_number: int,
+    out: Path,
+    name: str | None = None,
 ) -> dict[str, Any]:
     import trimesh
 
@@ -138,9 +224,9 @@ def prepare(
     local = trimesh.util.concatenate(list(links.values()))
     scale, transform = metric_frame(np.asarray(local.bounds), record["mesh_extent_m"])
     out.mkdir(parents=True, exist_ok=True)
-    for name, mesh in links.items():
+    for link_name, mesh in links.items():
         mesh.apply_transform(transform)
-        mesh.export(out / f"{name}.obj")
+        mesh.export(out / f"{link_name}.obj")
     pivot = transform[:3, :3] @ np.asarray(joint["origin"], float) + transform[:3, 3]
     axis = Y_UP_TO_Z_UP @ np.asarray(joint["axis"], float)
     axis = axis / np.linalg.norm(axis)
@@ -164,6 +250,14 @@ def prepare(
         "grouping": why,
         "extents_m": {k: [float(v) for v in m.extents] for k, m in links.items()},
     }
+    name = (name or f"object_{object_number}").replace(" ", "_")
+    urdf_path = out / f"{name}.urdf"
+    joints = link_joints(body, lid, joint)
+    urdf_path.write_text(
+        write_urdf(name, parts, joints, scale, mesh_dir=str(parts_dir / "parts")),
+        encoding="utf-8",
+    )
+    result["urdf"] = str(urdf_path)
     (out / "joint.json").write_text(
         json.dumps(result, indent=2) + "\n", encoding="utf-8"
     )
@@ -177,8 +271,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--object", type=int, required=True)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--name", default=None, help="the object's name, for the URDF")
     args = parser.parse_args(argv)
-    result = prepare(args.parts, args.proposal, args.run, args.object, args.out)
+    result = prepare(
+        args.parts, args.proposal, args.run, args.object, args.out, args.name
+    )
     print(
         json.dumps(
             {k: result[k] for k in ("axis", "pivot_m", "lid_parts", "extents_m")}

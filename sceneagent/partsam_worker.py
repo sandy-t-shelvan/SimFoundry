@@ -104,7 +104,26 @@ def run_partsam(
     return store
 
 
-def split_parts(store: dict, out: Path, stem: str) -> dict:
+def graph_cut_used(partsam: Path = PARTSAM) -> bool | None:
+    """``eval_params.use_graph_cut`` from PartSAM's stock config, or None if unreadable."""
+    try:
+        text = (partsam / "configs" / "partsam.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        key, _, value = line.strip().partition(":")
+        if key == "use_graph_cut":
+            return value.strip().split("#")[0].strip().lower() == "true"
+    return None
+
+
+def split_parts(
+    store: dict,
+    out: Path,
+    stem: str,
+    parent: str | None = None,
+    graph_cut: bool | None = None,
+) -> dict:
     """One mesh per part and parts.json. Crumbs under MIN_FACE_SHARE are listed, not kept."""
     import numpy as np
     import trimesh
@@ -129,6 +148,7 @@ def split_parts(store: dict, out: Path, stem: str) -> dict:
         parts.append(
             {
                 "name": name,
+                "parent_object": parent,
                 "partsam_label": int(label),
                 "faces": len(chosen),
                 "face_share": round(len(chosen) / total, 4),
@@ -140,6 +160,8 @@ def split_parts(store: dict, out: Path, stem: str) -> dict:
         )
     record = {
         "source_mesh": stem,
+        "parent_object": parent,
+        "graph_cut": graph_cut,
         "tool": "PartSAM (github.com/czvvd/PartSAM) b16d3e8, stock configs/partsam.yaml",
         "faces": int(total),
         "min_face_share": MIN_FACE_SHARE,
@@ -158,11 +180,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--partsam", type=Path, default=PARTSAM)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--object", default=None, help="the parent object's name")
     args = parser.parse_args(argv)
     mesh, out = args.mesh.resolve(), args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
     store = run_partsam(mesh, out, args.partsam.resolve(), args.batch_size)
-    record = split_parts(store, out, mesh.name)
+    record = split_parts(
+        store, out, mesh.name, args.object, graph_cut_used(args.partsam.resolve())
+    )
     print(
         f"{len(record['parts'])} parts, {len(record['dropped'])} crumbs dropped -> {out / 'parts.json'}"
     )
