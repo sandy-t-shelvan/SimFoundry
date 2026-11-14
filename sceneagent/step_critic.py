@@ -374,21 +374,28 @@ def _cap(points: np.ndarray, limit: int = 5000) -> np.ndarray:
     return points[::step]
 
 
-def _save_points(
-    out: Path,
-    stage: str,
-    groups: list[tuple[np.ndarray, tuple[int, int, int]]],
-) -> Path:
-    """Orthographic XY scatter. Each group is points plus an RGB colour."""
-    from PIL import Image
+def _bounds(cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Frame on the 1st to 99th percentile once there are enough points.
 
+    A splat always has a few far Gaussians; min/max framing let them shrink
+    the object to a speck (Mailbox, 2026-11-14). Points outside the frame are
+    clipped to its edge, so nothing silently disappears.
+    """
+    if len(cloud) >= 100:
+        low = np.percentile(cloud, 1, axis=0)
+        high = np.percentile(cloud, 99, axis=0)
+    else:
+        low, high = cloud.min(axis=0), cloud.max(axis=0)
+    return low, np.maximum(high - low, 1e-6)
+
+
+def _tile(groups: list[tuple[np.ndarray, tuple[int, int, int]]]) -> np.ndarray:
+    """Orthographic XY scatter of the groups on one white tile, framed together."""
     kept = [(pts, colour) for pts, colour in groups if len(pts)]
-    if not kept:
-        raise ValueError(f"no points to draw for {stage}")
-    cloud = np.concatenate([pts[:, :2] for pts, _colour in kept])
-    low = cloud.min(axis=0)
-    span = np.maximum(cloud.max(axis=0) - low, 1e-6)
     canvas = np.full((TILE_PX, TILE_PX, 3), 255, np.uint8)
+    if not kept:
+        return canvas
+    low, span = _bounds(np.concatenate([pts[:, :2] for pts, _colour in kept]))
     for pts, colour in kept:
         xy = (pts[:, :2] - low) / span
         cols = np.clip((xy[:, 0] * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3)
@@ -398,11 +405,28 @@ def _save_points(
         for dr in (0, 1):
             for dc in (0, 1):
                 canvas[rows + dr, cols + dc] = colour
+    return canvas
+
+
+def _write_stage(out: Path, stage: str, image: np.ndarray) -> Path:
+    from PIL import Image
+
     folder = out / REVIEW_DIR
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{stage}.png"
-    Image.fromarray(canvas).save(path)
+    Image.fromarray(image).save(path)
     return path
+
+
+def _save_points(
+    out: Path,
+    stage: str,
+    groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+) -> Path:
+    """Orthographic XY scatter. Each group is points plus an RGB colour."""
+    if not any(len(pts) for pts, _colour in groups):
+        raise ValueError(f"no points to draw for {stage}")
+    return _write_stage(out, stage, _tile(groups))
 
 
 def _splat_ply(out: Path) -> Path | None:
@@ -436,13 +460,18 @@ def render_gaussians(out: Path) -> Path | None:
 
 
 def render_mesh(out: Path) -> Path | None:
-    """Each mesh in grey, with that object's Gaussians in blue when the splat is there."""
-    glbs = sorted((out / "sam3d").glob("object_*.glb"))
+    """One row per object: its mesh in grey, then its Gaussians in blue.
+
+    The two are drawn side by side, each on its own frame, not overlaid: a
+    SAM 3D mesh is in its own unit frame and the Gaussians are in the splat's,
+    so an overlay put the mesh in a corner and meant nothing (2026-11-14).
+    """
+    glbs = sorted((out / "sam3d").glob("object_*.glb"))[:MAX_VIEWS]
     if not glbs:
         return None
     from sceneagent.bin_place import sample_mesh
 
-    grey = (160, 160, 160)
+    grey = (70, 70, 70)
     blue = (30, 90, 220)
     ply = _splat_ply(out)
     sets_path = out / "association" / "objects.npz"
@@ -453,21 +482,19 @@ def render_mesh(out: Path) -> Path | None:
 
         xyz = read_ply_xyz(ply)
         sets = np.load(sets_path)
-    groups: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+    rows: list[np.ndarray] = []
     try:
         for glb in glbs:
-            groups.append((_cap(sample_mesh(glb, 800, seed=0)), grey))
-            if xyz is None or sets is None:
-                continue
-            key = glb.stem if glb.stem.startswith("object_") else ""
-            if key not in sets.files:
-                continue
-            ids = np.asarray(sets[key], dtype=np.int64)
-            groups.append((_cap(xyz[ids]), blue))
+            mesh_tile = _tile([(_cap(sample_mesh(glb, 4000, seed=0), 4000), grey)])
+            gauss: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+            if xyz is not None and sets is not None and glb.stem in sets.files:
+                ids = np.asarray(sets[glb.stem], dtype=np.int64)
+                gauss.append((_cap(xyz[ids]), blue))
+            rows.append(np.concatenate([mesh_tile, _tile(gauss)], axis=1))
     finally:
         if sets is not None:
             sets.close()
-    return _save_points(out, "mesh", groups)
+    return _write_stage(out, "mesh", np.concatenate(rows, axis=0))
 
 
 def render_parts(out: Path) -> Path | None:

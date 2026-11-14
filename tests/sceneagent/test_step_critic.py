@@ -265,7 +265,7 @@ def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
         tmp_path / "review_steps" / "gaussians.png"
     )
     mesh = _colours(tmp_path / "review_steps" / "mesh.png")
-    assert (160, 160, 160) in mesh and (30, 90, 220) in mesh
+    assert (70, 70, 70) in mesh and (30, 90, 220) in mesh
     assert {tuple(c) for c in sc._palette(2)} <= _colours(
         tmp_path / "review_steps" / "parts.png"
     )
