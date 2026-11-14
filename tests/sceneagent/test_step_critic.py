@@ -181,6 +181,20 @@ def test_the_masks_review_image_outlines_each_kept_mask(tmp_path):
         )
 
 
+def test_the_masks_image_reads_the_scene_s_own_view_folder(tmp_path):
+    """A video's masks are drawn on mask_views/, not images/ (scene.json view_dir)."""
+    import dataclasses
+
+    from sceneagent.bin_run import BIN_SCENE, VIDEO_MASK_DIR, write_scene
+
+    out = _masks_run(tmp_path)
+    (out / "images").rename(out / VIDEO_MASK_DIR)
+    with pytest.raises(FileNotFoundError):
+        sc.render_masks(out)  # no scene.json: the bin, whose views are images/
+    write_scene(out, dataclasses.replace(BIN_SCENE, view_dir=VIDEO_MASK_DIR))
+    assert sc.render_masks(out) == out / "review_steps" / "masks.png"
+
+
 def test_the_cli_judges_a_zip_with_an_injected_harness(tmp_path):
     out = _masks_run(tmp_path)
     assert sc.main(["render-masks", "--out", str(out)]) == 0
@@ -372,3 +386,61 @@ def test_the_masks_retry_runs_the_mask_stage_with_the_critics_prompt(tmp_path):
     }
     line = json.loads((out / "ledger.json").read_text())["entries"][-1]
     assert line["attempt"] == 1 and line["critic_note"] == "the black panel is outlined"
+
+
+def _ply(path, xyz):
+    xyz = np.asarray(xyz, dtype=np.float32)
+    header = (
+        "ply\nformat binary_little_endian 1.0\n"
+        f"element vertex {len(xyz)}\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "end_header\n"
+    ).encode("ascii")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header + xyz.tobytes())
+
+
+def _colours(path):
+    from PIL import Image
+
+    image = np.asarray(Image.open(path))
+    return {tuple(int(c) for c in px) for px in image.reshape(-1, 3)}
+
+
+def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
+    trimesh = pytest.importorskip("trimesh")
+    _ply(
+        tmp_path / "splat" / "export" / "splat.ply",
+        [[0, 0, 0], [0.2, 0, 0], [4, 0, 0], [4.2, 0, 0]],
+    )
+    (tmp_path / "association").mkdir()
+    np.savez(
+        tmp_path / "association" / "objects.npz",
+        object_0=np.array([0, 1]),
+        object_1=np.array([2, 3]),
+    )
+    (tmp_path / "sam3d").mkdir()
+    trimesh.creation.box().export(tmp_path / "sam3d" / "object_0.glb")
+    (tmp_path / "parts").mkdir()
+    np.savez(
+        tmp_path / "parts" / "object_0.npz",
+        body=np.array([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        lid=np.array([[3.0, 0.0, 0.0], [3.0, 1.0, 0.0]]),
+    )
+    assert sc.main(["render", "--out", str(tmp_path)]) == 0
+    drawn = ("gaussians.png", "mesh.png", "parts.png")
+    with zipfile.ZipFile(tmp_path / "review_steps.zip") as archive:
+        assert archive.namelist() == list(drawn)
+    assert {tuple(c) for c in sc._palette(2)} <= _colours(
+        tmp_path / "review_steps" / "gaussians.png"
+    )
+    mesh = _colours(tmp_path / "review_steps" / "mesh.png")
+    assert (70, 70, 70) in mesh and (30, 90, 220) in mesh
+    assert {tuple(c) for c in sc._palette(2)} <= _colours(
+        tmp_path / "review_steps" / "parts.png"
+    )
+
+
+def test_render_with_nothing_to_draw_exits_nonzero(tmp_path):
+    assert sc.main(["render", "--out", str(tmp_path)]) == 1
+    assert not (tmp_path / "review_steps.zip").exists()

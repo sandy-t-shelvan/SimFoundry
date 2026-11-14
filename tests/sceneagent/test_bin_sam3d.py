@@ -197,3 +197,36 @@ def test_the_worker_builds_dinov2_without_its_weight_download():
     # Anything else goes through untouched.
     load("other/repo", "m", source="github")
     assert calls[-1][2] == {"source": "github"}
+
+
+def _case(rows):
+    """rows: (pixels, depth or None) per view of one object."""
+    views = [f"{i:04d}.jpg" for i in range(len(rows))]
+    objects = [{"object": 0, "masks": [{"view": v, "mask_index": 0} for v in views]}]
+    detections = {v: [{"mask_index": 0, "kept": True, "mask_area_px": px}] for v, (px, _d) in zip(views, rows, strict=True)}
+    depths = {(0, v): d for v, (_px, d) in zip(views, rows, strict=True) if d is not None}
+    return objects, detections, depths
+
+
+def test_a_far_mask_that_spilled_onto_its_surroundings_is_skipped():
+    # The Mailbox cube: 0071 was 31107 px from 8.7 units away (5.4x the median
+    # of px * depth^2); 0271 at 14329 px from 5.6 units is the view that placed.
+    rows = [(31107, 8.712), (18015, 7.642), (14329, 5.607), (11896, 5.657), (11807, 6.405), (8000, 7.0), (6000, 8.0)]
+    chosen = bin_sam3d.choose_views(*_case(rows))[0]
+    assert chosen["mask_area_px"] == 14329
+    assert chosen["skipped_area_outliers"] == ["0000.jpg", "0001.jpg"]
+    assert chosen["depth_normalised"] is True
+
+
+def test_a_close_up_is_not_mistaken_for_a_spill():
+    # PutMarkerInCup's cup: the largest masks are nearer views, and px * depth^2
+    # stays at the median, so the largest mask still wins.
+    rows = [(56215, 5.241), (54533, 5.324), (30000, 7.2), (20000, 8.8), (14000, 10.5)]
+    chosen = bin_sam3d.choose_views(*_case(rows))[0]
+    assert chosen["mask_area_px"] == 56215 and chosen["skipped_area_outliers"] == []
+
+
+def test_without_depths_the_largest_mask_wins_as_before():
+    rows = [(31107, None), (14329, None), (8000, None)]
+    chosen = bin_sam3d.choose_views(*_case(rows))[0]
+    assert chosen["mask_area_px"] == 31107 and chosen["depth_normalised"] is False

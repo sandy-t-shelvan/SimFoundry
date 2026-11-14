@@ -10,7 +10,7 @@ the retry. The box then logs each verdict in the ledger and re-runs a
 rejected stage once, carrying the note. Same split as the SF-19 reviewer
 (:mod:`sceneagent.vlm_review`): the key never reaches the box.
 
-    python -m sceneagent.step_critic render-masks --out OUT        # box, CPU
+    python -m sceneagent.step_critic render --out OUT              # box, CPU
     python -m sceneagent.step_critic judge --images review_steps.zip --out-dir DIR  # runner
 
 ``judge`` writes ``DIR/review/<stage>.json`` (image, verdict, reason, model)
@@ -31,9 +31,10 @@ prompt is logged as a skipped retry: GroundingDINO and SAM on the same inputs
 would only draw the same masks again.
 
 The prompts are ours (the paper does not publish its critic prompts), one per
-stage, each hashed into the verdict file. The masks stage is hooked first:
-``render_masks`` draws its review image from the masks stage's own outputs.
-The other stages have prompts here; their review images come later.
+stage, each hashed into the verdict file. ``render`` draws whichever stage
+images the run directory already holds: masks from ``masks/``, Gaussians from
+the splat PLY and ``association/objects.npz``, meshes from ``sam3d/object_*.glb``,
+and parts from ``parts/object_*.npz``.
 """
 
 from __future__ import annotations
@@ -493,13 +494,18 @@ def draw_masks_tile(
 def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
     """The masks stage's review image from its own outputs; returns the PNG path.
 
-    Reads ``masks/detections.json``, ``masks/<view>.npz`` and ``images/<view>``
-    as :mod:`sceneagent.mask_worker` writes them. Views are taken in name
-    order so the same run always draws the same image.
+    Reads ``masks/detections.json``, ``masks/<view>.npz`` and the views they
+    were drawn on, from the scene's own view folder (``scene.json``
+    ``view_dir``: ``images/`` for the bin, ``mask_views/`` for a video), the
+    folder :mod:`sceneagent.bin_masks` masked. Views are taken in name order
+    so the same run always draws the same image.
     """
     from PIL import Image
 
+    from sceneagent.bin_run import load_scene
+
     out = Path(out)
+    view_dir = out / load_scene(out).view_dir
     detections = json.loads(
         (out / "masks" / "detections.json").read_text(encoding="utf-8")
     )
@@ -510,7 +516,7 @@ def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
             key=lambda d: d["mask_index"],
         )
         stack = np.load(out / "masks" / f"{Path(view).stem}.npz")["masks"]
-        with Image.open(out / "images" / view) as handle:
+        with Image.open(view_dir / view) as handle:
             photo = np.array(handle.convert("RGB"))
         labels = [str(d.get("phrase", "")) for d in kept]
         tiles.append(draw_masks_tile(photo, stack[: len(kept)], labels))
@@ -528,6 +534,184 @@ def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
     return path
 
 
+def _cap(points: np.ndarray, limit: int = 5000) -> np.ndarray:
+    """A deterministic subset, so a re-render of a large cloud matches."""
+    if len(points) <= limit:
+        return points
+    step = int(np.ceil(len(points) / limit))
+    return points[::step]
+
+
+def _bounds(cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Frame on the 1st to 99th percentile once there are enough points.
+
+    A splat always has a few far Gaussians; min/max framing let them shrink
+    the object to a speck (Mailbox, 2026-11-14). Points outside the frame are
+    clipped to its edge, so nothing silently disappears.
+    """
+    if len(cloud) >= 100:
+        low = np.percentile(cloud, 1, axis=0)
+        high = np.percentile(cloud, 99, axis=0)
+    else:
+        low, high = cloud.min(axis=0), cloud.max(axis=0)
+    return low, np.maximum(high - low, 1e-6)
+
+
+def _tile(groups: list[tuple[np.ndarray, tuple[int, int, int]]]) -> np.ndarray:
+    """Orthographic XY scatter of the groups on one white tile, framed together."""
+    kept = [(pts, colour) for pts, colour in groups if len(pts)]
+    canvas = np.full((TILE_PX, TILE_PX, 3), 255, np.uint8)
+    if not kept:
+        return canvas
+    low, span = _bounds(np.concatenate([pts[:, :2] for pts, _colour in kept]))
+    for pts, colour in kept:
+        xy = (pts[:, :2] - low) / span
+        cols = np.clip((xy[:, 0] * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3)
+        rows = np.clip(
+            ((1.0 - xy[:, 1]) * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3
+        )
+        for dr in (0, 1):
+            for dc in (0, 1):
+                canvas[rows + dr, cols + dc] = colour
+    return canvas
+
+
+def _write_stage(out: Path, stage: str, image: np.ndarray) -> Path:
+    from PIL import Image
+
+    folder = out / REVIEW_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{stage}.png"
+    Image.fromarray(image).save(path)
+    return path
+
+
+def _save_points(
+    out: Path,
+    stage: str,
+    groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+) -> Path:
+    """Orthographic XY scatter. Each group is points plus an RGB colour."""
+    if not any(len(pts) for pts, _colour in groups):
+        raise ValueError(f"no points to draw for {stage}")
+    return _write_stage(out, stage, _tile(groups))
+
+
+def _splat_ply(out: Path) -> Path | None:
+    found = sorted((out / "splat" / "export").glob("*.ply"))
+    return found[0] if found else None
+
+
+def render_gaussians(out: Path) -> Path | None:
+    """One colour per object, from the splat PLY and ``association/objects.npz``."""
+    ply = _splat_ply(out)
+    sets_path = out / "association" / "objects.npz"
+    if ply is None or not sets_path.is_file():
+        return None
+    from sceneagent.bin_association import read_ply_xyz
+
+    xyz = read_ply_xyz(ply)
+    with np.load(sets_path) as sets:
+        keys = sorted(key for key in sets.files if key.startswith("object_"))
+        colours = _palette(len(keys))
+        groups = []
+        for key, colour in zip(keys, colours, strict=True):
+            ids = np.asarray(sets[key], dtype=np.int64)
+            if ids.size == 0:
+                continue
+            if int(ids.min()) < 0 or int(ids.max()) >= len(xyz):
+                raise ValueError(f"{key} index is outside the splat")
+            groups.append((_cap(xyz[ids]), colour))
+    if not groups:
+        return None
+    return _save_points(out, "gaussians", groups)
+
+
+def render_mesh(out: Path) -> Path | None:
+    """One row per object: its mesh in grey, then its Gaussians in blue.
+
+    The two are drawn side by side, each on its own frame, not overlaid: a
+    SAM 3D mesh is in its own unit frame and the Gaussians are in the splat's,
+    so an overlay put the mesh in a corner and meant nothing (2026-11-14).
+    """
+    glbs = sorted((out / "sam3d").glob("object_*.glb"))[:MAX_VIEWS]
+    if not glbs:
+        return None
+    from sceneagent.bin_place import sample_mesh
+
+    grey = (70, 70, 70)
+    blue = (30, 90, 220)
+    ply = _splat_ply(out)
+    sets_path = out / "association" / "objects.npz"
+    xyz = None
+    sets = None
+    if ply is not None and sets_path.is_file():
+        from sceneagent.bin_association import read_ply_xyz
+
+        xyz = read_ply_xyz(ply)
+        sets = np.load(sets_path)
+    rows: list[np.ndarray] = []
+    try:
+        for glb in glbs:
+            mesh_tile = _tile([(_cap(sample_mesh(glb, 4000, seed=0), 4000), grey)])
+            gauss: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+            if xyz is not None and sets is not None and glb.stem in sets.files:
+                ids = np.asarray(sets[glb.stem], dtype=np.int64)
+                gauss.append((_cap(xyz[ids]), blue))
+            rows.append(np.concatenate([mesh_tile, _tile(gauss)], axis=1))
+    finally:
+        if sets is not None:
+            sets.close()
+    return _write_stage(out, "mesh", np.concatenate(rows, axis=0))
+
+
+def render_parts(out: Path) -> Path | None:
+    """One colour per part. Arrays in ``parts/object_*.npz`` are Nx3 points."""
+    files = sorted((out / "parts").glob("object_*.npz"))
+    if not files:
+        return None
+    loaded: list[np.ndarray] = []
+    for path in files:
+        with np.load(path) as data:
+            for key in sorted(data.files):
+                pts = np.asarray(data[key], dtype=float)
+                if pts.ndim != 2 or pts.shape[1] < 2:
+                    raise ValueError(f"{path.name}:{key} is not points")
+                if pts.shape[1] == 2:
+                    pts = np.column_stack([pts, np.zeros(len(pts))])
+                loaded.append(pts[:, :3])
+    if not loaded:
+        return None
+    colours = _palette(len(loaded))
+    groups = [(_cap(pts), colour) for pts, colour in zip(loaded, colours, strict=True)]
+    return _save_points(out, "parts", groups)
+
+
+def render_review_images(out: Path) -> dict[str, str]:
+    """Draw every stage that has inputs, then zip the images that were written."""
+    out = Path(out)
+    drawn: dict[str, str] = {}
+    if (out / "masks" / "detections.json").is_file():
+        try:
+            drawn["masks"] = str(render_masks(out))
+        except (OSError, ValueError, KeyError):
+            pass
+    for stage, renderer in (
+        ("gaussians", render_gaussians),
+        ("mesh", render_mesh),
+        ("parts", render_parts),
+    ):
+        try:
+            path = renderer(out)
+        except (OSError, ValueError, KeyError, ImportError):
+            continue
+        if path is not None:
+            drawn[stage] = str(path)
+    if drawn:
+        pack_review_images(out)
+    return drawn
+
+
 def pack_review_images(out: Path) -> Path:
     """Zip every ``review_steps/<stage>.png`` for the runner to judge."""
     out = Path(out)
@@ -543,10 +727,10 @@ def pack_review_images(out: Path) -> Path:
 def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    render = sub.add_parser(
-        "render-masks", help="draw the masks stage's review image (box)"
-    )
+    render = sub.add_parser("render", help="draw every stage image that has inputs")
     render.add_argument("--out", type=Path, required=True)
+    masks = sub.add_parser("render-masks", help="draw the masks stage's review image")
+    masks.add_argument("--out", type=Path, required=True)
     judge = sub.add_parser(
         "judge", help="ask the VLM to judge each stage image (runner)"
     )
@@ -561,6 +745,10 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
     review.add_argument("--out", type=Path, required=True)
     review.add_argument("--stage", choices=sorted(RERUNNERS), default="masks")
     args = parser.parse_args(argv)
+    if args.command == "render":
+        drawn = render_review_images(args.out)
+        print(json.dumps({"images": drawn, "zip": str(args.out / REVIEW_ZIP)}))
+        return 0 if drawn else 1
     if args.command == "render-masks":
         path = render_masks(args.out)
         print(
