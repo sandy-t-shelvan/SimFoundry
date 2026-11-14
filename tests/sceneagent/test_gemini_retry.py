@@ -199,3 +199,35 @@ def test_call_sites_do_not_keep_a_second_model_constant():
         assert "'gemini-2.5-flash'" not in text
     history = (root / "section34.py").read_text(encoding="utf-8")
     assert "PAPER_MODEL_ID" not in history
+
+
+def test_a_search_grounded_call_waits_longer_than_a_plain_one(monkeypatch):
+    import sceneagent.gemini_client as client_mod
+
+    seen = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def urlopen(request, timeout):
+        seen.append(timeout)
+        return Response()
+
+    monkeypatch.setattr(client_mod.urllib.request, "urlopen", urlopen)
+    client_mod._request_once("https://example.invalid", "key", {"contents": []})
+    client_mod._request_once(
+        "https://example.invalid",
+        "key",
+        {"contents": [], "tools": [{"google_search": {}}]},
+    )
+    assert seen == [client_mod.TIMEOUT_S, client_mod.SEARCH_TIMEOUT_S]
+    assert client_mod.SEARCH_TIMEOUT_S > 246  # the slowest grounded call measured

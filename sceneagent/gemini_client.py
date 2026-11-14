@@ -48,6 +48,18 @@ def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
+# Seconds per HTTP attempt. A Search-grounded call took 246 s on the box
+# (2026-11-14), so at 90 s every grounded lookup timed out and came back
+# empty, which reads as "unresolved" rather than as a timeout.
+TIMEOUT_S = 90
+SEARCH_TIMEOUT_S = 300
+
+
+def _timeout_for(payload) -> int:
+    grounded = isinstance(payload, dict) and bool(payload.get("tools"))
+    return SEARCH_TIMEOUT_S if grounded else TIMEOUT_S
+
+
 def _request_once(url, key, payload=None):
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
@@ -57,7 +69,7 @@ def _request_once(url, key, payload=None):
         method="POST" if payload is not None else "GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:
+        with urllib.request.urlopen(request, timeout=_timeout_for(payload)) as response:
             raw = response.read().decode("utf-8")
             return response.status, raw
     except urllib.error.HTTPError as exc:
