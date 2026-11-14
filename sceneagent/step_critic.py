@@ -17,6 +17,19 @@ rejected stage once, carrying the note. Same split as the SF-19 reviewer
 and ``DIR/step_verdicts.json``. ``ledger_entries`` and ``retry_requests`` turn
 committed verdicts into ledger lines and at most one retry per stage.
 
+Where the box holds the key itself (box 60254439, decision of 2026-11-13),
+``review`` closes the loop in one process, still through the harness:
+
+    python -m sceneagent.step_critic review --out OUT --stage masks  # box, GPU on retry
+
+It draws the stage's image, judges it, writes both ledger lines, and on a
+reject re-runs the stage once with the critic's note, then judges the retry.
+For masks the note can carry a revised detector prompt (``retry_prompt``);
+that is the one input of the masks stage a note can change without touching
+its thresholds, which SF-18 leaves out of scope. A reject whose note names no
+prompt is logged as a skipped retry: GroundingDINO and SAM on the same inputs
+would only draw the same masks again.
+
 The prompts are ours (the paper does not publish its critic prompts), one per
 stage, each hashed into the verdict file. ``render`` draws whichever stage
 images the run directory already holds: masks from ``masks/``, Gaussians from
@@ -30,8 +43,10 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -45,6 +60,13 @@ REASON_CHARS = 400
 NOTE_CHARS = 200
 REVIEW_DIR = "review_steps"
 REVIEW_ZIP = "review_steps.zip"
+# ``review`` keeps each attempt's image and verdict here, so the retry does
+# not overwrite the evidence of the reject that caused it.
+CRITIC_DIR = "step_critic"
+CRITIC_RECORD = "loop.json"
+# A retry prompt is GroundingDINO phrases, as ``scene_objects`` writes them.
+RETRY_PHRASE_RE = re.compile(r"^[a-z0-9][a-z0-9 \-]{0,39}$")
+MAX_RETRY_PHRASES = 6
 # A stage re-runs at most this many times on a critic's reject (Jira SF-18:
 # "a reject triggers one retry"), so a critic that never accepts cannot loop.
 MAX_RETRIES = 1
@@ -68,6 +90,12 @@ labelled with the detector's phrase. Accept when every clearly visible object
 has one outline that follows it, and no outline covers several objects, the
 bin itself, or the floor. Reject when objects are missed, merged, split, or
 when the container or background is outlined as an object.
+
+For a reject, also give "retry_prompt": the detector's text prompt rewritten
+so a re-run would fix what you saw, as lowercase noun phrases each followed
+by " ." (for example "red mug . blue scissors ."), one phrase per object kind
+that should be outlined, at most six. Leave it empty when a different prompt
+would not help.
 """,
     "gaussians": _COMMON
     + """
@@ -99,6 +127,8 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         "verdict": {"type": "STRING", "enum": list(VERDICTS)},
         "reason": {"type": "STRING"},
         "retry_note": {"type": "STRING"},
+        # Optional, and asked for only by the masks prompt.
+        "retry_prompt": {"type": "STRING"},
     },
     "required": ["verdict", "reason", "retry_note"],
 }
@@ -123,11 +153,30 @@ def prompt_sha256(stage: str) -> str:
     return hashlib.sha256(PROMPTS[stage].encode("utf-8")).hexdigest()
 
 
+def retry_prompt(text: Any) -> str:
+    """``"a . b ."`` from a critic's suggested prompt, or ``""`` if it is not one.
+
+    Each phrase must already be a GroundingDINO phrase (lower case, letters,
+    digits, spaces, hyphens); nothing is rewritten into one, so a reply that
+    is not a prompt is not guessed into one.
+    """
+    if not isinstance(text, str):
+        return ""
+    phrases = [p.strip() for p in text.strip().split(".")]
+    phrases = [p for p in phrases if p]
+    if not phrases or len(phrases) > MAX_RETRY_PHRASES:
+        return ""
+    if not all(RETRY_PHRASE_RE.fullmatch(p) for p in phrases):
+        return ""
+    return " . ".join(dict.fromkeys(" ".join(p.split()) for p in phrases)) + " ."
+
+
 def parse_step_verdict(text: str) -> dict[str, str]:
     """The model's reply as ``{verdict, reason, retry_note}``; raise on anything else.
 
     A fenced code block is unwrapped. The verdict must be accept or reject;
-    nothing is mapped onto one. An accept carries no retry note.
+    nothing is mapped onto one. An accept carries no retry note. A reject
+    also carries ``retry_prompt`` when the reply has a well-formed one.
     """
     body = text.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", body, flags=re.DOTALL)
@@ -143,11 +192,15 @@ def parse_step_verdict(text: str) -> dict[str, str]:
     note = payload.get("retry_note")
     reason = reason.strip() if isinstance(reason, str) else ""
     note = note.strip() if isinstance(note, str) and verdict == "reject" else ""
-    return {
+    parsed = {
         "verdict": verdict,
         "reason": reason[:REASON_CHARS],
         "retry_note": note[:NOTE_CHARS],
     }
+    prompt = retry_prompt(payload.get("retry_prompt")) if verdict == "reject" else ""
+    if prompt:
+        parsed["retry_prompt"] = prompt
+    return parsed
 
 
 def read_stage_images(zip_path: Path) -> dict[str, bytes]:
@@ -223,7 +276,11 @@ def write_stage_reviews(document: dict[str, Any], out_dir: Path) -> list[Path]:
 
 def load_step_verdicts(path: Path) -> dict[str, dict[str, str]]:
     """Committed step verdicts by stage, every field checked (box side)."""
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return verdicts_from(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def verdicts_from(payload: Any) -> dict[str, dict[str, str]]:
+    """Step verdicts by stage from a ``judge_steps`` document, every field checked."""
     if not isinstance(payload, dict) or payload.get("mode") != "step":
         raise ValueError("not a step verdict file")
     model = payload.get("model")
@@ -243,6 +300,9 @@ def load_step_verdicts(path: Path) -> dict[str, dict[str, str]]:
             "retry_note": note[:NOTE_CHARS] if isinstance(note, str) else "",
             "model": model,
         }
+        prompt = retry_prompt(item.get("retry_prompt"))
+        if prompt and item["verdict"] == "reject":
+            verdicts[stage]["retry_prompt"] = prompt
     return verdicts
 
 
@@ -269,6 +329,8 @@ def ledger_entries(
         }
         if v["verdict"] == "reject":
             entry["retry_note"] = v["retry_note"]
+            if v.get("retry_prompt"):
+                entry["retry_prompt"] = v["retry_prompt"]
         entries.append(entry)
     return entries
 
@@ -278,13 +340,114 @@ def retry_requests(
 ) -> list[dict[str, str]]:
     """The stages to re-run, each with the critic's note; never past ``MAX_RETRIES``."""
     retried = retried or {}
-    return [
-        {"stage": stage, "note": verdicts[stage]["retry_note"]}
-        for stage in STAGES
-        if stage in verdicts
-        and verdicts[stage]["verdict"] == "reject"
-        and retried.get(stage, 0) < MAX_RETRIES
-    ]
+    requests = []
+    for stage in STAGES:
+        v = verdicts.get(stage)
+        if not v or v["verdict"] != "reject" or retried.get(stage, 0) >= MAX_RETRIES:
+            continue
+        request = {"stage": stage, "note": v["retry_note"]}
+        if v.get("retry_prompt"):
+            request["prompt"] = v["retry_prompt"]
+        requests.append(request)
+    return requests
+
+
+def append_ledger(out: Path, entries: list[dict[str, Any]]) -> None:
+    """Add lines to ``out/ledger.json``, keeping every line already there."""
+    path = Path(out) / "ledger.json"
+    try:
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ledger = {}
+    if not isinstance(ledger, dict):
+        ledger = {}
+    ledger["entries"] = [*(ledger.get("entries") or []), *entries]
+    path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
+
+def rerun_masks(out: Path, request: dict[str, str]) -> int:
+    """Re-run the masks stage with the critic's prompt (GPU, the box's gsam2 env)."""
+    from sceneagent.bin_masks import run_bin_masks
+
+    return run_bin_masks(out, prompt=request["prompt"], critic_note=request["note"])
+
+
+Renderer = Callable[[Path], Path]
+Rerunner = Callable[[Path, dict[str, str]], int]
+RENDERERS: dict[str, Renderer] = {"masks": lambda out: render_masks(out)}
+RERUNNERS: dict[str, Rerunner] = {"masks": rerun_masks}
+# What a stage's re-run needs from the note before it can do anything new.
+RETRY_NEEDS = {"masks": "prompt"}
+
+
+def review_and_retry(
+    out: Path | str,
+    harness: ImageHarness,
+    stage: str = "masks",
+    *,
+    render: Renderer | None = None,
+    rerun: Rerunner | None = None,
+) -> dict[str, Any]:
+    """Judge one stage, re-run it once on a reject with the note, judge the retry.
+
+    Every verdict goes to the ledger with its attempt number, and each
+    attempt's image and ``review/<stage>.json`` stay under
+    ``out/step_critic/attempt-<n>/``. Returns the record also written to
+    ``out/step_critic/loop.json``.
+    """
+    out = Path(out)
+    render = render or RENDERERS[stage]
+    rerun = rerun or RERUNNERS[stage]
+    need = RETRY_NEEDS.get(stage)
+    record: dict[str, Any] = {"stage": stage, "model": harness.model_id, "attempts": []}
+    for attempt in range(MAX_RETRIES + 1):
+        image = render(out)
+        folder = out / CRITIC_DIR / f"attempt-{attempt}"
+        (folder / REVIEW_DIR).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(image, folder / REVIEW_DIR / f"{stage}.png")
+        document = judge_steps({stage: Path(image).read_bytes()}, harness)
+        write_stage_reviews(document, folder)
+        step: dict[str, Any] = {"attempt": attempt, "review": str(folder)}
+        record["attempts"].append(step)
+        if document["failed"]:
+            step["failed"] = document["failed"]
+            record["outcome"] = "critic call failed"
+            break
+        verdicts = verdicts_from(document)
+        step["verdict"] = verdicts[stage]["verdict"]
+        append_ledger(out, ledger_entries(verdicts, attempt))
+        requests = retry_requests(verdicts, {stage: attempt})
+        if not requests:
+            record["outcome"] = step["verdict"]
+            break
+        request = requests[0]
+        if need and not request.get(need):
+            reason = f"the critic's note names no {need}; the same inputs would give the same {stage}"
+            append_ledger(
+                out,
+                [
+                    {
+                        "item": f"step retry ({stage})",
+                        "decision": "skipped",
+                        "attempt": attempt + 1,
+                        "retry_note": request["note"],
+                        "reason": reason,
+                    }
+                ],
+            )
+            step["retry"] = {"skipped": reason}
+            record["outcome"] = "reject, retry skipped"
+            break
+        code = rerun(out, request)
+        step["retry"] = {**request, "exit_code": code}
+        if code != 0:
+            record["outcome"] = f"retry exited {code}"
+            break
+    record["vlm_calls"] = harness.call_count
+    path = out / CRITIC_DIR / CRITIC_RECORD
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return record
 
 
 def _outline(mask: np.ndarray) -> np.ndarray:
@@ -576,6 +739,11 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
     judge.add_argument(
         "--source-run", default="", help="gpu-smoke run id the images came from"
     )
+    review = sub.add_parser(
+        "review", help="judge a stage and re-run it once on a reject (box with key)"
+    )
+    review.add_argument("--out", type=Path, required=True)
+    review.add_argument("--stage", choices=sorted(RERUNNERS), default="masks")
     args = parser.parse_args(argv)
     if args.command == "render":
         drawn = render_review_images(args.out)
@@ -587,6 +755,22 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
             json.dumps({"image": str(path), "zip": str(pack_review_images(args.out))})
         )
         return 0
+    if args.command == "review":
+        if harness is None:
+            from sceneagent.harness import selected_harness
+
+            harness = selected_harness()
+        record = review_and_retry(args.out, harness, args.stage)
+        print(
+            json.dumps(
+                {
+                    "outcome": record.get("outcome"),
+                    "model": record["model"],
+                    "vlm_calls": record["vlm_calls"],
+                }
+            )
+        )
+        return 0 if record.get("outcome") == "accept" else 1
     if args.source_run and not re.fullmatch(r"[0-9]{1,20}", args.source_run):
         parser.error("--source-run must be a run id (digits only)")
     images = read_stage_images(args.images)

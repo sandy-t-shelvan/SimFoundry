@@ -219,11 +219,16 @@ def run_bin_masks(
     poses: Callable[[Path, Path], int] = run_bin_poses,
     runner: Runner = subprocess.run,
     weights: Callable[[], dict[str, Any]] = ensure_sam_weights,
+    prompt: str | None = None,
+    critic_note: str = "",
 ) -> int:
     """Mask every view. Return 0 when enough views keep at least one mask.
 
     The bin needs all 13; a video needs ``min_masked_views`` of its mask
-    views (``scene.json``).
+    views (``scene.json``). ``prompt`` and ``critic_note`` are the step
+    critic's retry (:func:`sceneagent.step_critic.review_and_retry`): the
+    prompt replaces the scene's, and both are recorded in the evidence and
+    the ledger line.
     """
     out, data = Path(out), Path(data)
     scene = load_scene(out)
@@ -231,7 +236,8 @@ def run_bin_masks(
     if is_bin(out) and len(list(images.glob("*.png"))) != VIEWS:
         poses(out, data)
     expected = expected_views(out, scene)
-    prompt = scene.prompt or PROMPT
+    retry = prompt is not None
+    prompt = prompt or scene.prompt or PROMPT
     # Ours: a video drops boxes whose phrase joins prompt terms; the bin keeps
     # its rules so its score does not move.
     single_term = not is_bin(out)
@@ -246,7 +252,13 @@ def run_bin_masks(
     evidence: dict[str, Any] = {
         "scene": scene.name,
         "prompt": prompt,
-        "prompt_source": PROMPT_SOURCE if scene.prompt is None else "scene.json (ours)",
+        "prompt_source": (
+            "step critic retry (gemini note)"
+            if retry
+            else PROMPT_SOURCE
+            if scene.prompt is None
+            else "scene.json (ours)"
+        ),
         "views_dir": scene.view_dir,
         "box_threshold": BOX_THRESHOLD,
         "text_threshold": TEXT_THRESHOLD,
@@ -260,6 +272,9 @@ def run_bin_masks(
         "detector": "GroundingDINO SwinT-OGC",
     }
     entry: dict[str, Any] = {"item": ITEM, "sam": "vit_h", "prompt": prompt}
+    if retry:
+        evidence["critic_retry"] = {"note": critic_note, "scene_prompt": scene.prompt}
+        entry.update(attempt=1, critic_note=critic_note)
     try:
         evidence["sam_weights"] = weights()
         evidence["segment_anything"] = _ensure_segment_anything(runner)
