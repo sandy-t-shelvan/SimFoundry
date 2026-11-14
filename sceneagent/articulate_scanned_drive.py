@@ -48,11 +48,28 @@ def read_obj(path: Path):
     return verts, faces
 
 
+# A proposer that regresses its axis (Particulate) returns floats a fraction of
+# a degree off a principal axis; a USD joint takes an X/Y/Z token. Snap within
+# this angle and record it; anything further needs a rotated joint frame.
+AXIS_SNAP_DEG = 5.0
+
+
+def axis_snap_deg(axis) -> float:
+    """Angle (degrees) between ``axis`` and its nearest principal axis."""
+    norm = math.sqrt(sum(float(a) ** 2 for a in axis))
+    if norm == 0.0:
+        raise ValueError("axis has zero length")
+    largest = max(abs(float(a)) for a in axis) / norm
+    return math.degrees(math.acos(min(1.0, largest)))
+
+
 def axis_token(axis):
     """USD joints take X/Y/Z; a negative axis flips the joint coordinate's sign."""
+    if axis_snap_deg(axis) > AXIS_SNAP_DEG:
+        raise ValueError(
+            f"axis {axis} is not within {AXIS_SNAP_DEG:g} deg of X, Y or Z"
+        )
     i = max(range(3), key=lambda k: abs(axis[k]))
-    if abs(abs(axis[i]) - 1.0) > 1e-6:
-        raise ValueError(f"axis {axis} is not along X, Y or Z")
     return "XYZ"[i], (1.0 if axis[i] > 0 else -1.0)
 
 
@@ -130,6 +147,7 @@ def build_usd(path: Path, joint: dict, body, lid, name: str = "mailbox") -> dict
     stage.GetRootLayer().Save()
     return {
         "axis_token": token,
+        "axis_snap_deg": round(axis_snap_deg(joint["axis"]), 3),
         "sign": sign,
         "limits_deg": [math.degrees(lo), math.degrees(hi)],
     }
