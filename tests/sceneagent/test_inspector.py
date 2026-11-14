@@ -238,3 +238,74 @@ def test_the_report_module_reads_no_key():
     source = Path(ins.__file__).read_text(encoding="utf-8")
     # The harness alone reads the key; this module never touches the environment.
     assert "environ" not in source and "getenv" not in source
+
+
+def _report_args(out: Path, target: Path, *extra: str) -> list[str]:
+    return [
+        "report",
+        "--views",
+        str(out / ins.VIEWS_ZIP),
+        "--settle",
+        str(out / ins.SETTLE_NAME),
+        "--out",
+        str(target),
+        *extra,
+    ]
+
+
+def test_kan23_the_isaac_frame_is_sent_second_and_recorded(tmp_path):
+    out = tmp_path / "render"
+    ins.render_inspection(_scene(tmp_path), out)
+    frame = tmp_path / "settle_frame.png"
+    frame.write_bytes(b"isaac-frame-png")
+    target = tmp_path / "isaac_lab.json"
+    finding = {"object": "cube", "issue": "floating", "fix": "Lower it 2 cm."}
+    harness = FakeHarness([_report([finding])])
+    code = ins.main(_report_args(out, target, "--frame", str(frame)), harness=harness)
+    assert code == 0 and harness.call_count == 1
+    prompt, images, _schema = harness.calls[0]
+    sheet = zipfile.ZipFile(out / ins.VIEWS_ZIP).read(ins.SHEET_NAME)
+    assert images == [(sheet, "image/png"), (b"isaac-frame-png", "image/png")]
+    assert ins.FRAME_PROMPT in prompt and "Isaac Lab" in prompt
+    doc = json.loads(target.read_text(encoding="utf-8"))
+    assert doc["isaac_frame"] is True and doc["fix_report_from_model"] is True
+    assert [item["role"] for item in doc["images_sent"]] == [
+        "contact_sheet",
+        "isaac_frame",
+    ]
+    assert doc["images_sent"][1]["path"] == str(frame)
+    assert doc["prompt_sha256"] == ins.prompt_sha256(with_frame=True)
+    assert doc["prompt_sha256"] != ins.prompt_sha256()
+
+
+@pytest.mark.parametrize("given", [False, True])
+def test_kan23_without_a_frame_only_the_sheet_is_sent(tmp_path, given):
+    out = tmp_path / "render"
+    ins.render_inspection(_scene(tmp_path), out)
+    target = tmp_path / "isaac_lab.json"
+    missing = tmp_path / "no_such_frame.png"
+    extra = ("--frame", str(missing)) if given else ()
+    harness = FakeHarness([_report([])])
+    ins.main(_report_args(out, target, *extra), harness=harness)
+    prompt, images, _schema = harness.calls[0]
+    assert len(images) == 1 and ins.FRAME_PROMPT not in prompt
+    assert prompt.startswith(ins.INSPECT_PROMPT)
+    doc = json.loads(target.read_text(encoding="utf-8"))
+    assert doc["isaac_frame"] is False
+    assert [item["role"] for item in doc["images_sent"]] == ["contact_sheet"]
+    assert doc["prompt_sha256"] == ins.prompt_sha256()
+    assert ("isaac_frame_missing" in doc) is given
+
+
+def test_kan23_both_report_workflows_pass_the_frame():
+    root = Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    for name, folder in (
+        ("sceneagent-inspector-report.yml", "inspect-input"),
+        ("sceneagent-mvp-review.yml", "review-input"),
+    ):
+        text = (root / name).read_text(encoding="utf-8")
+        line = next(
+            ln for ln in text.splitlines() if "sceneagent.inspector report" in ln
+        )
+        assert f"--frame {folder}/settle_frame.png" in line
+        assert text.count("secrets.GEMINI_API_KEY") == 1

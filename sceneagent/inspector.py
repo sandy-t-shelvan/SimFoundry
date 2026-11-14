@@ -12,7 +12,8 @@ does (:mod:`sceneagent.vlm_review`), so the Gemini key never reaches the box:
 
     # GitHub runner (holds GEMINI_API_KEY): the report
     python -m sceneagent.inspector report --views inspection_views.zip \\
-        --settle settle_summary.json --out inspection/isaac_lab.json --source-run ID
+        --settle settle_summary.json --out inspection/isaac_lab.json --source-run ID \\
+        [--frame settle_frame.png]
 
 ``render`` draws a fixed set of views of the placed scene and, when Isaac Lab
 is on the host, steps the exported stage for two seconds and writes what it
@@ -28,6 +29,14 @@ the model replied, the reply parsed, and it listed at least one finding. A
 failed call, an unparsable reply or an empty finding list leaves it false,
 which is the gate `skills.STAGE_OPENED_SKILLS` describes: an opened stage is
 not a fix report.
+
+With ``--frame`` (KAN-23 decision (b), Sandeep 2026-11-14) the same call also
+carries ``settle_frame.png``, the Isaac Lab RTX render that
+:mod:`sceneagent.settle_run` writes after the settle, so the model judges a
+real Isaac Lab render of the exported scene and not only the CPU point
+sheet. The report records which images were sent (``images_sent`` and
+``isaac_frame``). A ``--frame`` path that does not exist is recorded and the
+call goes ahead with the sheet alone, as it did before the flag existed.
 
 The scene manifest (``scene.json``) is ours. It names, per object, the mesh
 file and :mod:`sceneagent.bin_place`'s similarity into the reconstruction
@@ -377,6 +386,19 @@ Answer as JSON: {"findings": [{"object": "<name>", "issue": "<issue type>",
 "fix": "<one sentence>"}], "summary": "<two sentences on the scene>"}.
 """
 
+# Appended to INSPECT_PROMPT only when the Isaac frame is sent. Ours. The
+# settle camera renders the meshes untextured on a checkered ground, so the
+# legend colours do not carry over; objects are matched by shape.
+FRAME_PROMPT = """\
+A second image follows the contact sheet: the Isaac Lab (RTX) render of the
+same exported scene, taken by the settle camera after the two-second physics
+settle. It is a real simulator render, not a point drawing. Its colours are
+not the legend colours: match objects to the legend by shape and position.
+Use it to confirm or overturn what the sheet suggests (an object resting on
+the ground, floating, sunk, tipped over or overlapping a neighbour), and
+prefer it where the two disagree on contact with the ground.
+"""
+
 REPORT_SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
     "properties": {
@@ -412,9 +434,14 @@ class ImageHarness(Protocol):
     ) -> str: ...
 
 
-def prompt_sha256() -> str:
-    """Hash of the inspector prompt, recorded in every report."""
-    return hashlib.sha256(INSPECT_PROMPT.encode("utf-8")).hexdigest()
+def inspect_prompt(with_frame: bool = False) -> str:
+    """The fixed instructions, with the Isaac frame paragraph when it is sent."""
+    return INSPECT_PROMPT + ("\n" + FRAME_PROMPT if with_frame else "")
+
+
+def prompt_sha256(with_frame: bool = False) -> str:
+    """Hash of the instructions actually sent, recorded in every report."""
+    return hashlib.sha256(inspect_prompt(with_frame).encode("utf-8")).hexdigest()
 
 
 def parse_report(text: str) -> dict[str, Any]:
@@ -464,19 +491,36 @@ def inspect(
     settle_summary: Mapping[str, Any],
     harness: ImageHarness,
     source_run: str = "",
+    frame_png: bytes | None = None,
+    sheet_source: str = SHEET_NAME,
+    frame_source: str = "",
 ) -> dict[str, Any]:
     """One call: the model reads the sheet and the settle summary and lists fixes.
+
+    With ``frame_png`` the call carries two images, the sheet then the Isaac
+    Lab settle frame, and the prompt says what the second one is. The
+    ``*_source`` strings only label ``images_sent``.
 
     ``fix_report_from_model`` is true only when the call succeeded, the reply
     parsed, and it named at least one finding. Every other outcome is recorded
     with the field false; nothing is guessed in the model's place.
     """
+    with_frame = frame_png is not None
+    images: list[tuple[bytes, str]] = [(sheet_png, "image/png")]
+    images_sent = [{"role": "contact_sheet", "path": sheet_source}]
+    if frame_png is not None:
+        images.append((frame_png, "image/png"))
+        images_sent.append(
+            {"role": "isaac_frame", "path": frame_source or "settle_frame.png"}
+        )
     document: dict[str, Any] = {
         "inspector": "ours: sceneagent.inspector report",
         "source_run": source_run,
         "model": harness.model_id,
-        "prompt_sha256": prompt_sha256(),
+        "prompt_sha256": prompt_sha256(with_frame),
         "prompt_source": "ours",
+        "images_sent": images_sent,
+        "isaac_frame": with_frame,
         "settle": dict(settle_summary),
         "model_replied": False,
         "findings": [],
@@ -484,14 +528,12 @@ def inspect(
         "fix_report_from_model": False,
     }
     prompt = (
-        INSPECT_PROMPT
+        inspect_prompt(with_frame)
         + "\nSettle summary:\n"
         + json.dumps(settle_summary, indent=2, sort_keys=True)[:4000]
     )
     try:
-        reply = harness.complete(
-            prompt, images=[(sheet_png, "image/png")], response_schema=REPORT_SCHEMA
-        )
+        reply = harness.complete(prompt, images=images, response_schema=REPORT_SCHEMA)
         document["model_replied"] = True
         report = parse_report(reply)
         document.update(report)
@@ -515,6 +557,12 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
     report.add_argument("--settle", type=Path, required=True)
     report.add_argument("--out", type=Path, required=True)
     report.add_argument("--source-run", default="")
+    report.add_argument(
+        "--frame",
+        type=Path,
+        default=None,
+        help="Isaac Lab settle_frame.png; sent as a second image when it exists",
+    )
     args = parser.parse_args(argv)
     if args.command == "render":
         result = render_inspection(args.scene, args.out, args.stage, args.isaac_python)
@@ -535,7 +583,20 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
         from sceneagent.harness import selected_harness
 
         harness = selected_harness()
-    document = inspect(sheet, settle_summary, harness, args.source_run)
+    frame_png = None
+    if args.frame is not None and args.frame.is_file():
+        frame_png = args.frame.read_bytes()
+    document = inspect(
+        sheet,
+        settle_summary,
+        harness,
+        args.source_run,
+        frame_png=frame_png,
+        sheet_source=f"{args.views}:{SHEET_NAME}",
+        frame_source=str(args.frame) if frame_png is not None else "",
+    )
+    if args.frame is not None and frame_png is None:
+        document["isaac_frame_missing"] = str(args.frame)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     print(
@@ -544,6 +605,7 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
                 "model": document["model"],
                 "vlm_calls": document["vlm_calls"],
                 "findings": len(document["findings"]),
+                "isaac_frame": document["isaac_frame"],
                 "fix_report_from_model": document["fix_report_from_model"],
             }
         )
