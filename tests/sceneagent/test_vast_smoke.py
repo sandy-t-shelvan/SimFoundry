@@ -821,7 +821,7 @@ def test_workflow_dispatch_takes_only_the_pipeline_choice_and_keeps_the_instance
         1,
     )
     assert (
-        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate pipeline choice"
+        "workflow_dispatch may only take the run4/bin/splat/masks/association/sam3d/place/review/review_vlm/review_candidates/review_accept/mapper/probe/setup/isaaclab_render/mailbox/bin_settle/putcupinbowl/putmarkerincup/articulate/mailbox_fresh/putcupinbowl_fresh/putmarkerincup_fresh/poses_fruits/poses_throwawaytrash/poses_throwawaytrashcousin pipeline choice"
         in (workflow_safety_findings(extra))
     )
     assert "inputs.instance_id" not in text
@@ -2890,3 +2890,70 @@ def test_articulate_writes_the_proposal_before_sync(tmp_path, monkeypatch):
     finally:
         remote.close()
     assert order == ["prepare", "sync"]
+
+
+def test_a_fresh_video_pipeline_wipes_only_its_own_dir_first():
+    # KAN-52: the plain pipelines resume, so an accepted pose stage is never
+    # computed again there; "<video>_fresh" proves a pose fix from nothing.
+    from sceneagent.vast_smoke import (
+        PIPELINES,
+        REMOTE_REPO,
+        VIDEO_PIPELINES,
+        build_remote_shell,
+        fresh_lines,
+        remote_out,
+    )
+
+    for name in ("mailbox", "putcupinbowl", "putmarkerincup"):
+        fresh = name + "_fresh"
+        assert VIDEO_PIPELINES[fresh] == VIDEO_PIPELINES[name]
+        assert PIPELINES[fresh][0] == PIPELINES[name][0]
+        out = remote_out(fresh)
+        assert out == f"/workspace/sf4-smoke/{fresh}"
+        script = build_remote_shell(REMOTE_REPO, out, pipeline=fresh)
+        assert script.index(f"rm -rf {out}") < script.index(f"mkdir -p {out}")
+        plain = build_remote_shell(REMOTE_REPO, remote_out(name), pipeline=name)
+        assert "rm -rf" not in plain
+    with pytest.raises(ValueError, match="refusing to wipe"):
+        fresh_lines("mailbox_fresh", "/workspace")
+
+
+def test_pose_only_pipelines_run_run4_on_their_video_in_a_wiped_dir(tmp_path):
+    # KAN-52: the pose stage alone, on the box, for videos the fix was not
+    # diagnosed on.
+    from sceneagent.vast_smoke import (
+        PIPELINES,
+        POSE_ONLY_PIPELINES,
+        REMOTE_PYTHON,
+        REMOTE_REPO,
+        REQUIRED_LEDGER_ITEMS,
+        build_remote_command,
+        build_remote_shell,
+        iter_shipped_files,
+        remote_out,
+    )
+
+    assert set(POSE_ONLY_PIPELINES) == {
+        "poses_fruits",
+        "poses_throwawaytrash",
+        "poses_throwawaytrashcousin",
+    }
+    for name, relative in POSE_ONLY_PIPELINES.items():
+        out = remote_out(name)
+        assert out == f"/workspace/sf4-smoke/{name}"
+        assert PIPELINES[name] == (REQUIRED_LEDGER_ITEMS, relative)
+        assert build_remote_command(REMOTE_REPO, out, pipeline=name) == [
+            REMOTE_PYTHON,
+            "-m",
+            "sceneagent.run4",
+            f"{REMOTE_REPO}/{relative}",
+            "--out",
+            out,
+        ]
+        script = build_remote_shell(REMOTE_REPO, out, pipeline=name)
+        assert script.index(f"rm -rf {out}") < script.index(f"mkdir -p {out}")
+        video = tmp_path / relative
+        video.parent.mkdir(parents=True, exist_ok=True)
+        video.write_bytes(b"x")
+    shipped = {p.relative_to(tmp_path).as_posix() for p in iter_shipped_files(tmp_path)}
+    assert set(POSE_ONLY_PIPELINES.values()) <= shipped

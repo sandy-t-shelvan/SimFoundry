@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from typing import Any
 
 BIN_COUNT = 300
+EMPTY_BIN = "empty time bin; no duplication"
 
 # Committed docs/assets/example_videos/Fruits.mp4, read from this tree.
 # mvhd timescale 1000 reports 15.067 s. ffprobe on that file reported
@@ -31,6 +32,15 @@ FRUITS_MVHD_DURATION_S = 15.067
 FRUITS_PROBE_DURATION_S = 15.066667
 FRUITS_FRAME_COUNT = 452
 FRUITS_FPS = 30
+
+
+def bin_count(frame_count: int, n: int = BIN_COUNT) -> int:
+    """``n`` bins, or one per frame when the clip has fewer frames than that."""
+    if isinstance(frame_count, bool) or not isinstance(frame_count, int):
+        raise ValueError("frame count is not an integer")
+    if frame_count <= 0:
+        raise ValueError("no decoded frames")
+    return min(n, frame_count)
 
 
 def bin_edges(duration: float, n: int = BIN_COUNT) -> list[float]:
@@ -91,6 +101,10 @@ def select_sharpest_per_bin(
 ) -> list[dict[str, Any]]:
     """Pick the sharpest frame in each bin. Ties keep the earliest index.
 
+    A clip with no more frames than bins (a 10 s, 24 fps phone video has
+    240) keeps every frame, one per bin, rather than failing on a bin that
+    timestamp jitter left empty. Use :func:`bin_count` for ``n``.
+
     ``frames`` must be contiguous indices ``0 .. len-1`` with non-decreasing
     timestamps inside ``[0, duration]``. Every frame belongs to exactly one
     bin. The last bin includes ``duration`` itself.
@@ -123,6 +137,20 @@ def select_sharpest_per_bin(
         times.append(float(stamp))
     if times != sorted(times):
         raise ValueError("frame timestamps must be in order")
+    if len(frames) == n:
+        return [
+            {
+                "bin": index,
+                "left": float(frame["time"]),
+                "right": float(frame["time"]),
+                "last_right_inclusive": True,
+                "chosen_index": frame["index"],
+                "chosen_time": float(frame["time"]),
+                "score": float(frame["score"]),
+                "candidates": 1,
+            }
+            for index, frame in enumerate(frames)
+        ]
     chosen: list[dict[str, Any]] = []
     covered: list[int] = []
     for index, (left, right) in enumerate(itertools.pairwise(edges)):
@@ -136,7 +164,7 @@ def select_sharpest_per_bin(
             )
         ]
         if not candidates:
-            raise ValueError("empty time bin; no duplication")
+            raise ValueError(EMPTY_BIN)
         best = min(
             candidates, key=lambda frame: (-float(frame["score"]), frame["index"])
         )
@@ -160,6 +188,49 @@ def select_sharpest_per_bin(
     return chosen
 
 
+def select_frames(
+    frames: Sequence[dict[str, Any]],
+    duration: float,
+    n: int = BIN_COUNT,
+) -> tuple[list[dict[str, Any]], str]:
+    """Equal-time bins, or equal-count bins when a timestamp gap empties one.
+
+    Returns the rows and ``"time"`` or ``"index"``. A phone clip can be
+    variable-rate: Objectron's laptop video has 303 frames in 10.16 s with
+    gaps up to 0.1 s, so 300 equal-time bins left some empty and the clip
+    failed before COLMAP. Time bins stay first, so every clip that sampled
+    before samples the same frames now. The fallback splits the frames, in
+    order, into ``n`` runs whose lengths differ by at most one and keeps the
+    sharpest of each; it never duplicates a frame.
+    """
+    try:
+        return select_sharpest_per_bin(frames, duration, n), "time"
+    except ValueError as exc:
+        if str(exc) != EMPTY_BIN:
+            raise
+    if n > len(frames):
+        raise ValueError("more bins than frames")
+    rows: list[dict[str, Any]] = []
+    for index in range(n):
+        start = index * len(frames) // n
+        stop = (index + 1) * len(frames) // n
+        group = frames[start:stop]
+        best = min(group, key=lambda f: (-float(f["score"]), f["index"]))
+        rows.append(
+            {
+                "bin": index,
+                "left": float(group[0]["time"]),
+                "right": float(group[-1]["time"]),
+                "last_right_inclusive": True,
+                "chosen_index": best["index"],
+                "chosen_time": float(best["time"]),
+                "score": float(best["score"]),
+                "candidates": len(group),
+            }
+        )
+    return rows, "index"
+
+
 def _balanced(terms: Sequence[str]) -> str:
     """Balanced sum. A flat 300-term sum overflows ffmpeg's expression depth."""
     if len(terms) == 1:
@@ -180,8 +251,23 @@ def select_expression(indices: Sequence[int]) -> str:
     return "select=" + _balanced(terms)
 
 
+# Frames are decoded and staged with their long side at most this many
+# pixels. A 1080p or smaller video passes through pixel for pixel (the
+# scale filter does nothing when the size does not change). A 60 s 4K60
+# clip would otherwise decode to about 40 GB of PNG just to be scored, and
+# COLMAP reads at most 1280 px (``--SiftExtraction.max_image_size``).
+MAX_LONG_SIDE_PX = 1920
+LONG_SIDE_FILTER = (
+    f"scale=w='if(gte(iw,ih),min(iw,{MAX_LONG_SIDE_PX}),-2)'"
+    f":h='if(gte(iw,ih),-2,min(ih,{MAX_LONG_SIDE_PX}))'"
+)
+
+
 def decode_all_command(ffmpeg: str, video: str, pattern: str) -> list[str]:
-    """Decode every video frame. No fps filter and no frame cap."""
+    """Decode every video frame. No fps filter and no frame cap.
+
+    The long side is capped at :data:`MAX_LONG_SIDE_PX`; nothing else changes.
+    """
     return [
         ffmpeg,
         "-y",
@@ -189,6 +275,8 @@ def decode_all_command(ffmpeg: str, video: str, pattern: str) -> list[str]:
         video,
         "-map",
         "0:v:0",
+        "-vf",
+        LONG_SIDE_FILTER,
         "-vsync",
         "0",
         "-start_number",
@@ -208,7 +296,7 @@ def extract_selected_command(
         "-i",
         video,
         "-vf",
-        select_expression(chosen),
+        f"{select_expression(chosen)},{LONG_SIDE_FILTER}",
         "-vsync",
         "0",
         "-frames:v",
