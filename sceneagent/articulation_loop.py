@@ -43,6 +43,9 @@ import numpy as np
 LOOP = "articulation_loop.json"
 MAX_REVISIONS = 2
 MAX_CALL_FAILURES = 2  # model calls that never answered; these do not use up revisions
+CRITIC_VOTES = (
+    3  # a critic "no" on a QA-passed proposal is decided by majority of this many
+)
 FRAMES = 3
 MIN_FRAME_GAP = 30  # video frames between chosen views, so they differ
 CROP_MARGIN = 0.3
@@ -186,6 +189,7 @@ def run_loop(
     }
     notes = None
     rejections = failures = 0
+    history: list[str] = []
     k = 0
     while True:
         folder = out / f"round_{k}"
@@ -262,16 +266,36 @@ def run_loop(
                 rejected = "; ".join(qa["problems"])
             else:
                 views = [Path(v).read_bytes() for v in physics.get("open_views") or []]
-                verdict = advise(
-                    real + views,
-                    critic_question(joint["type"], name, len(real), len(views)),
-                    client,
-                )
+                question = critic_question(joint["type"], name, len(real), len(views))
+                verdict = advise(real + views, question, client)
                 record["vlm_calls"] += 1
+                votes = [verdict]
+                # The critic is noisy: the same Mailbox hinge got three yeses and
+                # one "no" on separate runs. A "no" on a proposal QA has passed
+                # gets two more independent looks, and the majority decides.
+                if verdict.get("verdict") == "no" and not verdict.get("call_failed"):
+                    majority = CRITIC_VOTES // 2 + 1
+                    for _ in range(CRITIC_VOTES - 1):
+                        if (
+                            max(
+                                sum(v.get("verdict") == w for v in votes)
+                                for w in ("yes", "no")
+                            )
+                            >= majority
+                        ):
+                            break  # decided; a further look cannot change it
+                        again = advise(real + views, question, client)
+                        record["vlm_calls"] += 1
+                        if not again.get("call_failed"):
+                            votes.append(again)
+                    yes = sum(v.get("verdict") == "yes" for v in votes)
+                    if yes * 2 > len(votes):
+                        verdict = next(v for v in votes if v.get("verdict") == "yes")
                 entry["critic"] = {
                     k2: verdict.get(k2)
                     for k2 in ("verdict", "reason", "model_id", "call_failed")
                 }
+                entry["critic"]["votes"] = [v.get("verdict") for v in votes]
                 if verdict.get("call_failed"):
                     failures += 1
                     entry["decision"] = (
@@ -299,7 +323,10 @@ def run_loop(
                     f"{verdict.get('reason')}"
                 )
         rejections += 1
-        notes = rejected
+        # Every rejection so far, not only the last: with only the last one the
+        # proposer went back to an edge QA had already rejected.
+        history.append(f"round {k - 1}: {rejected}")
+        notes = "Earlier proposals were rejected. " + " | ".join(history)
         if rejections > max_revisions:
             record.update(
                 decision="rigid",
@@ -310,6 +337,86 @@ def run_loop(
         json.dumps(record, indent=2, default=str) + "\n", encoding="utf-8"
     )
     return record
+
+
+RESULT = "articulation.json"
+REJECTED = ("rejected by QA", "rejected by critic")
+
+
+def articulate_object(
+    parts_dir: Path,
+    run: Path,
+    object_number: int,
+    out: Path,
+    client: Any,
+    name: str | None = None,
+    max_revisions: int = MAX_REVISIONS,
+    drive: Callable[[Path, Path], dict[str, Any]] = isaac_drive,
+    frames: list[bytes] | None = None,
+) -> dict[str, Any]:
+    """The loop on PartSAM's parts; then, only if every proposed joint was rejected, on a colour cut.
+
+    A run where the proposer kept proposing a joint and every one was
+    rejected means it believes something moves but no joint over these parts
+    can be right -- PartSAM cut the moving part in two (the marker's cap).
+    ``colour_parts`` then offers a second part set: the object split where its
+    colour changes most sharply. Colour differences are common (shading,
+    print), so the cut is never used on its own: the same proposer, QA and
+    critic must pass, and an object the proposer calls rigid never gets here.
+    """
+    from sceneagent.colour_parts import split
+
+    real = frames if frames is not None else object_frames(run, object_number)
+    first = run_loop(
+        parts_dir,
+        run,
+        object_number,
+        out / "partsam",
+        client,
+        name=name,
+        max_revisions=max_revisions,
+        drive=drive,
+        frames=real,
+    )
+    result: dict[str, Any] = {
+        "object": first["object"],
+        "partsam": first,
+        "colour_cut": None,
+    }
+    proposed_and_rejected = first["decision"] == "rigid" and any(
+        r.get("decision") in REJECTED for r in first["rounds"]
+    )
+    if proposed_and_rejected:
+        source = run / "sam3d" / f"object_{object_number}.glb"
+        cut = split(source, out / "colour_parts") if source.is_file() else None
+        if cut is not None:
+            result["colour_cut"] = run_loop(
+                out / "colour_parts",
+                run,
+                object_number,
+                out / "colour_cut",
+                client,
+                name=first["object"],
+                max_revisions=max_revisions,
+                drive=drive,
+                frames=real,
+            )
+            result["colour_cut"]["cut"] = cut["cut"]
+        else:
+            result["colour_cut_skipped"] = "no clear colour boundary"
+    final = result["colour_cut"] or first
+    result.update(
+        decision=final["decision"],
+        part_set="colour_cut" if result["colour_cut"] else "partsam",
+        joint=final.get("joint"),
+        links=final.get("links"),
+        reason=final.get("reason"),
+        vlm_calls=first["vlm_calls"] + (result["colour_cut"] or {}).get("vlm_calls", 0),
+    )
+    (out / RESULT).write_text(
+        json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8"
+    )
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -323,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     from sceneagent.gemini_client import client_from_environ
 
-    record = run_loop(
+    record = articulate_object(
         args.parts,
         args.run,
         args.object,
@@ -336,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 k: record.get(k)
-                for k in ("object", "decision", "round", "reason", "vlm_calls")
+                for k in ("object", "decision", "part_set", "reason", "vlm_calls")
             }
         )
     )

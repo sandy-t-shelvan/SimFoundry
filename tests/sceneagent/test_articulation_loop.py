@@ -133,7 +133,8 @@ def test_a_critic_no_sends_its_reason_back_and_fails_closed(tmp_path):
         max_revisions=1,
     )
     assert record["decision"] == "rigid"
-    assert record["rounds"][1]["notes_in"].startswith("a reviewer compared")
+    assert "a reviewer compared" in record["rounds"][1]["notes_in"]
+    assert record["rounds"][0]["critic"]["votes"] == ["no", "no"]  # two agree: decided
 
 
 def test_the_flush_rule_abstains_without_clear_evidence_and_ignores_door_hinges():
@@ -229,3 +230,47 @@ def test_the_critic_is_asked_about_the_joint_type_it_sees():
     assert "edge" in loop.critic_question("revolute", "bin", 3, 3)
     question = loop.critic_question("prismatic", "marker", 3, 3)
     assert "slide" in question and "slid out" in question and "hinge" not in question
+
+
+class Flip(Client):
+    """The critic says no once, then yes: a noisy first look."""
+
+    def __init__(self, hinges):
+        super().__init__(hinges)
+        self.looks = 0
+
+    def generate_images(self, prompt, images=(), search=False):
+        if "Does the part" in prompt:
+            self.looks += 1
+            verdict = "no" if self.looks == 1 else "yes"
+            return {
+                "text": json.dumps({"verdict": verdict, "reason": "r"}),
+                "http_status": 200,
+                "model_id": "m",
+            }
+        return super().generate_images(prompt, images, search)
+
+
+def test_one_critic_no_against_two_yeses_is_outvoted(tmp_path):
+    parts_dir, run = _run(tmp_path)
+    record = loop.run_loop(
+        parts_dir,
+        run,
+        1,
+        tmp_path / "out",
+        Flip([RIGHT]),
+        drive=_drive,
+        frames=[b"a", b"b"],
+    )
+    assert record["decision"] == "articulated" and record["round"] == 0
+    assert record["rounds"][0]["critic"]["votes"] == ["no", "yes", "yes"]
+
+
+def test_the_proposer_is_reminded_of_every_earlier_rejection(tmp_path):
+    parts_dir, run = _run(tmp_path)
+    client = Client([WRONG, WRONG, RIGHT])
+    record = loop.run_loop(
+        parts_dir, run, 1, tmp_path / "out", client, drive=_drive, frames=[b"a", b"b"]
+    )
+    third = record["rounds"][2]["notes_in"]
+    assert "round 0:" in third and "round 1:" in third
