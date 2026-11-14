@@ -1,18 +1,18 @@
 {
   "video_sha256": "91e42c7872250d6afcde1a3c166af96f881f50aad670fd2d45be8968944e90a1",
-  "video_name": "video",
+  "video_name": "Mailbox.mp4",
   "frame_times_s": [
-    3.314,
-    9.943,
-    16.572
+    3.315,
+    9.944,
+    16.573
   ],
   "model": "gemini-3.8-flash",
-  "prompt_sha256": "37172c32482205beb89d274e018fe70e262e3b1be2b2fcb66240e10575299ece",
+  "prompt_sha256": "59f247261e89cf2e1f919f94e08f3573ce65e32127e8c6d2fce26851bca21182",
   "source": "ours: prompt and schema in sceneagent/scene_objects.py",
   "ok": true,
   "objects": [
     {
-      "name": "block",
+      "name": "cube",
       "movable_by_hand": true
     },
     {
@@ -20,5 +20,5 @@
       "movable_by_hand": true
     }
   ],
-  "prompt": "block . mailbox ."
+  "prompt": "cube . mailbox ."
 }

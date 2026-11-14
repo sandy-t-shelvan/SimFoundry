@@ -1,13 +1,13 @@
 {
   "video_sha256": "50ed7db09f183bc321167576e00437cf53d60fb335d7d7c067cc37e56662c3be",
-  "video_name": "video",
+  "video_name": "book_batch-1_0.MOV",
   "frame_times_s": [
     3.852,
     11.557,
     19.261
   ],
   "model": "gemini-3.8-flash",
-  "prompt_sha256": "37172c32482205beb89d274e018fe70e262e3b1be2b2fcb66240e10575299ece",
+  "prompt_sha256": "59f247261e89cf2e1f919f94e08f3573ce65e32127e8c6d2fce26851bca21182",
   "source": "ours: prompt and schema in sceneagent/scene_objects.py",
   "ok": true,
   "objects": [

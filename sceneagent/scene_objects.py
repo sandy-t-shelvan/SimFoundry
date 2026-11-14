@@ -53,13 +53,18 @@ Do not list:
 - the support surface itself, walls, floors, windows, curtains or the room;
 - built-in fixtures (a sink, a stove, a radiator, a socket);
 - parts of an object (a lid, a handle, a cap) or its contents;
-- people, hands, or reflections.
+- people, hands, shadows or reflections;
+- markings on a surface: tape, painted or taped lines and squares, stickers,
+  labels, decals or printed patterns, even when they outline a region.
 
-Name each with a short common English noun phrase of one to three words, the
-way a person would ("cup", "marker", "cardboard box", "running shoe"). Use
-no brand names, colours only when two listed objects would otherwise share a
-name, and no punctuation. List the most prominent object first, at most six.
-Set movable_by_hand to false for an object one hand could not lift."""
+Name each with the most specific common English noun phrase of one to three
+words for its shape and kind, the way a person would ("cup", "marker",
+"cube", "cardboard box", "running shoe"). Never use a vague word that could
+also describe a flat marking or a region, such as "block", "object", "item",
+"thing", "piece" or "shape". Use no brand names, colours only when two listed
+objects would otherwise share a name, and no punctuation. List the most
+prominent object first, at most six. Set movable_by_hand to false for an
+object one hand could not lift."""
 
 SCHEMA: dict[str, Any] = {
     "type": "OBJECT",
