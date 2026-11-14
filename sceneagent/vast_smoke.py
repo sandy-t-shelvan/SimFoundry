@@ -934,6 +934,9 @@ def build_remote_command(
             f"{repo}/sceneagent/articulate_drive.py",
             "--proposal",
             f"{repo}/sceneagent/articulate_proposal.json",
+            "--out",
+            out,
+        ]
     if pipeline == "soft_press":
         return [
             REMOTE_PYTHON,
@@ -2441,6 +2444,8 @@ def _advise_motion(checkout: Path, local_run: Path) -> None:
     (local_run / "vlm_check.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
+
+
 def _copy_soft_press(checkout: Path, local_run: Path) -> None:
     """Keep the runner's trace with the box result. Print the status line."""
     from sceneagent.soft_press import PARAMS_NAME
