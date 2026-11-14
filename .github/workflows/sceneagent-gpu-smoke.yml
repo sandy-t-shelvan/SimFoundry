@@ -223,6 +223,7 @@ jobs:
             sf4-artifacts/articulate_frames.zip
             sf4-artifacts/articulate_proposal.json
             sf4-artifacts/vlm_check.json
+            sf4-artifacts/review_steps.zip
             sf4-artifacts/checked_out_commit.txt
 
       # The smoke step writes this file only after the key scan passes.

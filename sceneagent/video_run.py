@@ -198,6 +198,12 @@ def run_video(
             if code != 0:
                 record["stopped"] = f"{name} failed (exit {code})"
                 break
+        try:
+            from sceneagent.step_critic import render_review_images
+
+            render_review_images(out)
+        except (OSError, ValueError, ImportError):
+            pass
         done = all(accepted(out, items) for _, items in STAGES)
         record["complete"] = done
         _write_record(out, record)
