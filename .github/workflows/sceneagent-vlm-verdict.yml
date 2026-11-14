@@ -6,20 +6,31 @@
 # run (the review_run input) and uploads vlm_verdicts.json. That file is then
 # committed to the branch as sceneagent/verdicts/vlm_verdicts.json, so the model's output is
 # reviewed before the gpu-smoke "review_vlm" choice applies it on the box.
+#
+# KAN-56 "objects" mode: Gemini names the objects in one video (a repo path
+# or an https URL) and the runner uploads verdicts/objects/<sha256>.json for
+# that video's bytes. Committed, it is the video's detector prompt on the box
+# (sceneagent/scene_objects.py). It needs no review_run.
 name: sceneagent-vlm-verdict
 
 on:
   workflow_dispatch:
     inputs:
       review_run:
-        description: sceneagent-gpu-smoke run id whose sheets are judged
+        description: sceneagent-gpu-smoke run id whose sheets are judged (retry and accept modes)
         type: string
-        required: true
+        required: false
+        default: ""
       mode:
-        description: "retry: pick each object's retry from review_sheets.zip; accept: judge each retry's before/after pair from review_pairs.zip"
+        description: "retry: pick each object's retry from review_sheets.zip; accept: judge each retry's before/after pair from review_pairs.zip; objects: name one video's objects"
         type: choice
-        options: [retry, accept]
+        options: [retry, accept, objects]
         default: retry
+      video:
+        description: "objects mode: a repo-relative video path or an https URL"
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -32,6 +43,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check the run id is a number
+        if: inputs.mode != 'objects'
         env:
           REVIEW_RUN: ${{ inputs.review_run }}
         run: |
@@ -48,12 +60,35 @@ jobs:
           python-version: "3.11"
 
       - name: Download the review sheets
+        if: inputs.mode != 'objects'
         uses: actions/download-artifact@v4
         with:
           name: sceneagent-fruits-smoke
           run-id: ${{ inputs.review_run }}
           github-token: ${{ github.token }}
           path: review-input
+
+      - name: Fetch the video
+        if: inputs.mode == 'objects'
+        env:
+          VIDEO: ${{ inputs.video }}
+        run: |
+          set -euo pipefail
+          mkdir -p video-input
+          case "$VIDEO" in
+            https://*)
+              printf '%s' "$VIDEO" | grep -Eq '^https://[A-Za-z0-9._~/%-]+$'
+              curl -sSfL --max-time 300 --max-filesize 1000000000 -o video-input/video "$VIDEO"
+              ;;
+            *)
+              printf '%s' "$VIDEO" | grep -Eq '^[A-Za-z0-9_][A-Za-z0-9_./-]*$'
+              case "$VIDEO" in *..*) echo "no .. in a repo path" >&2; exit 1 ;; esac
+              test -f "$VIDEO"
+              cp "$VIDEO" video-input/video
+              ;;
+          esac
+          command -v ffmpeg >/dev/null || { sudo apt-get update && sudo apt-get install -y ffmpeg; }
+          ls -l video-input/video
 
       - name: Gemini verdict per object
         env:
@@ -62,7 +97,9 @@ jobs:
           VERDICT_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          if [ "$VERDICT_MODE" = "accept" ]; then
+          if [ "$VERDICT_MODE" = "objects" ]; then
+            python -m sceneagent.scene_objects propose --video video-input/video --out vlm-out/objects
+          elif [ "$VERDICT_MODE" = "accept" ]; then
             python -m sceneagent.vlm_review --mode accept --pairs review-input/review_pairs.zip --candidates review-input/candidates.json --out vlm-out/accept_verdicts.json --source-run "$REVIEW_RUN"
           else
             python -m sceneagent.vlm_review --sheets review-input/review_sheets.zip --out vlm-out/vlm_verdicts.json --source-run "$REVIEW_RUN" --review-json review-input/bin_review.json

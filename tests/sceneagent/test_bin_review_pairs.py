@@ -186,7 +186,7 @@ def test_round_two_runs_on_the_box_from_committed_verdicts():
 
 def test_the_verdict_workflow_mode_is_a_fixed_choice_in_one_step():
     text = VERDICT_WORKFLOW.read_text(encoding="utf-8")
-    assert "options: [retry, accept]" in text
+    assert "options: [retry, accept, objects]" in text
     assert re.findall(r"secrets\.([A-Z_]+)", text) == ["GEMINI_API_KEY"]
     assert "VERDICT_MODE: ${{ inputs.mode }}" in text
     assert "--mode accept --pairs review-input/review_pairs.zip" in text

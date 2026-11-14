@@ -35,8 +35,8 @@ def main(argv=None):
         "--prompt",
         default=None,
         help=(
-            "Phrases for the video pipeline. A video whose name is in "
-            "video_run.PROMPTS uses that phrase list when this is omitted."
+            "Phrases for the video pipeline. A video with a committed objects "
+            "verdict for its bytes (scene_objects.py) uses that when omitted."
         ),
     )
     parser.add_argument(
@@ -69,10 +69,13 @@ def main(argv=None):
     if args.capture.suffix.lower() == ".mp4":
         from sceneagent import video_run
 
-        # KAN-52 dc1: a known video (or an explicit prompt) is the same stage
+        # KAN-52 dc1: a video with a prompt (given, or a committed verdict for
+        # its bytes, KAN-56) runs the same stage
         # list and output directory as ``python -m sceneagent.video_run``.
         # Other mp4s stay on the phase-1 sampler.
-        prompt = args.prompt or video_run.PROMPTS.get(args.capture.stem)
+        from sceneagent.scene_objects import lookup_prompt
+
+        prompt = args.prompt or lookup_prompt(args.capture)
         if prompt:
             if args.fps != 1 or args.max_frames != 16 or args.no_color_calibration:
                 parser.error(
