@@ -198,6 +198,27 @@ def write_urdf(
     return "\n".join(lines)
 
 
+def transfer_colours(target_vertices: np.ndarray, source) -> np.ndarray | None:
+    """RGBA per target vertex from the nearest source vertex, or None.
+
+    PartSAM's part meshes carry no colour; the SAM 3D mesh they were cut from
+    does. Both are the same object in the same orientation but different
+    scale and offset, so each is normalised to its own bounding box first.
+    """
+    colours = getattr(getattr(source, "visual", None), "vertex_colors", None)
+    if colours is None or len(colours) != len(source.vertices):
+        return None
+    from scipy.spatial import cKDTree
+
+    def unit(v: np.ndarray, ref: np.ndarray) -> np.ndarray:
+        lo, hi = ref.min(axis=0), ref.max(axis=0)
+        return (v - (lo + hi) / 2) / float(np.max(hi - lo))
+
+    src = np.asarray(source.vertices, float)
+    _, nearest = cKDTree(unit(src, src)).query(unit(target_vertices, target_vertices))
+    return np.asarray(colours)[nearest]
+
+
 def prepare(
     parts_dir: Path,
     proposal_path: Path,
@@ -217,6 +238,22 @@ def prepare(
         "body": trimesh.util.concatenate([meshes[n] for n in body]),
         "lid": trimesh.util.concatenate([meshes[n] for n in lid]),
     }
+    # The scan's colours, so a reviewer can tell front from back (the label).
+    source_path = run / "sam3d" / f"object_{object_number}.glb"
+    coloured = False
+    if source_path.is_file():
+        source = trimesh.load(source_path, force="mesh", process=False)
+        both = np.concatenate([np.asarray(m.vertices) for m in links.values()])
+        rgba = transfer_colours(both, source)
+        if rgba is not None:
+            start = 0
+            for mesh in links.values():
+                count = len(mesh.vertices)
+                mesh.visual = trimesh.visual.ColorVisuals(
+                    mesh, vertex_colors=rgba[start : start + count]
+                )
+                start += count
+            coloured = True
     placed = json.loads((run / "bin_score.json").read_text(encoding="utf-8"))["icp"][
         "objects"
     ]
@@ -234,8 +271,11 @@ def prepare(
         "type": joint["type"],
         "axis": [float(v) for v in axis],
         "pivot_m": [float(v) for v in pivot],
-        "lower": float(joint["lower"]),
-        "upper": float(joint["upper"]),
+        # A hinge's limits are radians; a slide's are part units, so metres here.
+        "lower": float(joint["lower"])
+        * (scale if joint["type"] == "prismatic" else 1.0),
+        "upper": float(joint["upper"])
+        * (scale if joint["type"] == "prismatic" else 1.0),
         "source": proposal.get("source"),
         "rationale": joint.get("rationale"),
         "scale_m_per_unit": scale,
@@ -249,6 +289,7 @@ def prepare(
         "lid_parts": lid,
         "grouping": why,
         "extents_m": {k: [float(v) for v in m.extents] for k, m in links.items()},
+        "colours_from": str(source_path) if coloured else None,
     }
     name = (name or f"object_{object_number}").replace(" ", "_")
     urdf_path = out / f"{name}.urdf"

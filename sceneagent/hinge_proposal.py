@@ -25,8 +25,13 @@ def propose_articulation(
     objects: Sequence[Mapping[str, Any]],
     frames: Sequence[bytes],
     client: Any,
+    notes: str | None = None,
 ) -> dict[str, Any]:
-    """Propose joints for each object. ``frames`` are image bytes, 2 to 4."""
+    """Propose joints for each object. ``frames`` are image bytes, 2 to 4.
+
+    ``notes`` is what a reviewer rejected in an earlier proposal (the
+    articulation loop's QA); it goes in the first prompt as the rejection.
+    """
     _require_frames(frames)
     records: list[dict[str, Any]] = []
     for obj in objects:
@@ -42,7 +47,7 @@ def propose_articulation(
                 }
             )
             continue
-        records.append(_one_object(obj, parts, frames, client))
+        records.append(_one_object(obj, parts, frames, client, notes))
     return {"source": SOURCE, "objects": records}
 
 
@@ -68,9 +73,11 @@ def prompt_for(
     return "\n".join(lines)
 
 
-def _one_object(obj, parts, frames, client) -> dict[str, Any]:
+def _one_object(obj, parts, frames, client, notes=None) -> dict[str, Any]:
     name = str(obj.get("name"))
-    reply = safe_generate_images(client, prompt_for(name, parts), frames)
+    reply = safe_generate_images(
+        client, prompt_for(name, parts, rejected=notes), frames
+    )
     model_id = reply.get("model_id")
     failure = call_failed(reply)
     if failure is not None:

@@ -113,7 +113,7 @@ def test_the_sweep_opens_and_closes_over_four_seconds():
 def test_obj_faces_are_triangulated(tmp_path):
     path = tmp_path / "q.obj"
     path.write_text("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1/1 2/2 3/3 4/4\n")
-    verts, faces = drive.read_obj(path)
+    verts, faces, _colours = drive.read_obj(path)
     assert len(verts) == 4 and faces == [(0, 1, 2), (0, 2, 3)]
 
 
@@ -140,3 +140,9 @@ def test_partsam_labels_become_part_meshes_and_crumbs_are_listed(tmp_path):
     written = json.loads((tmp_path / "parts.json").read_text())
     assert written["parts"][0]["bbox_max"][2] == pytest.approx(0.5)
     assert (tmp_path / "parts" / "part_0.glb").is_file()
+
+
+def test_a_slide_is_a_prismatic_usd_joint_with_metre_limits():
+    assert drive.joint_name({"type": "prismatic"}) == "slide"
+    assert drive.joint_name({"type": "revolute"}) == "hinge"
+    assert drive.GAINS["prismatic"][0] > drive.GAINS["revolute"][0]
