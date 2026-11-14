@@ -331,13 +331,18 @@ def draw_masks_tile(
 def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
     """The masks stage's review image from its own outputs; returns the PNG path.
 
-    Reads ``masks/detections.json``, ``masks/<view>.npz`` and ``images/<view>``
-    as :mod:`sceneagent.mask_worker` writes them. Views are taken in name
-    order so the same run always draws the same image.
+    Reads ``masks/detections.json``, ``masks/<view>.npz`` and the views they
+    were drawn on, from the scene's own view folder (``scene.json``
+    ``view_dir``: ``images/`` for the bin, ``mask_views/`` for a video), the
+    folder :mod:`sceneagent.bin_masks` masked. Views are taken in name order
+    so the same run always draws the same image.
     """
     from PIL import Image
 
+    from sceneagent.bin_run import load_scene
+
     out = Path(out)
+    view_dir = out / load_scene(out).view_dir
     detections = json.loads(
         (out / "masks" / "detections.json").read_text(encoding="utf-8")
     )
@@ -348,7 +353,7 @@ def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
             key=lambda d: d["mask_index"],
         )
         stack = np.load(out / "masks" / f"{Path(view).stem}.npz")["masks"]
-        with Image.open(out / "images" / view) as handle:
+        with Image.open(view_dir / view) as handle:
             photo = np.array(handle.convert("RGB"))
         labels = [str(d.get("phrase", "")) for d in kept]
         tiles.append(draw_masks_tile(photo, stack[: len(kept)], labels))

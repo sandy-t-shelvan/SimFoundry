@@ -181,6 +181,20 @@ def test_the_masks_review_image_outlines_each_kept_mask(tmp_path):
         )
 
 
+def test_the_masks_image_reads_the_scene_s_own_view_folder(tmp_path):
+    """A video's masks are drawn on mask_views/, not images/ (scene.json view_dir)."""
+    import dataclasses
+
+    from sceneagent.bin_run import BIN_SCENE, VIDEO_MASK_DIR, write_scene
+
+    out = _masks_run(tmp_path)
+    (out / "images").rename(out / VIDEO_MASK_DIR)
+    with pytest.raises(FileNotFoundError):
+        sc.render_masks(out)  # no scene.json: the bin, whose views are images/
+    write_scene(out, dataclasses.replace(BIN_SCENE, view_dir=VIDEO_MASK_DIR))
+    assert sc.render_masks(out) == out / "review_steps" / "masks.png"
+
+
 def test_the_cli_judges_a_zip_with_an_injected_harness(tmp_path):
     out = _masks_run(tmp_path)
     assert sc.main(["render-masks", "--out", str(out)]) == 0
