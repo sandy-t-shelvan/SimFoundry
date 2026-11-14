@@ -92,11 +92,21 @@ def verify_package(directory) -> None:
 
 def _files(run: Path):
     found = list(_FILES)
+    physics = run / "physics"
+    # Physics records exist only for objects that passed placement and were
+    # exported. Once there are any, a mesh without one is a rejected object:
+    # the scene leaves it out, so its asset would be an orphan.
+    exported = (
+        {record.stem for record in physics.glob("object_*.json")}
+        if physics.is_dir()
+        else set()
+    )
     sam = run / "sam3d"
     if sam.is_dir():
         for glb in sorted(sam.glob("object_*.glb")):
+            if exported and glb.stem not in exported:
+                continue
             found.append((str(glb.relative_to(run)), f"assets/{glb.stem}/mesh.glb"))
-    physics = run / "physics"
     if physics.is_dir():
         for record in sorted(physics.glob("object_*.json")):
             found.append(

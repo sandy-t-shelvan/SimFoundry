@@ -56,3 +56,15 @@ def test_the_manifest_matches_the_bytes(tmp_path):
     usda = next(item for item in document["files"] if item["path"] == "scene.usda")
     assert usda["size"] == 1
     assert len(usda["sha256"]) == 64
+
+
+def test_a_mesh_rejected_by_placement_is_not_packaged(tmp_path):
+    run = tmp_path / "run"
+    (run / "sam3d").mkdir(parents=True)
+    (run / "physics").mkdir()
+    for k in (0, 3):
+        (run / "sam3d" / f"object_{k}.glb").write_bytes(b"glb")
+    (run / "physics" / "object_0.json").write_text("{}\n", encoding="utf-8")
+    names = [item["path"] for item in build_package(run, tmp_path / "pkg")["files"]]
+    assert "assets/object_0/mesh.glb" in names
+    assert "assets/object_3/mesh.glb" not in names
