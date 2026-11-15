@@ -388,6 +388,134 @@ def test_the_masks_retry_runs_the_mask_stage_with_the_critics_prompt(tmp_path):
     assert line["attempt"] == 1 and line["critic_note"] == "the black panel is outlined"
 
 
+def test_a_mask_retry_rejects_later_stages_so_a_resume_rebuilds_them(tmp_path):
+    from sceneagent import bin_masks
+    from sceneagent.video_run import STAGES
+
+    out = tmp_path / "video"
+    (out / "mask_views").mkdir(parents=True)
+    (out / "mask_views" / "0001.jpg").write_bytes(b"x")
+    (out / "scene.json").write_text(
+        json.dumps(
+            {
+                "source": "simfoundry_example_video",
+                "name": "V",
+                "ledger_name": "V",
+                "views": 1,
+                "input_item": "video",
+                "view_dir": "mask_views",
+                "min_masked_views": 1,
+                "ground_truth": False,
+                "prompt": "block . mailbox .",
+            }
+        )
+    )
+    later = [item for name, items in STAGES if name != "poses" for item in items]
+    later = later[later.index("SAM masks") + 1 :]
+    (out / "ledger.json").write_text(
+        json.dumps(
+            {
+                "scene_name": "V",
+                "entries": [
+                    {"item": "video", "decision": "accept"},
+                    {"item": "COLMAP camera poses", "decision": "accept"},
+                    {"item": "full-scene splat", "decision": "accept"},
+                    {"item": "SAM masks", "decision": "accept"},
+                    *[{"item": item, "decision": "accept"} for item in later],
+                    {"item": "bin score", "decision": "accept"},
+                    {"item": "step review (masks)", "decision": "reject"},
+                ],
+            }
+        )
+    )
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    def runner(argv, **kwargs):
+        if "sceneagent.mask_worker" in argv:
+            (out / "masks").mkdir(exist_ok=True)
+            (out / "masks" / "detections.json").write_text(
+                json.dumps({"0001.jpg": [{"phrase": "mailbox", "kept": True}]})
+            )
+        return Done()
+
+    assert (
+        bin_masks.run_bin_masks(
+            out,
+            runner=runner,
+            weights=dict,
+            prompt="mailbox .",
+            critic_note="the floor was outlined",
+        )
+        == 0
+    )
+    decisions = {}
+    for entry in json.loads((out / "ledger.json").read_text())["entries"]:
+        decisions[entry["item"]] = entry["decision"]
+    assert decisions["video"] == "accept"
+    assert decisions["COLMAP camera poses"] == "accept"
+    assert decisions["full-scene splat"] == "accept"
+    assert decisions["SAM masks"] == "accept"
+    assert decisions["step review (masks)"] == "reject"
+    for item in (*later, "bin score"):
+        assert decisions[item] == "reject", item
+
+
+def test_a_mask_run_that_is_not_a_critic_retry_keeps_later_accepts(tmp_path):
+    from sceneagent import bin_masks
+
+    out = tmp_path / "video"
+    (out / "mask_views").mkdir(parents=True)
+    (out / "mask_views" / "0001.jpg").write_bytes(b"x")
+    (out / "scene.json").write_text(
+        json.dumps(
+            {
+                "source": "simfoundry_example_video",
+                "name": "V",
+                "ledger_name": "V",
+                "views": 1,
+                "input_item": "video",
+                "view_dir": "mask_views",
+                "min_masked_views": 1,
+                "ground_truth": False,
+                "prompt": "block .",
+            }
+        )
+    )
+    (out / "ledger.json").write_text(
+        json.dumps(
+            {
+                "scene_name": "V",
+                "entries": [
+                    {"item": "SAM masks", "decision": "accept"},
+                    {"item": "Gaussian association", "decision": "accept"},
+                ],
+            }
+        )
+    )
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    def runner(argv, **kwargs):
+        if "sceneagent.mask_worker" in argv:
+            (out / "masks").mkdir(exist_ok=True)
+            (out / "masks" / "detections.json").write_text(
+                json.dumps({"0001.jpg": [{"phrase": "block", "kept": True}]})
+            )
+        return Done()
+
+    assert bin_masks.run_bin_masks(out, runner=runner, weights=dict) == 0
+    decisions = {
+        entry["item"]: entry["decision"]
+        for entry in json.loads((out / "ledger.json").read_text())["entries"]
+    }
+    assert decisions["Gaussian association"] == "accept"
+
+
 def _ply(path, xyz):
     xyz = np.asarray(xyz, dtype=np.float32)
     header = (

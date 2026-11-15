@@ -228,7 +228,9 @@ def run_bin_masks(
     views (``scene.json``). ``prompt`` and ``critic_note`` are the step
     critic's retry (:func:`sceneagent.step_critic.review_and_retry`): the
     prompt replaces the scene's, and both are recorded in the evidence and
-    the ledger line.
+    the ledger line. Once that retry has started the mask worker, every later
+    stage the ledger still accepts is rejected: those stages describe the
+    masks this call just replaced, and a resume would otherwise skip them.
     """
     out, data = Path(out), Path(data)
     scene = load_scene(out)
@@ -328,12 +330,50 @@ def run_bin_masks(
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
     entries.append(entry)
+    # The worker writes into the existing masks directory. Later stages that
+    # still say accept would be skipped on resume and would keep describing
+    # the masks this retry replaced.
+    if retry and evidence.get("worker"):
+        _reject_stale_stages(entries)
     ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     (out / "masks_evidence.json").write_text(
         json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
     )
     return 0 if entry["decision"] == "accept" else 1
+
+
+def _reject_stale_stages(entries: list[Any]) -> None:
+    """Reject later stages whose last ledger line is still an accept.
+
+    ``video_run.accepted`` reads the last line per item, so appending a reject
+    makes a resume rebuild association onward. Stages before masks, and a
+    stage that was already a reject, are left as they are.
+    """
+    from sceneagent.video_run import STAGES
+
+    later: list[str] = []
+    after_masks = False
+    for name, items in STAGES:
+        if name == "masks":
+            after_masks = True
+            continue
+        if after_masks:
+            later.extend(items)
+    # Placement also records this, beside "ICP residuals", for a ground-truth bin.
+    later.append("bin score")
+    latest = {
+        entry.get("item"): entry.get("decision")
+        for entry in entries
+        if isinstance(entry, dict)
+    }
+    reason = (
+        "masks were re-run by the step critic; this stage still describes "
+        "the previous masks"
+    )
+    for item in later:
+        if latest.get(item) == "accept":
+            entries.append({"item": item, "decision": "reject", "reason": reason})
 
 
 def main(argv: list[str] | None = None) -> int:
