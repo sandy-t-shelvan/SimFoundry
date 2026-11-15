@@ -14,8 +14,8 @@ the PutMarkerInCup run ``/workspace/runs/pmic-gemini-e2e1``, which is read,
 not written:
 
 - the object is the marker, a box of that run's exported size
-  (``export_evidence.json`` ``object_boxes.object_2``) and mass
-  (``export/scene_settle.usda`` ``physics:mass``);
+  (``export_evidence.json`` ``object_boxes.object_2``) and the pipeline's
+  mass for it (``MARKER_MASS_SOURCE``: density x placed volume, KAN-40);
 - the target region is the paper cup's exported box, standing on the table,
   at the cup's offset from the marker in that export. No cup mesh is loaded,
   so nothing physically holds the marker inside the region;
@@ -69,7 +69,11 @@ START_YAW_DEG = 15.0
 # Marker and paper cup from the PutMarkerInCup export. The xy offset is the
 # difference of the two prims' xform translates, rounded to a millimetre.
 MARKER_SIZE_M = (0.133, 0.025, 0.023)  # gate-pmic-e2e1 export, object_2
-MARKER_MASS_KG = 0.265
+# KAN-40: the physics stage's mass for that marker, density x the volume its
+# placed mesh encloses. It was 0.265, the prior's log-mass slot, which does
+# not see metric size; that marker slipped from the gripper 10/10 (KAN-27).
+MARKER_MASS_KG = 0.0203
+MARKER_MASS_SOURCE = "/workspace/runs/kan40-mass-pmic1/physics/object_2.json"
 CUP_SIZE_M = (0.094, 0.096, 0.095)
 CUP_FROM_MARKER_XY_M = (0.059, -0.243)
 # Ours: where the marker starts in front of the arm's base.
@@ -148,6 +152,7 @@ def scene_spec(cup_mesh: Path | str | None = None) -> dict[str, Any]:
             "table_z_m": table_z,
             "notes": [
                 "object: a box of the marker's exported size and mass, not its mesh",
+                f"marker mass: {MARKER_MASS_SOURCE} (density x placed volume)",
                 (
                     "target: the scanned paper cup mesh as a static triangle collider, "
                     "decimated for the collider; success is the marker's centre inside "
@@ -169,6 +174,7 @@ def scene_spec(cup_mesh: Path | str | None = None) -> dict[str, Any]:
         "table_z_m": table_z,
         "notes": [
             "object: a box of the marker's exported size and mass, not its mesh",
+            f"marker mass: {MARKER_MASS_SOURCE} (density x placed volume)",
             (
                 "target: the paper cup's exported box as a region on the table; "
                 "no cup mesh, so nothing holds the marker in"
