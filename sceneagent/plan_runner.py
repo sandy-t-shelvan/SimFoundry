@@ -9,7 +9,8 @@ for the VLM and the agents). The paper's 60.75% bin number is with Codex as
 the harness, so anything this plan produces is Gemini's result, not that one.
 
     python -m sceneagent.plan_runner plan --out-dir vlm-out [--source-run RUN]
-    python -m sceneagent.plan_runner run --plan sceneagent/plans/harness_plan.json --out OUT
+    python -m sceneagent.plan_runner run --plan sceneagent/plans/harness_plan.json --out OUT \
+        [--ledger RUN/ledger.json]
 
 ``plan`` runs on the GitHub runner, where ``GEMINI_API_KEY`` is: one call
 with a response schema, the reply checked by ``orchestrator.validate_plan``
@@ -24,6 +25,14 @@ same rules, the prompt it was asked with), runs the stages in the model's
 order, and after each stage writes ``procedures/<stage>.md``: the model's
 procedure plus what the run did. ``orchestrator.later_conversion`` reads
 those files back.
+
+``--ledger`` gives ``run`` its tools from a finished ``video_run`` ledger:
+each plan step is accepted only when the box item that evidences it
+(``LEDGER_EVIDENCE``) is an accept there. Nothing is rerun, and a step no
+box stage produces stays a reject that says so. The committed
+``sceneagent/plans/harness_plan.json`` and ``harness_transcript.json`` are
+the ``plan.json`` and ``transcript.json`` of CI run 43443313519's
+``sceneagent-mvp-review`` artifact, byte for byte.
 """
 
 from __future__ import annotations
@@ -109,6 +118,19 @@ PLAN_SCHEMA: dict[str, Any] = {
 }
 
 Tool = Callable[[dict[str, Any]], dict[str, Any]]
+
+# Plan step -> the ``video_run.STAGES`` ledger items that evidence it. A step
+# is accepted only when every item is an accept. The inspector's procedure
+# asks for a settled scene, so it needs the settle as well as the views.
+# partsam, cubepart, articulate and the MuJoCo steps have no box stage yet.
+LEDGER_EVIDENCE: dict[str, tuple[str, ...]] = {
+    "sam3d": ("SAM 3D meshes",),
+    "icp": ("ICP residuals",),
+    # physics_props writes the equation (2) material vote into this record.
+    "material_vote": ("§3.4 properties",),
+    "isaac_mesh": ("USD physics export",),
+    "isaac_inspector": ("Isaac Lab settle", "inspection views"),
+}
 
 
 def prompt_sha256() -> str:
@@ -254,6 +276,75 @@ def _procedure_with_run(step: str, body: str, entries: list[dict[str, Any]]) -> 
     return "\n".join(lines) + "\n"
 
 
+def _scalars(entry: dict[str, Any]) -> dict[str, Any]:
+    """The ledger entry without its long lists (frame names, attempts)."""
+    return {
+        key: value
+        for key, value in entry.items()
+        if isinstance(value, (str, int, float, bool)) or value is None
+    }
+
+
+def ledger_tools(ledger_path: Path | str) -> dict[str, Tool]:
+    """Replay tools for every allowed step from a finished run's ledger.
+
+    The last entry for an item is its decision, as ``video_run.accepted``
+    reads it. A step is ok only when each of its ``LEDGER_EVIDENCE`` items
+    is an accept; a missing item, a non-accept, or a step with no box item
+    is a reject whose reason names it. No tool reruns anything.
+    """
+    source = Path(ledger_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    entries = payload.get("entries") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError(f"{source} is not a ledger (no entries list)")
+    latest = {e.get("item"): e for e in entries if isinstance(e, dict)}
+
+    def replay(step: str) -> Tool:
+        def tool(_context: dict[str, Any]) -> dict[str, Any]:
+            items = LEDGER_EVIDENCE.get(step)
+            if not items:
+                return {
+                    "ok": False,
+                    "artifact": None,
+                    "reason": f"no box stage produces {step}; the ledger has no item for it",
+                    "detail": {"source_ledger": str(source)},
+                }
+            found = {item: latest.get(item) for item in items}
+            problems = [
+                f"{item!r} missing from the ledger"
+                if entry is None
+                else f"{item!r} is {entry.get('decision')!r}"
+                + (f" ({entry['reason']})" if entry.get("reason") else "")
+                for item, entry in found.items()
+                if entry is None or entry.get("decision") != "accept"
+            ]
+            evidence = "; ".join(
+                f"{item!r} accept"
+                + (f" ({entry['reason']})" if entry.get("reason") else "")
+                for item, entry in found.items()
+                if entry is not None and entry.get("decision") == "accept"
+            )
+            return {
+                "ok": not problems,
+                "artifact": str(source),
+                "reason": "; ".join(problems)
+                if problems
+                else f"replayed from the box ledger: {evidence}",
+                "detail": {
+                    "source_ledger": str(source),
+                    "evidence": {
+                        item: None if entry is None else _scalars(entry)
+                        for item, entry in found.items()
+                    },
+                },
+            }
+
+        return tool
+
+    return {step: replay(step) for step in ALLOWED_STEPS}
+
+
 def run_plan(
     out_dir: Path | str,
     plan: dict[str, Any],
@@ -317,6 +408,11 @@ def main(argv: list[str] | None = None, harness: Any = None) -> int:
     run_cmd = sub.add_parser("run", help="box: run a committed plan")
     run_cmd.add_argument("--plan", type=Path, required=True)
     run_cmd.add_argument("--out", type=Path, required=True)
+    run_cmd.add_argument(
+        "--ledger",
+        type=Path,
+        help="a finished video_run ledger.json whose items evidence the steps",
+    )
     args = parser.parse_args(argv)
     if args.stage == "plan":
         if args.source_run and not re.fullmatch(r"[0-9]{1,20}", args.source_run):
@@ -340,7 +436,12 @@ def main(argv: list[str] | None = None, harness: Any = None) -> int:
             )
         )
         return 0
-    summary = run_plan(args.out, load_plan(args.plan))
+    tools: dict[str, Tool] = {}
+    if args.ledger is not None:
+        if args.ledger.resolve() == (args.out / "ledger.json").resolve():
+            parser.error("--out must not hold the --ledger it replays")
+        tools = ledger_tools(args.ledger)
+    summary = run_plan(args.out, load_plan(args.plan), tools)
     print(json.dumps({"steps": summary["steps"], "entries": len(summary["entries"])}))
     return 0
 

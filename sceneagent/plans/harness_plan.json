@@ -1,0 +1,78 @@
+{
+  "mode": "plan",
+  "section": "3.1",
+  "plan_source": "harness",
+  "forced": false,
+  "model": "gemini-3.8-flash",
+  "prompt_sha256": "bdb5e5a7a0dc9ca03b4902a5e49fe58f5e56fcbf3af08e151bc551a2ae9ee505",
+  "prompt_source": "ours",
+  "vlm_calls": 1,
+  "source_run": "43370600333",
+  "harness_note": "Gemini's plan; the paper's 60.75% bin number used Codex as the harness",
+  "steps": [
+    {
+      "id": "sam3d",
+      "section": "3.3"
+    },
+    {
+      "id": "partsam",
+      "section": "3.4"
+    },
+    {
+      "id": "cubepart",
+      "section": "3.4"
+    },
+    {
+      "id": "articulate",
+      "section": "3.4"
+    },
+    {
+      "id": "icp",
+      "section": "3.3"
+    },
+    {
+      "id": "isaac_mesh",
+      "section": "3.7"
+    },
+    {
+      "id": "mujoco_mesh",
+      "section": "3.7"
+    },
+    {
+      "id": "material_vote",
+      "section": "3.4"
+    },
+    {
+      "id": "isaac_inspector",
+      "section": "3.1"
+    },
+    {
+      "id": "mujoco_load",
+      "section": "3.7"
+    }
+  ],
+  "procedures": {
+    "sam3d": "### SAM 3D\n- **Input**: Raw RGB-D captures and scene point clouds.\n- **Output**: Segmented 3D object instances.\n- **Verification**: Each distinct object receives a unique mask and non-overlapping bounding volume.",
+    "partsam": "### PartSAM\n- **Input**: Segmented 3D objects from sam3d.\n- **Output**: Part-level segmentations identifying sub-components.\n- **Verification**: Articulable sub-parts (e.g., doors, drawers) receive distinct part IDs.",
+    "cubepart": "### CubePart\n- **Input**: Part-level segmentations from partsam.\n- **Output**: Oriented bounding box primitives for collision geometry.\n- **Verification**: Primitive approximations fit the part point clouds with minimal volume error.",
+    "articulate": "### Articulate\n- **Input**: Segmented part point clouds from partsam.\n- **Output**: Kinematic tree specification including joint types, axes, and limits.\n- **Verification**: Motion bounds match physical plausibility and joints move without detachment.",
+    "icp": "### ICP\n- **Input**: Object segmentations from sam3d and reference CAD model library.\n- **Output**: 6-DoF poses aligning CAD meshes to point cloud observations.\n- **Verification**: Root mean square error (RMSE) falls below the registration threshold.",
+    "isaac_mesh": "### Isaac Mesh\n- **Input**: Aligned CAD assets and scene transforms from icp.\n- **Output**: USD scene representation with configured visual and collision meshes.\n- **Verification**: Scene assets load cleanly in Isaac Sim with valid collision bounds.",
+    "mujoco_mesh": "### MuJoCo Mesh\n- **Input**: USD and mesh models from isaac_mesh.\n- **Output**: MJCF-compatible meshes with convex decomposition hulls.\n- **Verification**: All geometries compile successfully as valid convex geoms.",
+    "material_vote": "### Material Vote\n- **Input**: Visual textures, object semantics, and sensor observations.\n- **Output**: Physical material properties (friction, mass density, restitution).\n- **Verification**: Every component is mapped to positive, physically consistent parameter values.",
+    "isaac_inspector": "### Isaac Inspector\n- **Input**: Isaac USD scene and assigned material attributes.\n- **Output**: Validation report on scene physics stability.\n- **Verification**: Scene settles under gravity with zero penetration or explosion artifacts.",
+    "mujoco_load": "### MuJoCo Load\n- **Input**: MJCF XML file, convex mesh files, and joint definitions.\n- **Output**: Fully initialized MuJoCo simulation environment.\n- **Verification**: Simulation steps forward for 100 timesteps with finite state values and no warnings."
+  },
+  "procedure_source": {
+    "sam3d": "harness",
+    "partsam": "harness",
+    "cubepart": "harness",
+    "articulate": "harness",
+    "icp": "harness",
+    "isaac_mesh": "harness",
+    "mujoco_mesh": "harness",
+    "material_vote": "harness",
+    "isaac_inspector": "harness",
+    "mujoco_load": "harness"
+  }
+}
