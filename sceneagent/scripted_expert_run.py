@@ -60,7 +60,7 @@ LEDGER_NAME = "ledger.json"
 FRAMES_DIR = "trial0_frames"
 LOGS_DIR = "phase_logs"
 VIDEO_NAME = "trial0.mp4"
-SOURCE_RUN = "/workspace/runs/pmic-gemini-e2e1"
+SOURCE_RUN = "/workspace/runs/gate-pmic-e2e1"
 
 TRIAL_SEEDS = tuple(range(10))
 START_SHIFT_M = 0.02
@@ -68,8 +68,8 @@ START_YAW_DEG = 15.0
 
 # Marker and paper cup from the PutMarkerInCup export. The xy offset is the
 # difference of the two prims' xform translates, rounded to a millimetre.
-MARKER_SIZE_M = (0.133, 0.026, 0.026)
-MARKER_MASS_KG = 0.310
+MARKER_SIZE_M = (0.133, 0.025, 0.023)  # gate-pmic-e2e1 export, object_2
+MARKER_MASS_KG = 0.265
 CUP_SIZE_M = (0.094, 0.096, 0.095)
 CUP_FROM_MARKER_XY_M = (0.059, -0.243)
 # Ours: where the marker starts in front of the arm's base.
@@ -89,12 +89,23 @@ COMMAND_SPEED_M_S = 0.35
 HELD_RISE_M = 0.03
 # Ours: after retreat the arm holds still this long before the end state is read.
 SETTLE_S = 1.0
+# The upright turn: the commanded hand orientation turns toward its target at
+# this rate, so the held object swings over instead of being flung.
+ANGULAR_SPEED_RAD_S = 1.5
+BLOCKED_S = 0.3  # lower is blocked when the fingertips stall this long
+POSTURE_GAIN = 0.05  # per step, toward the home posture, in the IK's null space only
 PHYSICS_DT_S = 1.0 / 120.0
 FRAME_EVERY_STEPS = 6
 
 
-def scene_spec() -> dict[str, Any]:
-    """The primitive scene: object box, target region and where they came from."""
+def scene_spec(cup_mesh: Path | str | None = None) -> dict[str, Any]:
+    """The scene: object box, the target, and where they came from.
+
+    With ``cup_mesh`` (the scanned paper cup, metres) the target is that mesh,
+    a static triangle collider, so the marker has to go in through the rim;
+    its box is the target the paper's success rule checks. Without it the
+    target is the cup's exported box as a region on the table.
+    """
     table_z = 0.0
     marker = {
         "name": "marker",
@@ -116,6 +127,39 @@ def scene_spec() -> dict[str, Any]:
         ],
         "size_m": list(CUP_SIZE_M),
     }
+    if cup_mesh is not None:
+        import trimesh
+
+        mesh = trimesh.load(str(cup_mesh), force="mesh", process=False)
+        size = [float(v) for v in mesh.extents]
+        target = {
+            "name": "paper cup (scanned mesh)",
+            "xyz_m": [target["xyz_m"][0], target["xyz_m"][1], table_z + size[2] / 2],
+            "size_m": size,
+            "mesh": str(cup_mesh),
+            "faces": [len(mesh.faces)],
+        }
+        return {
+            "task": "PutMarkerInCup, scanned cup",
+            "primitive": False,
+            "source_run": SOURCE_RUN,
+            "object": marker,
+            "target": target,
+            "table_z_m": table_z,
+            "notes": [
+                "object: a box of the marker's exported size and mass, not its mesh",
+                (
+                    "target: the scanned paper cup mesh as a static triangle collider, "
+                    "decimated for the collider; success is the marker's centre inside "
+                    "the cup's box at rest"
+                ),
+                "friction: PhysX default, as in the source export",
+                (
+                    "layout: the cup's offset from the marker in the source export; "
+                    "the marker's place in front of the arm is ours"
+                ),
+            ],
+        }
     return {
         "task": "PutMarkerInCup, primitive",
         "primitive": True,
@@ -237,27 +281,22 @@ def diagnose(
     """
     if judgement.get("success"):
         return None, "success"
+    # The earliest problem is charged, in phase order: a marker that was never
+    # lifted is a lift failure even if a later phase then timed out.
+    start_z = float(start_xyz[2])
+    held_after = {
+        "lift": "object not lifted: rose {:.1f} cm by the end of lift",
+        "upright": "object dropped during the upright turn: {:.1f} cm above its start",
+        "carry": "object dropped during carry: {:.1f} cm above its start",
+    }
     for entry in log:
         if entry.get("outcome") == "time limit":
             return str(entry["phase"]), "time limit: " + str(entry.get("detail", ""))
-    by_phase = {entry["phase"]: entry for entry in log}
-    start_z = float(start_xyz[2])
-    lift = by_phase.get("lift")
-    if lift is not None:
-        rise = float(lift["object_xyz_m"][2]) - start_z
-        if rise < HELD_RISE_M:
-            return (
-                "lift",
-                f"object not lifted: rose {rise * 100:.1f} cm by the end of lift",
-            )
-    carry = by_phase.get("carry")
-    if carry is not None:
-        rise = float(carry["object_xyz_m"][2]) - start_z
-        if rise < HELD_RISE_M:
-            return (
-                "carry",
-                f"object dropped during carry: {rise * 100:.1f} cm above its start",
-            )
+        phase = str(entry["phase"])
+        if phase in held_after:
+            rise = float(entry["object_xyz_m"][2]) - start_z
+            if rise < HELD_RISE_M:
+                return phase, held_after[phase].format(rise * 100)
     return "release", str(judgement.get("reason", "not a success"))
 
 
@@ -398,7 +437,27 @@ def main(argv: list[str] | None = None) -> int:
         (out / name).unlink(missing_ok=True)
     shutil.rmtree(out / FRAMES_DIR, ignore_errors=True)
     shutil.rmtree(out / LOGS_DIR, ignore_errors=True)
-    scene = scene_spec()
+    cup_mesh = (
+        Path(args[args.index("--cup-mesh") + 1]) if "--cup-mesh" in args else None
+    )
+    scene = scene_spec(cup_mesh)
+    # Diagnostic overrides, recorded in the scene so a result is never read as
+    # the pipeline's own physics.
+    overrides: dict[str, Any] = {}
+    if "--marker-mass" in args:
+        overrides["marker_mass_kg"] = float(args[args.index("--marker-mass") + 1])
+        scene["object"]["mass_kg"] = overrides["marker_mass_kg"]
+    if "--friction" in args:
+        overrides["marker_friction"] = float(args[args.index("--friction") + 1])
+        scene["object"]["friction"] = overrides["marker_friction"]
+    if "--trials" in args:
+        overrides["trials"] = int(args[args.index("--trials") + 1])
+        scene["trials"] = overrides["trials"]
+    if overrides:
+        scene["diagnostic_overrides"] = overrides
+        scene["notes"].append(
+            f"DIAGNOSTIC overrides, not the pipeline's physics: {overrides}"
+        )
     expert = _expert()
     made = expert.plan(scene["object"], scene["target"])
     if not made["graspable"]:
@@ -473,8 +532,13 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
     from isaaclab.sensors.camera import Camera, CameraCfg
     from isaaclab.utils import replace
     from isaaclab.utils.math import (
+        axis_angle_from_quat,
         quat_apply,
+        quat_conjugate,
+        quat_error_magnitude,
+        quat_from_angle_axis,
         quat_from_euler_xyz,
+        quat_mul,
         subtract_frame_transforms,
     )
     from isaaclab_assets import FRANKA_PANDA_HIGH_PD_CFG  # type: ignore[import-not-found]
@@ -491,16 +555,24 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
     light = sim_utils.DomeLightCfg(intensity=2500.0, color=(0.85, 0.85, 0.85))
     light.func("/World/Light", light)
     target = scene["target"]
-    # A visual-only patch marks the target region's footprint; it has no collider.
-    patch = sim_utils.CuboidCfg(
-        size=(target["size_m"][0], target["size_m"][1], 0.002),
-        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.1, 0.7, 0.2)),
-    )
-    patch.func(
-        "/World/target_patch",
-        patch,
-        translation=(target["xyz_m"][0], target["xyz_m"][1], 0.001),
-    )
+    if target.get("mesh"):
+        cup_usd = write_cup_usd(Path(target["mesh"]), out / "cup.usda")
+        sim_utils.UsdFileCfg(usd_path=str(cup_usd)).func(
+            "/World/Cup",
+            sim_utils.UsdFileCfg(usd_path=str(cup_usd)),
+            translation=(target["xyz_m"][0], target["xyz_m"][1], 0.0),
+        )
+    else:
+        # A visual-only patch marks the target region's footprint; it has no collider.
+        patch = sim_utils.CuboidCfg(
+            size=(target["size_m"][0], target["size_m"][1], 0.002),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.1, 0.7, 0.2)),
+        )
+        patch.func(
+            "/World/target_patch",
+            patch,
+            translation=(target["xyz_m"][0], target["xyz_m"][1], 0.001),
+        )
     robot = Articulation(replace(FRANKA_PANDA_HIGH_PD_CFG, prim_path="/World/Robot"))
     obj_spec = scene["object"]
     marker = RigidObject(
@@ -511,6 +583,12 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
                 rigid_props=sim_utils.UsdPhysicsRigidBodyCfg(),
                 mass_props=sim_utils.MassCfg(mass=float(obj_spec["mass_kg"])),
                 collision_props=sim_utils.UsdPhysicsCollisionCfg(),
+                physics_material=sim_utils.RigidBodyMaterialCfg(
+                    static_friction=float(obj_spec["friction"]),
+                    dynamic_friction=float(obj_spec["friction"]),
+                )
+                if obj_spec.get("friction") is not None
+                else None,
                 visual_material=sim_utils.PreviewSurfaceCfg(
                     diffuse_color=(0.8, 0.1, 0.1)
                 ),
@@ -555,6 +633,7 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
         device=device,
     )
     command = robot.actuators.target_command
+    home_arm = robot.data.default_joint_pos.torch[0, arm_ids].clone()
     dt = sim.get_physics_dt()
     offset = control_offset(obj_spec["size_m"])
     trials = []
@@ -581,7 +660,7 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
     def width_now() -> float:
         return float(robot.data.joint_pos.torch[0, finger_ids].sum())
 
-    for seed in TRIAL_SEEDS:
+    for seed in TRIAL_SEEDS[: int(scene.get("trials", len(TRIAL_SEEDS)))]:
         start = start_pose(seed, obj_spec)
         quat = quat_from_euler_xyz(
             torch.tensor([0.0], device=device),
@@ -619,9 +698,29 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
             torch.tensor([0.0], device=device),
             torch.tensor([yaw], device=device),
         )[0]
+        upright_quat = hand_quat  # replaced by the hand's real pose after the turn
+        if made.get("upright"):
+            # Grip the end nearer the base, so the body extends outward. Measured
+            # on this arm: joint 6's only tilt inside its limits after the lift is
+            # -90 deg, and it sends an outward-pointing body down; gripping the
+            # outer end instead needed a 195 deg turn of joint 7 first, whose
+            # swing took the fingertips 29 cm off and ran out the phase's time.
+            base_xy = robot.data.root_pos_w.torch[0, :2]
+            grasp_xy = torch.tensor(made["phases"][1]["ee_xyz_m"][:2], device=device)
+            centre_xy = torch.tensor(obj_now["xyz_m"][:2], device=device)
+            if float(torch.linalg.norm(grasp_xy - base_xy)) > float(
+                torch.linalg.norm(centre_xy - base_xy)
+            ):
+                obj_now = {**obj_now, "yaw_rad": float(obj_now["yaw_rad"]) + math.pi}
+                made = expert.plan(obj_now, target)
+            made["grip_end"] = "nearer the base"
         state = {"phases": made["phases"], "phase_index": 0, "elapsed_s": 0.0}
         _, point = hand_state()
         commanded = point.clone()
+        commanded_quat = hand_quat.clone()
+        joint_turn: dict[str, Any] | None = None  # the upright turn, in joint space
+        lowering: list[float] = []
+        turned = False
         last_width = width_now()
         log: list[dict[str, Any]] = []
         frame_dir = out / FRAMES_DIR
@@ -635,10 +734,59 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
             last_width = width
             index = int(state["phase_index"])
             phase = made["phases"][min(index, len(made["phases"]) - 1)]
+            phase_quat = (
+                upright_quat if float(phase.get("hand_pitch_rad", 0.0)) else hand_quat
+            )
+            if float(phase.get("hand_pitch_rad", 0.0)) and phase["name"] != "upright":
+                # With the object hanging straight down, turning the hand about the
+                # vertical changes nothing for the object; keep the fingers along
+                # the line from the base at this phase's spot -- the arm's natural
+                # pose there (a fixed direction contorted the arm 34 deg off during
+                # the carry) -- in whichever sense, out or in, is nearer.
+                spot = torch.tensor(phase["ee_xyz_m"][:2], device=device)
+                radial = spot - robot.data.root_pos_w.torch[0, :2]
+                approach = quat_apply(
+                    upright_quat.unsqueeze(0),
+                    torch.tensor([[0.0, 0.0, 1.0]], device=device),
+                )[0]
+                swing = math.atan2(float(radial[1]), float(radial[0])) - math.atan2(
+                    float(approach[1]), float(approach[0])
+                )
+                swing = (swing + math.pi) % (2 * math.pi) - math.pi
+                if abs(swing) > math.pi / 2:
+                    swing -= math.copysign(math.pi, swing)
+                about_z = quat_from_angle_axis(
+                    torch.tensor([swing], device=device),
+                    torch.tensor([[0.0, 0.0, 1.0]], device=device),
+                )[0]
+                phase_quat = quat_mul(about_z.unsqueeze(0), upright_quat.unsqueeze(0))[
+                    0
+                ]
+            # Blocked: commanded down during lower, but the fingertips have not
+            # come down 1 mm in the last BLOCKED_S.
+            if phase["name"] == "lower":
+                lowering.append(float(point[2]))
+                window = round(BLOCKED_S / dt)
+                blocked = (
+                    len(lowering) > window
+                    and lowering[-window - 1] - lowering[-1] < 0.001
+                    and float(point[2]) > float(phase["ee_xyz_m"][2]) + 0.002
+                )
+            else:
+                lowering.clear()
+                blocked = False
             observation = {
+                "blocked": blocked,
                 "ee_xyz_m": point.tolist(),
                 "gripper_closed": gripper_closed(width, width_speed, phase["gripper"]),
+                "pitch_error_rad": float(
+                    quat_error_magnitude(
+                        pose[3:7].unsqueeze(0), phase_quat.unsqueeze(0)
+                    )[0]
+                ),
             }
+            if phase["name"] == "upright" and not turned:
+                observation["pitch_error_rad"] = math.pi  # not done until turned
             action = expert.step(state, observation)
             if action["done"]:
                 break
@@ -656,17 +804,100 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
                 log[-1]["detail"] = (
                     f"gripper {'closed' if observation['gripper_closed'] else 'not closed'}, width {width * 1000:.1f} mm"
                     if phase["name"] in ("grasp", "release")
-                    else f"end effector {error * 1000:.1f} mm from the phase target"
+                    else f"end effector {error * 1000:.1f} mm from the phase target, "
+                    f"hand {math.degrees(observation['pitch_error_rad']):.1f} deg from its orientation"
                 )
+                try:
+                    limits = robot.data.joint_pos_limits.torch[0, arm_ids].tolist()
+                    joints = robot.data.joint_pos.torch[0, arm_ids].tolist()
+                    log[-1]["arm_joints_vs_limits_deg"] = [
+                        [
+                            round(math.degrees(q), 1),
+                            round(math.degrees(lo), 1),
+                            round(math.degrees(hi), 1),
+                        ]
+                        for q, (lo, hi) in zip(joints, limits, strict=True)
+                    ]
+                except Exception as exc:  # diagnostics only
+                    log[-1]["arm_joints_vs_limits_deg"] = f"unavailable: {exc}"
                 break
             if action["advance"]:
                 log.append(
                     _phase_entry(
-                        action["phase"], "finished", state, error, width, marker
+                        action["phase"],
+                        "finished",
+                        state,
+                        error,
+                        width,
+                        marker,
+                        [
+                            round(math.degrees(q), 1)
+                            for q in robot.data.joint_pos.torch[0, arm_ids].tolist()
+                        ],
                     )
                 )
                 state["phase_index"] = index + 1
                 state["elapsed_s"] = 0.0
+                continue
+            if phase["name"] == "upright" and not turned:
+                # A quarter turn is joint 7 then joint 6, not differential IK:
+                # under IK the same turn swung joint 5 through 166 deg into its
+                # limit while joints 6 and 7 had room.
+                if joint_turn is None:
+                    joint_turn = plan_joint_turn(
+                        robot.data.body_link_jacobian_w.torch[
+                            :, jacobian_index, :, jacobian_joints
+                        ][0],
+                        robot.data.joint_pos.torch[0, arm_ids],
+                        robot.data.joint_pos_limits.torch[0, arm_ids],
+                        marker.data.root_pos_w.torch[0] - point,
+                        torch,
+                        quat_from_angle_axis,
+                        quat_apply,
+                    )
+                    log.append(
+                        {
+                            "phase": "upright",
+                            "outcome": "joint turn",
+                            "object_xyz_m": marker.data.root_pos_w.torch[0].tolist(),
+                            **{k: v for k, v in joint_turn.items() if k != "goal"},
+                        }
+                    )
+                    if joint_turn.get("failed"):
+                        log[-1]["outcome"] = "time limit"
+                        log[-1]["detail"] = joint_turn["failed"]
+                        log[-1]["object_xyz_m"] = marker.data.root_pos_w.torch[
+                            0
+                        ].tolist()
+                        break
+                held = joint_turn["goal"].clone()
+                now = robot.data.joint_pos.torch[0, arm_ids]
+                step_rad = ANGULAR_SPEED_RAD_S * dt
+                target_cmd = joint_turn.setdefault("cmd", now.clone())
+                for joint in (6, 5):  # joint 7 first, then joint 6
+                    gap_j = float(held[joint] - target_cmd[joint])
+                    if abs(gap_j) > 1e-4:
+                        target_cmd[joint] += math.copysign(
+                            min(abs(gap_j), step_rad), gap_j
+                        )
+                        break
+                command.set_position_index(
+                    value=target_cmd.unsqueeze(0), joint_ids=arm_ids
+                )
+                command.set_position_index(
+                    value=torch.zeros((1, len(driven)), device=device), joint_ids=driven
+                )
+                if float(torch.max(torch.abs(now - held))) < math.radians(1.0):
+                    turned = True
+                    upright_quat = pose[3:7].clone()
+                    commanded_quat = upright_quat.clone()
+                    commanded = point.clone()
+                render = seed == 0 and tick % FRAME_EVERY_STEPS == 0
+                step_sim(render=render)
+                if render:
+                    frames = _save_frame(camera, dt, frame_dir, frames, png_bytes)
+                tick += 1
+                state["elapsed_s"] = float(state["elapsed_s"]) + dt
                 continue
             goal = torch.tensor(action["ee_xyz_m"], device=device)
             gap = goal - commanded
@@ -677,10 +908,28 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
                 if distance <= reach
                 else commanded + gap * (reach / distance)
             )
+            # Turn the commanded orientation toward the phase's, at a capped rate.
+            delta = axis_angle_from_quat(
+                quat_mul(
+                    phase_quat.unsqueeze(0), quat_conjugate(commanded_quat.unsqueeze(0))
+                )
+            )[0]
+            angle = float(torch.linalg.norm(delta))
+            turn_step = ANGULAR_SPEED_RAD_S * dt
+            if angle <= turn_step or angle < 1e-6:
+                commanded_quat = phase_quat.clone()
+            else:
+                partial = quat_from_angle_axis(
+                    torch.tensor([turn_step], device=device),
+                    (delta / angle).unsqueeze(0),
+                )[0]
+                commanded_quat = quat_mul(
+                    partial.unsqueeze(0), commanded_quat.unsqueeze(0)
+                )[0]
             hand_target = (
                 commanded
                 - quat_apply(
-                    hand_quat.unsqueeze(0),
+                    commanded_quat.unsqueeze(0),
                     torch.tensor([[0.0, 0.0, offset]], device=device),
                 )[0]
             )
@@ -689,7 +938,7 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
                 root_pose[:, 0:3],
                 root_pose[:, 3:7],
                 hand_target.unsqueeze(0),
-                hand_quat.unsqueeze(0),
+                commanded_quat.unsqueeze(0),
             )
             ik.set_command(torch.cat([target_b, quat_b], dim=1))
             hand_b, hand_quat_b = subtract_frame_transforms(
@@ -702,10 +951,18 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
                 :, jacobian_index, :, jacobian_joints
             ]
             arm_now = robot.data.joint_pos.torch[:, arm_ids]
-            command.set_position_index(
-                value=ik.compute(hand_b, hand_quat_b, jacobian, arm_now),
-                joint_ids=arm_ids,
-            )
+            arm_target = ik.compute(hand_b, hand_quat_b, jacobian, arm_now)
+            # The arm has 7 joints for a 6-number pose, so one "elbow" direction
+            # is free and differential IK lets it drift: under the upright turn it
+            # drifted the base to -84 deg and the elbow to +-115 deg, into joint
+            # limits. Pull toward the home posture in that free direction only;
+            # by construction it cannot move the hand off its target.
+            j = jacobian[0]
+            null = torch.eye(j.shape[1], device=device) - torch.linalg.pinv(j) @ j
+            arm_target = arm_target + (
+                null @ (POSTURE_GAIN * (home_arm - arm_now[0]))
+            ).unsqueeze(0)
+            command.set_position_index(value=arm_target, joint_ids=arm_ids)
             finger = 0.0 if action["gripper"] == "close" else 0.04
             command.set_position_index(
                 value=torch.full((1, len(driven)), finger, device=device),
@@ -768,6 +1025,97 @@ def _run_trials(out: Path, scene: dict[str, Any], sim_cfg: Any) -> None:
     )
 
 
+def plan_joint_turn(
+    jacobian, joints, limits, centre_from_grip, torch, quat_from_angle_axis, quat_apply
+) -> dict[str, Any]:
+    """Joint 7 and joint 6 targets that turn a gripped object to hang straight down.
+
+    Joint 6's world axis (read from the Jacobian) tilts the hand a quarter turn,
+    whichever way keeps it inside its limits. Before that, joint 7 turns the
+    object about its own axis so that the tilt sends the object's body (from
+    the grip toward its centre) straight down; of the equivalent angles, the
+    one inside joint 7's limits and smallest is used. A turn neither joint can
+    make is returned as ``failed``, never forced.
+    """
+    margin = math.radians(5.0)
+    w6 = jacobian[3:6, 5] / torch.linalg.norm(jacobian[3:6, 5])
+    w7 = jacobian[3:6, 6] / torch.linalg.norm(jacobian[3:6, 6])
+    q = joints.clone()
+    lo, hi = limits[:, 0], limits[:, 1]
+    tilts = [
+        d
+        for d in (-math.pi / 2, math.pi / 2)
+        if float(lo[5]) + margin <= float(q[5]) + d <= float(hi[5]) - margin
+    ]
+    if not tilts:
+        return {
+            "failed": f"joint 6 at {math.degrees(float(q[5])):.0f} deg cannot tilt 90 deg"
+        }
+    d6 = tilts[0]
+    down = torch.tensor([[0.0, 0.0, -1.0]], device=q.device)
+    undo = quat_from_angle_axis(torch.tensor([-d6], device=q.device), w6.unsqueeze(0))
+    need = quat_apply(undo, down)[0]  # the body direction the tilt sends down
+    body = centre_from_grip / torch.linalg.norm(centre_from_grip)
+    b = body - (body @ w7) * w7
+    n = need - (need @ w7) * w7
+    b, n = b / torch.linalg.norm(b), n / torch.linalg.norm(n)
+    theta = math.atan2(float(torch.dot(w7, torch.linalg.cross(b, n))), float(b @ n))
+    turns = [
+        theta + k * 2 * math.pi
+        for k in (-1, 0, 1)
+        if float(lo[6]) + margin
+        <= float(q[6]) + theta + k * 2 * math.pi
+        <= float(hi[6]) - margin
+    ]
+    if not turns:
+        return {
+            "failed": f"joint 7 at {math.degrees(float(q[6])):.0f} deg cannot turn {math.degrees(theta):.0f} deg"
+        }
+    d7 = min(turns, key=abs)
+    goal = q.clone()
+    goal[6] = q[6] + d7
+    goal[5] = q[5] + d6
+    return {
+        "goal": goal,
+        "joint6_deg": round(math.degrees(d6), 1),
+        "joint7_deg": round(math.degrees(d7), 1),
+    }
+
+
+def write_cup_usd(mesh_path: Path, usd_path: Path) -> Path:
+    """The scanned cup as a static triangle collider: centred, its base at z = 0.
+
+    No rigid body, so PhysX treats it as static and a triangle mesh (not a
+    convex hull) is allowed -- the hull would fill the cup in.
+    """
+    import trimesh
+    from pxr import Gf, Usd, UsdGeom, UsdPhysics, Vt  # type: ignore[import-not-found]
+
+    mesh = trimesh.load(str(mesh_path), force="mesh", process=False)
+    v = mesh.vertices.copy()
+    lo, hi = v.min(axis=0), v.max(axis=0)
+    v[:, 0] -= (lo[0] + hi[0]) / 2
+    v[:, 1] -= (lo[1] + hi[1]) / 2
+    v[:, 2] -= lo[2]
+    stage = Usd.Stage.CreateNew(str(usd_path))
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    root = UsdGeom.Xform.Define(stage, "/Cup")
+    stage.SetDefaultPrim(root.GetPrim())
+    geom = UsdGeom.Mesh.Define(stage, "/Cup/mesh")
+    geom.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*map(float, p)) for p in v]))
+    geom.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(mesh.faces)))
+    geom.CreateFaceVertexIndicesAttr(
+        Vt.IntArray([int(i) for f in mesh.faces for i in f])
+    )
+    geom.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(0.92, 0.92, 0.9)]))
+    geom.CreateDoubleSidedAttr(True)
+    UsdPhysics.CollisionAPI.Apply(geom.GetPrim())
+    UsdPhysics.MeshCollisionAPI.Apply(geom.GetPrim()).CreateApproximationAttr("none")
+    stage.GetRootLayer().Save()
+    return usd_path
+
+
 def _phase_entry(
     phase: str,
     outcome: str,
@@ -775,6 +1123,7 @@ def _phase_entry(
     error: float,
     width: float,
     marker: Any,
+    arm_joints: list[float] | None = None,
 ) -> dict[str, Any]:
     return {
         "phase": phase,
@@ -783,6 +1132,7 @@ def _phase_entry(
         "ee_error_m": error,
         "gripper_width_m": width,
         "object_xyz_m": marker.data.root_pos_w.torch[0].tolist(),
+        "arm_joints_deg": arm_joints if arm_joints is not None else None,
     }
 
 

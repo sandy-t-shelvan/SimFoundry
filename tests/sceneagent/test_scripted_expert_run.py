@@ -181,3 +181,20 @@ def test_the_box_script_loads_the_controller_by_path_without_isaac():
     lines = result.stdout.split()
     assert Path(lines[0]) == script.parent / "scripted_expert.py"
     assert lines[1] == "False"
+
+
+def test_a_marker_never_lifted_is_charged_to_lift_not_to_a_later_timeout():
+    log = [
+        {"phase": "grasp", "outcome": "finished", "object_xyz_m": [0.45, 0.12, 0.011]},
+        {"phase": "lift", "outcome": "finished", "object_xyz_m": [0.45, 0.12, 0.014]},
+        {
+            "phase": "upright",
+            "outcome": "time limit",
+            "detail": "end effector 0.5 mm",
+            "object_xyz_m": [0.45, 0.12, 0.012],
+        },
+    ]
+    phase, reason = run.diagnose(
+        log, [0.45, 0.12, 0.011], {"success": False, "reason": "x"}
+    )
+    assert phase == "lift" and "not lifted" in reason
