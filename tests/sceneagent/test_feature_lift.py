@@ -56,3 +56,56 @@ def test_the_spec_refuses_membership_and_a_new_encoder():
     assert "N_gaussians" in text or "896" in text
     source = inspect.getsource(__import__("sceneagent.feature_lift", fromlist=["*"]))
     assert "open_clip" not in source and "torch" not in source
+
+
+def test_an_object_vector_is_the_mean_of_its_packs_finite_feature_columns():
+    from sceneagent.feature_lift import object_vectors
+
+    pack = np.zeros((3, 912))
+    pack[:, 0] = [1.0, 3.0, np.nan]
+    pack[:, 400] = [2.0, 4.0, 6.0]
+    pack[:, 900] = 99.0  # geometry columns are not features
+    dino, clip = object_vectors(pack)
+    assert dino.shape == (384,) and clip.shape == (512,)
+    assert dino[0] == 2.0 and clip[400 - 384] == 4.0
+    pack[:, 1] = np.nan
+    with pytest.raises(ValueError, match="no finite"):
+        object_vectors(pack)
+
+
+def test_a_gaussian_in_two_sets_or_without_a_vector_stays_unassigned():
+    from sceneagent.feature_lift import assignments_from_sets
+
+    sets = {0: [0, 1], 1: [1, 2], 2: [3]}
+    owner, shared = assignments_from_sets(sets, 5, table=[0, 1])
+    assert owner.tolist() == [0, -1, 1, -1, -1] and shared == 1
+    with pytest.raises(ValueError, match="outside"):
+        assignments_from_sets({0: [5]}, 5, table=[0])
+
+
+def test_a_run_is_lifted_into_its_own_feature_file(tmp_path):
+    import json
+
+    from sceneagent.feature_lift import main, run_feature_lift
+
+    run = tmp_path / "run"
+    (run / "association").mkdir(parents=True)
+    (run / "prior_input").mkdir()
+    np.savez_compressed(
+        run / "association" / "objects.npz",
+        object_0=np.array([0, 2], np.int32),
+        object_1=np.array([1], np.int32),
+    )
+    (run / "association_evidence.json").write_text(
+        json.dumps({"inputs": {"positions": 4}})
+    )
+    np.save(run / "prior_input" / "object_0.npy", np.ones((5, 912)))
+    evidence = run_feature_lift(run, tmp_path / "dest")
+    assert evidence["shape_line"] == "features shape 4 x 896"
+    assert evidence["objects"] == {"object_0": 2}
+    assert evidence["objects_without_pack"] == ["object_1"]
+    features = np.load(tmp_path / "dest" / "features" / "features.npz")["features"]
+    assert np.isnan(features[[1, 3]]).all() and (features[[0, 2]] == 1.0).all()
+    assert not (run / "features").exists()
+    (run / "prior_input" / "object_0.npy").unlink()
+    assert main(["--out", str(run)]) == 1

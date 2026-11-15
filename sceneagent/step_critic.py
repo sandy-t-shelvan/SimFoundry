@@ -10,17 +10,31 @@ the retry. The box then logs each verdict in the ledger and re-runs a
 rejected stage once, carrying the note. Same split as the SF-19 reviewer
 (:mod:`sceneagent.vlm_review`): the key never reaches the box.
 
-    python -m sceneagent.step_critic render-masks --out OUT        # box, CPU
+    python -m sceneagent.step_critic render --out OUT              # box, CPU
     python -m sceneagent.step_critic judge --images review_steps.zip --out-dir DIR  # runner
 
 ``judge`` writes ``DIR/review/<stage>.json`` (image, verdict, reason, model)
 and ``DIR/step_verdicts.json``. ``ledger_entries`` and ``retry_requests`` turn
 committed verdicts into ledger lines and at most one retry per stage.
 
+Where the box holds the key itself (box 60254439, decision of 2026-11-13),
+``review`` closes the loop in one process, still through the harness:
+
+    python -m sceneagent.step_critic review --out OUT --stage masks  # box, GPU on retry
+
+It draws the stage's image, judges it, writes both ledger lines, and on a
+reject re-runs the stage once with the critic's note, then judges the retry.
+For masks the note can carry a revised detector prompt (``retry_prompt``);
+that is the one input of the masks stage a note can change without touching
+its thresholds, which SF-18 leaves out of scope. A reject whose note names no
+prompt is logged as a skipped retry: GroundingDINO and SAM on the same inputs
+would only draw the same masks again.
+
 The prompts are ours (the paper does not publish its critic prompts), one per
-stage, each hashed into the verdict file. The masks stage is hooked first:
-``render_masks`` draws its review image from the masks stage's own outputs.
-The other stages have prompts here; their review images come later.
+stage, each hashed into the verdict file. ``render`` draws whichever stage
+images the run directory already holds: masks from ``masks/``, Gaussians from
+the splat PLY and ``association/objects.npz``, meshes from ``sam3d/object_*.glb``,
+and parts from ``parts/object_*.npz``.
 """
 
 from __future__ import annotations
@@ -29,8 +43,10 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -44,6 +60,13 @@ REASON_CHARS = 400
 NOTE_CHARS = 200
 REVIEW_DIR = "review_steps"
 REVIEW_ZIP = "review_steps.zip"
+# ``review`` keeps each attempt's image and verdict here, so the retry does
+# not overwrite the evidence of the reject that caused it.
+CRITIC_DIR = "step_critic"
+CRITIC_RECORD = "loop.json"
+# A retry prompt is GroundingDINO phrases, as ``scene_objects`` writes them.
+RETRY_PHRASE_RE = re.compile(r"^[a-z0-9][a-z0-9 \-]{0,39}$")
+MAX_RETRY_PHRASES = 6
 # A stage re-runs at most this many times on a critic's reject (Jira SF-18:
 # "a reject triggers one retry"), so a critic that never accepts cannot loop.
 MAX_RETRIES = 1
@@ -51,8 +74,8 @@ TILE_PX = 512
 MAX_VIEWS = 6
 
 _COMMON = """\
-You are the step-runner critic in a pipeline that rebuilds a cluttered bin of
-household objects from photos. Judge only what the image shows. Answer as
+You are the step-runner critic in a pipeline that rebuilds a real scene of
+objects from photos or a video. Judge only what the image shows. Answer as
 JSON: {"verdict": "accept" or "reject", "reason": "<one short sentence naming
 what you saw>", "retry_note": "<for a reject, one short instruction for
 re-running this step; empty for an accept>"}.
@@ -64,9 +87,16 @@ PROMPTS: dict[str, str] = {
 This step segments objects in the input photos. The image tiles up to six
 photos; each detected object's mask is outlined in its own colour and
 labelled with the detector's phrase. Accept when every clearly visible object
-has one outline that follows it, and no outline covers several objects, the
-bin itself, or the floor. Reject when objects are missed, merged, split, or
-when the container or background is outlined as an object.
+has one outline that follows it, and no outline covers several objects, a
+surface the objects stand on (a bin's floor, a table), or the background.
+Reject when objects are missed, merged, split, or when a surface or the
+background is outlined as an object.
+
+For a reject, also give "retry_prompt": the detector's text prompt rewritten
+so a re-run would fix what you saw, as lowercase noun phrases each followed
+by " ." (for example "red mug . blue scissors ."), one phrase per object kind
+that should be outlined, at most six. Keep every target object named below,
+if a list is given. Leave it empty when a different prompt would not help.
 """,
     "gaussians": _COMMON
     + """
@@ -98,6 +128,8 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         "verdict": {"type": "STRING", "enum": list(VERDICTS)},
         "reason": {"type": "STRING"},
         "retry_note": {"type": "STRING"},
+        # Optional, and asked for only by the masks prompt.
+        "retry_prompt": {"type": "STRING"},
     },
     "required": ["verdict", "reason", "retry_note"],
 }
@@ -117,16 +149,60 @@ class ImageHarness(Protocol):
     ) -> str: ...
 
 
+def scene_context(out: Path | str) -> str:
+    """The scene's target objects, from the detector prompt the masks stage used.
+
+    The critic's prompts were written for a bin of clutter, where the bin is
+    not an object; on the Mailbox video it took the mailbox -- a target -- for
+    a container and told the retry to drop it. Naming the targets fixes that
+    for any scene. Empty when the run recorded no prompt.
+    """
+    path = Path(out) / "masks_evidence.json"
+    try:
+        prompt = json.loads(path.read_text(encoding="utf-8")).get("prompt") or ""
+    except (OSError, ValueError):
+        return ""
+    names = [p.strip() for p in str(prompt).split(".") if p.strip()]
+    if not names:
+        return ""
+    return (
+        "\nThis scene's target objects are: "
+        + ", ".join(names)
+        + ". Each of them is an object to outline, even when it is a container "
+        "(a mailbox, a cup, a bowl). Anything else -- the surface they stand on, "
+        "walls, furniture, other clutter -- is not.\n"
+    )
+
+
 def prompt_sha256(stage: str) -> str:
     """Hash of one stage's prompt, so a verdict names the exact wording it used."""
     return hashlib.sha256(PROMPTS[stage].encode("utf-8")).hexdigest()
+
+
+def retry_prompt(text: Any) -> str:
+    """``"a . b ."`` from a critic's suggested prompt, or ``""`` if it is not one.
+
+    Each phrase must already be a GroundingDINO phrase (lower case, letters,
+    digits, spaces, hyphens); nothing is rewritten into one, so a reply that
+    is not a prompt is not guessed into one.
+    """
+    if not isinstance(text, str):
+        return ""
+    phrases = [p.strip() for p in text.strip().split(".")]
+    phrases = [p for p in phrases if p]
+    if not phrases or len(phrases) > MAX_RETRY_PHRASES:
+        return ""
+    if not all(RETRY_PHRASE_RE.fullmatch(p) for p in phrases):
+        return ""
+    return " . ".join(dict.fromkeys(" ".join(p.split()) for p in phrases)) + " ."
 
 
 def parse_step_verdict(text: str) -> dict[str, str]:
     """The model's reply as ``{verdict, reason, retry_note}``; raise on anything else.
 
     A fenced code block is unwrapped. The verdict must be accept or reject;
-    nothing is mapped onto one. An accept carries no retry note.
+    nothing is mapped onto one. An accept carries no retry note. A reject
+    also carries ``retry_prompt`` when the reply has a well-formed one.
     """
     body = text.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", body, flags=re.DOTALL)
@@ -142,11 +218,15 @@ def parse_step_verdict(text: str) -> dict[str, str]:
     note = payload.get("retry_note")
     reason = reason.strip() if isinstance(reason, str) else ""
     note = note.strip() if isinstance(note, str) and verdict == "reject" else ""
-    return {
+    parsed = {
         "verdict": verdict,
         "reason": reason[:REASON_CHARS],
         "retry_note": note[:NOTE_CHARS],
     }
+    prompt = retry_prompt(payload.get("retry_prompt")) if verdict == "reject" else ""
+    if prompt:
+        parsed["retry_prompt"] = prompt
+    return parsed
 
 
 def read_stage_images(zip_path: Path) -> dict[str, bytes]:
@@ -164,15 +244,19 @@ def read_stage_images(zip_path: Path) -> dict[str, bytes]:
 
 
 def judge_steps(
-    images: dict[str, bytes], harness: ImageHarness, source_run: str = ""
+    images: dict[str, bytes],
+    harness: ImageHarness,
+    source_run: str = "",
+    context: str = "",
 ) -> dict[str, Any]:
     """One call per stage image. A failed call or bad reply is recorded, not guessed."""
     stages: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for stage, png in images.items():
         try:
+            prompt = PROMPTS[stage] + context
             text = harness.complete(
-                PROMPTS[stage],
+                prompt,
                 images=[(png, "image/png")],
                 response_schema=RESPONSE_SCHEMA,
             )
@@ -181,7 +265,8 @@ def judge_steps(
                     "stage": stage,
                     "image": f"{REVIEW_DIR}/{stage}.png",
                     "image_sha256": hashlib.sha256(png).hexdigest(),
-                    "prompt_sha256": prompt_sha256(stage),
+                    "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                    "scene_objects": context.strip() or None,
                     **parse_step_verdict(text),
                 }
             )
@@ -222,7 +307,11 @@ def write_stage_reviews(document: dict[str, Any], out_dir: Path) -> list[Path]:
 
 def load_step_verdicts(path: Path) -> dict[str, dict[str, str]]:
     """Committed step verdicts by stage, every field checked (box side)."""
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return verdicts_from(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def verdicts_from(payload: Any) -> dict[str, dict[str, str]]:
+    """Step verdicts by stage from a ``judge_steps`` document, every field checked."""
     if not isinstance(payload, dict) or payload.get("mode") != "step":
         raise ValueError("not a step verdict file")
     model = payload.get("model")
@@ -242,6 +331,9 @@ def load_step_verdicts(path: Path) -> dict[str, dict[str, str]]:
             "retry_note": note[:NOTE_CHARS] if isinstance(note, str) else "",
             "model": model,
         }
+        prompt = retry_prompt(item.get("retry_prompt"))
+        if prompt and item["verdict"] == "reject":
+            verdicts[stage]["retry_prompt"] = prompt
     return verdicts
 
 
@@ -268,6 +360,8 @@ def ledger_entries(
         }
         if v["verdict"] == "reject":
             entry["retry_note"] = v["retry_note"]
+            if v.get("retry_prompt"):
+                entry["retry_prompt"] = v["retry_prompt"]
         entries.append(entry)
     return entries
 
@@ -277,13 +371,116 @@ def retry_requests(
 ) -> list[dict[str, str]]:
     """The stages to re-run, each with the critic's note; never past ``MAX_RETRIES``."""
     retried = retried or {}
-    return [
-        {"stage": stage, "note": verdicts[stage]["retry_note"]}
-        for stage in STAGES
-        if stage in verdicts
-        and verdicts[stage]["verdict"] == "reject"
-        and retried.get(stage, 0) < MAX_RETRIES
-    ]
+    requests = []
+    for stage in STAGES:
+        v = verdicts.get(stage)
+        if not v or v["verdict"] != "reject" or retried.get(stage, 0) >= MAX_RETRIES:
+            continue
+        request = {"stage": stage, "note": v["retry_note"]}
+        if v.get("retry_prompt"):
+            request["prompt"] = v["retry_prompt"]
+        requests.append(request)
+    return requests
+
+
+def append_ledger(out: Path, entries: list[dict[str, Any]]) -> None:
+    """Add lines to ``out/ledger.json``, keeping every line already there."""
+    path = Path(out) / "ledger.json"
+    try:
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        ledger = {}
+    if not isinstance(ledger, dict):
+        ledger = {}
+    ledger["entries"] = [*(ledger.get("entries") or []), *entries]
+    path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
+
+
+def rerun_masks(out: Path, request: dict[str, str]) -> int:
+    """Re-run the masks stage with the critic's prompt (GPU, the box's gsam2 env)."""
+    from sceneagent.bin_masks import run_bin_masks
+
+    return run_bin_masks(out, prompt=request["prompt"], critic_note=request["note"])
+
+
+Renderer = Callable[[Path], Path]
+Rerunner = Callable[[Path, dict[str, str]], int]
+RENDERERS: dict[str, Renderer] = {"masks": lambda out: render_masks(out)}
+RERUNNERS: dict[str, Rerunner] = {"masks": rerun_masks}
+# What a stage's re-run needs from the note before it can do anything new.
+RETRY_NEEDS = {"masks": "prompt"}
+
+
+def review_and_retry(
+    out: Path | str,
+    harness: ImageHarness,
+    stage: str = "masks",
+    *,
+    render: Renderer | None = None,
+    rerun: Rerunner | None = None,
+) -> dict[str, Any]:
+    """Judge one stage, re-run it once on a reject with the note, judge the retry.
+
+    Every verdict goes to the ledger with its attempt number, and each
+    attempt's image and ``review/<stage>.json`` stay under
+    ``out/step_critic/attempt-<n>/``. Returns the record also written to
+    ``out/step_critic/loop.json``.
+    """
+    out = Path(out)
+    render = render or RENDERERS[stage]
+    rerun = rerun or RERUNNERS[stage]
+    need = RETRY_NEEDS.get(stage)
+    record: dict[str, Any] = {"stage": stage, "model": harness.model_id, "attempts": []}
+    for attempt in range(MAX_RETRIES + 1):
+        image = render(out)
+        folder = out / CRITIC_DIR / f"attempt-{attempt}"
+        (folder / REVIEW_DIR).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(image, folder / REVIEW_DIR / f"{stage}.png")
+        document = judge_steps(
+            {stage: Path(image).read_bytes()}, harness, context=scene_context(out)
+        )
+        write_stage_reviews(document, folder)
+        step: dict[str, Any] = {"attempt": attempt, "review": str(folder)}
+        record["attempts"].append(step)
+        if document["failed"]:
+            step["failed"] = document["failed"]
+            record["outcome"] = "critic call failed"
+            break
+        verdicts = verdicts_from(document)
+        step["verdict"] = verdicts[stage]["verdict"]
+        append_ledger(out, ledger_entries(verdicts, attempt))
+        requests = retry_requests(verdicts, {stage: attempt})
+        if not requests:
+            record["outcome"] = step["verdict"]
+            break
+        request = requests[0]
+        if need and not request.get(need):
+            reason = f"the critic's note names no {need}; the same inputs would give the same {stage}"
+            append_ledger(
+                out,
+                [
+                    {
+                        "item": f"step retry ({stage})",
+                        "decision": "skipped",
+                        "attempt": attempt + 1,
+                        "retry_note": request["note"],
+                        "reason": reason,
+                    }
+                ],
+            )
+            step["retry"] = {"skipped": reason}
+            record["outcome"] = "reject, retry skipped"
+            break
+        code = rerun(out, request)
+        step["retry"] = {**request, "exit_code": code}
+        if code != 0:
+            record["outcome"] = f"retry exited {code}"
+            break
+    record["vlm_calls"] = harness.call_count
+    path = out / CRITIC_DIR / CRITIC_RECORD
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return record
 
 
 def _outline(mask: np.ndarray) -> np.ndarray:
@@ -330,13 +527,18 @@ def draw_masks_tile(
 def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
     """The masks stage's review image from its own outputs; returns the PNG path.
 
-    Reads ``masks/detections.json``, ``masks/<view>.npz`` and ``images/<view>``
-    as :mod:`sceneagent.mask_worker` writes them. Views are taken in name
-    order so the same run always draws the same image.
+    Reads ``masks/detections.json``, ``masks/<view>.npz`` and the views they
+    were drawn on, from the scene's own view folder (``scene.json``
+    ``view_dir``: ``images/`` for the bin, ``mask_views/`` for a video), the
+    folder :mod:`sceneagent.bin_masks` masked. Views are taken in name order
+    so the same run always draws the same image.
     """
     from PIL import Image
 
+    from sceneagent.bin_run import load_scene
+
     out = Path(out)
+    view_dir = out / load_scene(out).view_dir
     detections = json.loads(
         (out / "masks" / "detections.json").read_text(encoding="utf-8")
     )
@@ -347,7 +549,7 @@ def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
             key=lambda d: d["mask_index"],
         )
         stack = np.load(out / "masks" / f"{Path(view).stem}.npz")["masks"]
-        with Image.open(out / "images" / view) as handle:
+        with Image.open(view_dir / view) as handle:
             photo = np.array(handle.convert("RGB"))
         labels = [str(d.get("phrase", "")) for d in kept]
         tiles.append(draw_masks_tile(photo, stack[: len(kept)], labels))
@@ -365,6 +567,184 @@ def render_masks(out: Path, max_views: int = MAX_VIEWS) -> Path:
     return path
 
 
+def _cap(points: np.ndarray, limit: int = 5000) -> np.ndarray:
+    """A deterministic subset, so a re-render of a large cloud matches."""
+    if len(points) <= limit:
+        return points
+    step = int(np.ceil(len(points) / limit))
+    return points[::step]
+
+
+def _bounds(cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Frame on the 1st to 99th percentile once there are enough points.
+
+    A splat always has a few far Gaussians; min/max framing let them shrink
+    the object to a speck (Mailbox, 2026-11-14). Points outside the frame are
+    clipped to its edge, so nothing silently disappears.
+    """
+    if len(cloud) >= 100:
+        low = np.percentile(cloud, 1, axis=0)
+        high = np.percentile(cloud, 99, axis=0)
+    else:
+        low, high = cloud.min(axis=0), cloud.max(axis=0)
+    return low, np.maximum(high - low, 1e-6)
+
+
+def _tile(groups: list[tuple[np.ndarray, tuple[int, int, int]]]) -> np.ndarray:
+    """Orthographic XY scatter of the groups on one white tile, framed together."""
+    kept = [(pts, colour) for pts, colour in groups if len(pts)]
+    canvas = np.full((TILE_PX, TILE_PX, 3), 255, np.uint8)
+    if not kept:
+        return canvas
+    low, span = _bounds(np.concatenate([pts[:, :2] for pts, _colour in kept]))
+    for pts, colour in kept:
+        xy = (pts[:, :2] - low) / span
+        cols = np.clip((xy[:, 0] * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3)
+        rows = np.clip(
+            ((1.0 - xy[:, 1]) * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3
+        )
+        for dr in (0, 1):
+            for dc in (0, 1):
+                canvas[rows + dr, cols + dc] = colour
+    return canvas
+
+
+def _write_stage(out: Path, stage: str, image: np.ndarray) -> Path:
+    from PIL import Image
+
+    folder = out / REVIEW_DIR
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{stage}.png"
+    Image.fromarray(image).save(path)
+    return path
+
+
+def _save_points(
+    out: Path,
+    stage: str,
+    groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+) -> Path:
+    """Orthographic XY scatter. Each group is points plus an RGB colour."""
+    if not any(len(pts) for pts, _colour in groups):
+        raise ValueError(f"no points to draw for {stage}")
+    return _write_stage(out, stage, _tile(groups))
+
+
+def _splat_ply(out: Path) -> Path | None:
+    found = sorted((out / "splat" / "export").glob("*.ply"))
+    return found[0] if found else None
+
+
+def render_gaussians(out: Path) -> Path | None:
+    """One colour per object, from the splat PLY and ``association/objects.npz``."""
+    ply = _splat_ply(out)
+    sets_path = out / "association" / "objects.npz"
+    if ply is None or not sets_path.is_file():
+        return None
+    from sceneagent.bin_association import read_ply_xyz
+
+    xyz = read_ply_xyz(ply)
+    with np.load(sets_path) as sets:
+        keys = sorted(key for key in sets.files if key.startswith("object_"))
+        colours = _palette(len(keys))
+        groups = []
+        for key, colour in zip(keys, colours, strict=True):
+            ids = np.asarray(sets[key], dtype=np.int64)
+            if ids.size == 0:
+                continue
+            if int(ids.min()) < 0 or int(ids.max()) >= len(xyz):
+                raise ValueError(f"{key} index is outside the splat")
+            groups.append((_cap(xyz[ids]), colour))
+    if not groups:
+        return None
+    return _save_points(out, "gaussians", groups)
+
+
+def render_mesh(out: Path) -> Path | None:
+    """One row per object: its mesh in grey, then its Gaussians in blue.
+
+    The two are drawn side by side, each on its own frame, not overlaid: a
+    SAM 3D mesh is in its own unit frame and the Gaussians are in the splat's,
+    so an overlay put the mesh in a corner and meant nothing (2026-11-14).
+    """
+    glbs = sorted((out / "sam3d").glob("object_*.glb"))[:MAX_VIEWS]
+    if not glbs:
+        return None
+    from sceneagent.bin_place import sample_mesh
+
+    grey = (70, 70, 70)
+    blue = (30, 90, 220)
+    ply = _splat_ply(out)
+    sets_path = out / "association" / "objects.npz"
+    xyz = None
+    sets = None
+    if ply is not None and sets_path.is_file():
+        from sceneagent.bin_association import read_ply_xyz
+
+        xyz = read_ply_xyz(ply)
+        sets = np.load(sets_path)
+    rows: list[np.ndarray] = []
+    try:
+        for glb in glbs:
+            mesh_tile = _tile([(_cap(sample_mesh(glb, 4000, seed=0), 4000), grey)])
+            gauss: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+            if xyz is not None and sets is not None and glb.stem in sets.files:
+                ids = np.asarray(sets[glb.stem], dtype=np.int64)
+                gauss.append((_cap(xyz[ids]), blue))
+            rows.append(np.concatenate([mesh_tile, _tile(gauss)], axis=1))
+    finally:
+        if sets is not None:
+            sets.close()
+    return _write_stage(out, "mesh", np.concatenate(rows, axis=0))
+
+
+def render_parts(out: Path) -> Path | None:
+    """One colour per part. Arrays in ``parts/object_*.npz`` are Nx3 points."""
+    files = sorted((out / "parts").glob("object_*.npz"))
+    if not files:
+        return None
+    loaded: list[np.ndarray] = []
+    for path in files:
+        with np.load(path) as data:
+            for key in sorted(data.files):
+                pts = np.asarray(data[key], dtype=float)
+                if pts.ndim != 2 or pts.shape[1] < 2:
+                    raise ValueError(f"{path.name}:{key} is not points")
+                if pts.shape[1] == 2:
+                    pts = np.column_stack([pts, np.zeros(len(pts))])
+                loaded.append(pts[:, :3])
+    if not loaded:
+        return None
+    colours = _palette(len(loaded))
+    groups = [(_cap(pts), colour) for pts, colour in zip(loaded, colours, strict=True)]
+    return _save_points(out, "parts", groups)
+
+
+def render_review_images(out: Path) -> dict[str, str]:
+    """Draw every stage that has inputs, then zip the images that were written."""
+    out = Path(out)
+    drawn: dict[str, str] = {}
+    if (out / "masks" / "detections.json").is_file():
+        try:
+            drawn["masks"] = str(render_masks(out))
+        except (OSError, ValueError, KeyError):
+            pass
+    for stage, renderer in (
+        ("gaussians", render_gaussians),
+        ("mesh", render_mesh),
+        ("parts", render_parts),
+    ):
+        try:
+            path = renderer(out)
+        except (OSError, ValueError, KeyError, ImportError):
+            continue
+        if path is not None:
+            drawn[stage] = str(path)
+    if drawn:
+        pack_review_images(out)
+    return drawn
+
+
 def pack_review_images(out: Path) -> Path:
     """Zip every ``review_steps/<stage>.png`` for the runner to judge."""
     out = Path(out)
@@ -380,10 +760,10 @@ def pack_review_images(out: Path) -> Path:
 def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    render = sub.add_parser(
-        "render-masks", help="draw the masks stage's review image (box)"
-    )
+    render = sub.add_parser("render", help="draw every stage image that has inputs")
     render.add_argument("--out", type=Path, required=True)
+    masks = sub.add_parser("render-masks", help="draw the masks stage's review image")
+    masks.add_argument("--out", type=Path, required=True)
     judge = sub.add_parser(
         "judge", help="ask the VLM to judge each stage image (runner)"
     )
@@ -392,13 +772,38 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
     judge.add_argument(
         "--source-run", default="", help="gpu-smoke run id the images came from"
     )
+    review = sub.add_parser(
+        "review", help="judge a stage and re-run it once on a reject (box with key)"
+    )
+    review.add_argument("--out", type=Path, required=True)
+    review.add_argument("--stage", choices=sorted(RERUNNERS), default="masks")
     args = parser.parse_args(argv)
+    if args.command == "render":
+        drawn = render_review_images(args.out)
+        print(json.dumps({"images": drawn, "zip": str(args.out / REVIEW_ZIP)}))
+        return 0 if drawn else 1
     if args.command == "render-masks":
         path = render_masks(args.out)
         print(
             json.dumps({"image": str(path), "zip": str(pack_review_images(args.out))})
         )
         return 0
+    if args.command == "review":
+        if harness is None:
+            from sceneagent.harness import selected_harness
+
+            harness = selected_harness()
+        record = review_and_retry(args.out, harness, args.stage)
+        print(
+            json.dumps(
+                {
+                    "outcome": record.get("outcome"),
+                    "model": record["model"],
+                    "vlm_calls": record["vlm_calls"],
+                }
+            )
+        )
+        return 0 if record.get("outcome") == "accept" else 1
     if args.source_run and not re.fullmatch(r"[0-9]{1,20}", args.source_run):
         parser.error("--source-run must be a run id (digits only)")
     images = read_stage_images(args.images)

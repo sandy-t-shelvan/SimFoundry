@@ -517,8 +517,17 @@ def _fit_fallbacks(out: Path) -> dict[int, str]:
     return found
 
 
-def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
+def run_physics(
+    out: Path | str,
+    *,
+    checkpoint: Path | None = None,
+    material: Path | None = None,
+) -> int:
     """Write ``physics/object_<n>.json`` for every placed object; one ledger item.
+
+    ``material`` is a ``sceneagent.material_run`` output directory (default
+    ``out/material``). Its ``material_vote.json`` and ``material_review.json``
+    are used when present, so the audited class reaches the property set.
 
     The MVP path (Sandeep, 2026-11-13, option B): no prior checkpoint, so the
     material is equation (2) over the object's own phrase (``keyword_material``)
@@ -558,8 +567,15 @@ def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
             ]
             if not objects:
                 raise ValueError("prior packs match no placed object")
+        folder = out / "material" if material is None else Path(material)
         result = write_property_set(
-            objects, packs, out, checkpoint=used, fallbacks=fallbacks
+            objects,
+            packs,
+            out,
+            checkpoint=used,
+            fallbacks=fallbacks,
+            vote=_read_json(_present(folder / "material_vote.json")),
+            review=_read_json(_present(folder / "material_review.json")),
         )
         entry.update(
             decision="accept",
@@ -582,6 +598,10 @@ def run_physics(out: Path | str, *, checkpoint: Path | None = None) -> int:
     ledger["entries"] = entries
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")
     return 0 if entry["decision"] == "accept" else 1
+
+
+def _present(path: Path) -> Path | None:
+    return path if path.is_file() else None
 
 
 def _read_json(path: Path | None) -> Any:

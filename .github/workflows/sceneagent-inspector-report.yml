@@ -5,7 +5,8 @@
 # and holds no Vast or SSH secret; the one secret it reads is GEMINI_API_KEY,
 # in the one step that calls Gemini. It reads inspection_views.zip and
 # settle_summary.json from the gpu-smoke run's artifact (the inspect stage
-# draws them on the box) and uploads inspection/isaac_lab.json, whose
+# draws them on the box), plus settle_frame.png, the Isaac Lab render the
+# model also judges (KAN-23 decision (b), Sandeep 2026-11-14), and uploads inspection/isaac_lab.json, whose
 # fix_report_from_model is KAN-52 dc4's field.
 name: sceneagent-inspector-report
 
@@ -62,7 +63,7 @@ jobs:
           SMOKE_RUN: ${{ inputs.smoke_run }}
         run: |
           set -euo pipefail
-          python -m sceneagent.inspector report --views inspect-input/inspection_views.zip --settle inspect-input/settle_summary.json --out inspect-out/isaac_lab.json --source-run "$SMOKE_RUN"
+          python -m sceneagent.inspector report --views inspect-input/inspection_views.zip --settle inspect-input/settle_summary.json --out inspect-out/isaac_lab.json --source-run "$SMOKE_RUN" --frame inspect-input/settle_frame.png
 
       - name: Upload the report
         if: always()
