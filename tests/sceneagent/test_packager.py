@@ -68,3 +68,16 @@ def test_a_mesh_rejected_by_placement_is_not_packaged(tmp_path):
     names = [item["path"] for item in build_package(run, tmp_path / "pkg")["files"]]
     assert "assets/object_0/mesh.glb" in names
     assert "assets/object_3/mesh.glb" not in names
+
+
+def test_the_orientation_sweep_is_packaged_from_where_the_sweep_writes_it(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "orientation_sweep.json").write_text(
+        '{"decision": "accept"}\n', encoding="utf-8"
+    )
+    manifest = build_package(run, tmp_path / "pkg")
+    assert "background/orientation_sweep.json" in [
+        item["path"] for item in manifest["files"]
+    ]
+    assert "background" not in manifest["missing"]
