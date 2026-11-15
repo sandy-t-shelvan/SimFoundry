@@ -74,8 +74,8 @@ TILE_PX = 512
 MAX_VIEWS = 6
 
 _COMMON = """\
-You are the step-runner critic in a pipeline that rebuilds a cluttered bin of
-household objects from photos. Judge only what the image shows. Answer as
+You are the step-runner critic in a pipeline that rebuilds a real scene of
+objects from photos or a video. Judge only what the image shows. Answer as
 JSON: {"verdict": "accept" or "reject", "reason": "<one short sentence naming
 what you saw>", "retry_note": "<for a reject, one short instruction for
 re-running this step; empty for an accept>"}.
@@ -87,15 +87,16 @@ PROMPTS: dict[str, str] = {
 This step segments objects in the input photos. The image tiles up to six
 photos; each detected object's mask is outlined in its own colour and
 labelled with the detector's phrase. Accept when every clearly visible object
-has one outline that follows it, and no outline covers several objects, the
-bin itself, or the floor. Reject when objects are missed, merged, split, or
-when the container or background is outlined as an object.
+has one outline that follows it, and no outline covers several objects, a
+surface the objects stand on (a bin's floor, a table), or the background.
+Reject when objects are missed, merged, split, or when a surface or the
+background is outlined as an object.
 
 For a reject, also give "retry_prompt": the detector's text prompt rewritten
 so a re-run would fix what you saw, as lowercase noun phrases each followed
 by " ." (for example "red mug . blue scissors ."), one phrase per object kind
-that should be outlined, at most six. Leave it empty when a different prompt
-would not help.
+that should be outlined, at most six. Keep every target object named below,
+if a list is given. Leave it empty when a different prompt would not help.
 """,
     "gaussians": _COMMON
     + """
@@ -146,6 +147,31 @@ class ImageHarness(Protocol):
         images: Any = (),
         response_schema: dict[str, Any] | None = None,
     ) -> str: ...
+
+
+def scene_context(out: Path | str) -> str:
+    """The scene's target objects, from the detector prompt the masks stage used.
+
+    The critic's prompts were written for a bin of clutter, where the bin is
+    not an object; on the Mailbox video it took the mailbox -- a target -- for
+    a container and told the retry to drop it. Naming the targets fixes that
+    for any scene. Empty when the run recorded no prompt.
+    """
+    path = Path(out) / "masks_evidence.json"
+    try:
+        prompt = json.loads(path.read_text(encoding="utf-8")).get("prompt") or ""
+    except (OSError, ValueError):
+        return ""
+    names = [p.strip() for p in str(prompt).split(".") if p.strip()]
+    if not names:
+        return ""
+    return (
+        "\nThis scene's target objects are: "
+        + ", ".join(names)
+        + ". Each of them is an object to outline, even when it is a container "
+        "(a mailbox, a cup, a bowl). Anything else -- the surface they stand on, "
+        "walls, furniture, other clutter -- is not.\n"
+    )
 
 
 def prompt_sha256(stage: str) -> str:
@@ -218,15 +244,19 @@ def read_stage_images(zip_path: Path) -> dict[str, bytes]:
 
 
 def judge_steps(
-    images: dict[str, bytes], harness: ImageHarness, source_run: str = ""
+    images: dict[str, bytes],
+    harness: ImageHarness,
+    source_run: str = "",
+    context: str = "",
 ) -> dict[str, Any]:
     """One call per stage image. A failed call or bad reply is recorded, not guessed."""
     stages: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for stage, png in images.items():
         try:
+            prompt = PROMPTS[stage] + context
             text = harness.complete(
-                PROMPTS[stage],
+                prompt,
                 images=[(png, "image/png")],
                 response_schema=RESPONSE_SCHEMA,
             )
@@ -235,7 +265,8 @@ def judge_steps(
                     "stage": stage,
                     "image": f"{REVIEW_DIR}/{stage}.png",
                     "image_sha256": hashlib.sha256(png).hexdigest(),
-                    "prompt_sha256": prompt_sha256(stage),
+                    "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                    "scene_objects": context.strip() or None,
                     **parse_step_verdict(text),
                 }
             )
@@ -405,7 +436,9 @@ def review_and_retry(
         folder = out / CRITIC_DIR / f"attempt-{attempt}"
         (folder / REVIEW_DIR).mkdir(parents=True, exist_ok=True)
         shutil.copyfile(image, folder / REVIEW_DIR / f"{stage}.png")
-        document = judge_steps({stage: Path(image).read_bytes()}, harness)
+        document = judge_steps(
+            {stage: Path(image).read_bytes()}, harness, context=scene_context(out)
+        )
         write_stage_reviews(document, folder)
         step: dict[str, Any] = {"attempt": attempt, "review": str(folder)}
         record["attempts"].append(step)

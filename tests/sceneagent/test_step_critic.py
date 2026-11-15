@@ -444,3 +444,22 @@ def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
 def test_render_with_nothing_to_draw_exits_nonzero(tmp_path):
     assert sc.main(["render", "--out", str(tmp_path)]) == 1
     assert not (tmp_path / "review_steps.zip").exists()
+
+
+def test_the_critic_is_told_the_scene_s_targets_so_a_mailbox_is_an_object(tmp_path):
+    out = _masks_run(tmp_path)
+    (out / "masks_evidence.json").write_text(json.dumps({"prompt": "cube . mailbox ."}))
+    context = sc.scene_context(out)
+    assert "cube, mailbox" in context and "container" in context
+    harness = FakeHarness([_reply("accept", "one outline per object")])
+    sc.review_and_retry(out, harness, "masks", rerun=lambda p, r: 0)
+    prompt = harness.calls[0][0]
+    assert "target objects are: cube, mailbox" in prompt
+    assert "cluttered bin" not in prompt  # the scene-neutral intro
+
+
+def test_no_recorded_prompt_means_no_scene_context(tmp_path):
+    out = _masks_run(tmp_path)
+    assert sc.scene_context(out) == ""
+    (out / "masks_evidence.json").write_text("not json")
+    assert sc.scene_context(out) == ""
