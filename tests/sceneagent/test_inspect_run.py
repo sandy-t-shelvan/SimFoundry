@@ -146,3 +146,23 @@ def test_the_summary_names_objects_the_export_left_out_and_why(tmp_path):
 
 def test_nothing_left_out_is_an_empty_list(tmp_path):
     assert inspect_run.settle_summary(_run_dir(tmp_path))["left_out"] == []
+
+
+def test_the_summary_names_objects_the_critic_left_out_and_why(tmp_path):
+    from sceneagent import step_critic
+
+    out = _run_dir(tmp_path)
+    association = json.loads((out / "association_evidence.json").read_text())
+    association["object_list"].append({"object": 2, "masks": [{"phrase": "mailbox"}]})
+    (out / "association_evidence.json").write_text(json.dumps(association))
+    (out / step_critic.LEFT_OUT).write_text(
+        json.dumps(
+            {"objects": [{"object": 2, "stage": "gaussians", "reason": "too diffuse"}]}
+        )
+    )
+    assert inspect_run.settle_summary(out)["left_out"] == [
+        {
+            "name": "object_2 (mailbox)",
+            "why": "left out by the step critic (gaussians): too diffuse",
+        }
+    ]

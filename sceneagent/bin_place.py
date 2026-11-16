@@ -589,10 +589,24 @@ def extent_m(points: np.ndarray, metres_per_unit: float) -> list[float]:
 
 def place_objects(out: Path, inputs: dict[str, Any]) -> dict[str, Any]:
     """ICP every meshed object; return placed clouds (splat frame) and per-object records."""
+    from sceneagent.step_critic import left_out_objects
+
     placed: dict[str, np.ndarray] = {}
     records = []
+    dropped = left_out_objects(out)
     for obj in inputs["sam3d"].get("objects", []):
         number = obj["object"]
+        if number in dropped:
+            # KAN-52: the critic rejected this object's mesh.
+            records.append(
+                {
+                    "object": number,
+                    "view": obj["view"],
+                    "placed": False,
+                    "reason": f"left out by the step critic: {dropped[number].get('reason', '')}",
+                }
+            )
+            continue
         if not obj.get("ok"):
             records.append(
                 {

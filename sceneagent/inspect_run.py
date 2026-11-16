@@ -116,6 +116,18 @@ def left_out(out: Path) -> list[dict[str, str]]:
         dropped.append(
             {"name": f"{name} ({names.get(number, 'object')})", "why": str(why)[:300]}
         )
+    from sceneagent.step_critic import left_out_objects
+
+    for number, row in sorted(left_out_objects(out).items()):
+        why = (
+            f"left out by the step critic ({row.get('stage')}): {row.get('reason', '')}"
+        )
+        dropped.append(
+            {
+                "name": f"object_{number} ({names.get(number, 'object')})",
+                "why": why[:300],
+            }
+        )
     return dropped
 
 

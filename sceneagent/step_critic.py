@@ -64,6 +64,12 @@ REVIEW_ZIP = "review_steps.zip"
 # not overwrite the evidence of the reject that caused it.
 CRITIC_DIR = "step_critic"
 CRITIC_RECORD = "loop.json"
+# KAN-52: objects the critic named as wrong, left out of the scene from SAM 3D
+# on. Association writes new object numbers, so it clears this file.
+LEFT_OUT = "critic_left_out.json"
+OBJECT_LABEL_RE = re.compile(r"^object_([0-9]{1,4})$")
+# Stages whose reject can name objects, and the stage that drops them.
+OBJECT_STAGES = ("gaussians", "mesh")
 # A retry prompt is GroundingDINO phrases, as ``scene_objects`` writes them.
 RETRY_PHRASE_RE = re.compile(r"^[a-z0-9][a-z0-9 \-]{0,39}$")
 MAX_RETRY_PHRASES = 6
@@ -101,18 +107,22 @@ if a list is given. Leave it empty when a different prompt would not help.
     "gaussians": _COMMON
     + """
 This step assigns the 3D reconstruction's points to objects. The image shows
-the scene's points with each object's points in its own colour. Accept when
-each colour forms one compact object. Reject when a colour spreads over
-several objects, over the bin or the floor, or leaves a large far-away cloud.
-""",
+the scene's points with each object's points in its own colour, labelled
+object_<n>. Accept when each colour forms one compact object. Reject when a
+colour spreads over several objects, over the bin or the floor, or leaves a
+large far-away cloud.
+"""
+    + "{objects}",
     "mesh": _COMMON
     + """
 This step generates one mesh per object from a photo and fits it to the
 object's points. The image shows each mesh in grey with its points in blue.
 Accept when each mesh has the shape of a plausible household object and the
 points lie on its surface. Reject when a mesh is two objects fused, a
-fragment, or clearly the wrong shape for its points.
-""",
+fragment, or clearly the wrong shape for its points. Each row is labelled
+with its object_<n>.
+"""
+    + "{objects}",
     "parts": _COMMON
     + """
 This step splits articulated objects into parts. The image shows each object
@@ -120,6 +130,17 @@ with its parts in different colours. Accept when parts follow real movable
 pieces (a lid, a door, a drawer). Reject when parts cut across one rigid
 piece or when an obvious movable piece is not separated.
 """,
+}
+
+_OBJECTS = """
+For a reject, also give "bad_objects": the labels (object_<n>) of the
+objects that are wrong, so they can be left out of the scene. Leave it empty
+when the problem is not in particular objects, for example a target object
+that is missing altogether.
+"""
+PROMPTS = {
+    stage: prompt.replace("{objects}", _OBJECTS if stage in OBJECT_STAGES else "")
+    for stage, prompt in PROMPTS.items()
 }
 
 RESPONSE_SCHEMA: dict[str, Any] = {
@@ -130,6 +151,8 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         "retry_note": {"type": "STRING"},
         # Optional, and asked for only by the masks prompt.
         "retry_prompt": {"type": "STRING"},
+        # Optional, and asked for only by the gaussians and mesh prompts.
+        "bad_objects": {"type": "ARRAY", "items": {"type": "STRING"}},
     },
     "required": ["verdict", "reason", "retry_note"],
 }
@@ -201,6 +224,15 @@ def retry_prompt(text: Any) -> str:
     return " . ".join(dict.fromkeys(" ".join(p.split()) for p in phrases)) + " ."
 
 
+def object_labels(value: Any) -> str:
+    """``"object_2,object_5"`` from a critic's list, keeping only real labels."""
+    if not isinstance(value, list):
+        return ""
+    labels = [v.strip() for v in value if isinstance(v, str)]
+    kept = [v for v in labels if OBJECT_LABEL_RE.fullmatch(v)]
+    return ",".join(dict.fromkeys(kept))
+
+
 def parse_step_verdict(text: str) -> dict[str, str]:
     """The model's reply as ``{verdict, reason, retry_note}``; raise on anything else.
 
@@ -230,6 +262,9 @@ def parse_step_verdict(text: str) -> dict[str, str]:
     prompt = retry_prompt(payload.get("retry_prompt")) if verdict == "reject" else ""
     if prompt:
         parsed["retry_prompt"] = prompt
+    bad = object_labels(payload.get("bad_objects")) if verdict == "reject" else ""
+    if bad:
+        parsed["bad_objects"] = bad
     return parsed
 
 
@@ -338,6 +373,10 @@ def verdicts_from(payload: Any) -> dict[str, dict[str, str]]:
         prompt = retry_prompt(item.get("retry_prompt"))
         if prompt and item["verdict"] == "reject":
             verdicts[stage]["retry_prompt"] = prompt
+        bad = item.get("bad_objects")
+        bad = object_labels(bad.split(",") if isinstance(bad, str) else bad)
+        if bad and item["verdict"] == "reject":
+            verdicts[stage]["bad_objects"] = bad
     return verdicts
 
 
@@ -366,6 +405,8 @@ def ledger_entries(
             entry["retry_note"] = v["retry_note"]
             if v.get("retry_prompt"):
                 entry["retry_prompt"] = v["retry_prompt"]
+            if v.get("bad_objects"):
+                entry["bad_objects"] = v["bad_objects"]
         entries.append(entry)
     return entries
 
@@ -380,9 +421,11 @@ def retry_requests(
         v = verdicts.get(stage)
         if not v or v["verdict"] != "reject" or retried.get(stage, 0) >= MAX_RETRIES:
             continue
-        request = {"stage": stage, "note": v["retry_note"]}
+        request = {"stage": stage, "note": v["retry_note"], "reason": v["reason"]}
         if v.get("retry_prompt"):
             request["prompt"] = v["retry_prompt"]
+        if v.get("bad_objects"):
+            request["objects"] = v["bad_objects"]
         requests.append(request)
     return requests
 
@@ -407,6 +450,70 @@ def rerun_masks(out: Path, request: dict[str, str]) -> int:
     return run_bin_masks(out, prompt=request["prompt"], critic_note=request["note"])
 
 
+def left_out_objects(out: Path | str) -> dict[int, dict[str, Any]]:
+    """Objects the critic left out, by number, each with its stage and reason."""
+    try:
+        rows = json.loads((Path(out) / LEFT_OUT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    objects = rows.get("objects") if isinstance(rows, dict) else None
+    return {int(r["object"]): r for r in objects or [] if isinstance(r, dict)}
+
+
+def clear_left_out(out: Path | str, stages: tuple[str, ...] = OBJECT_STAGES) -> None:
+    """Forget what these stages left out, when the objects they judged are remade."""
+    kept = [r for r in left_out_objects(out).values() if r.get("stage") not in stages]
+    path = Path(out) / LEFT_OUT
+    if kept:
+        path.write_text(
+            json.dumps({"objects": kept}, indent=2) + "\n", encoding="utf-8"
+        )
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _scene_objects(out: Path) -> list[int]:
+    association = json.loads(
+        (out / "association_evidence.json").read_text(encoding="utf-8")
+    )
+    return sorted(int(o["object"]) for o in association.get("object_list", []))
+
+
+def leave_out(out: Path, request: dict[str, str]) -> int:
+    """The gaussians and mesh retry: leave the objects the critic named out.
+
+    Only objects still in the scene count. Returns 2 when the critic named
+    none of them and 3 when nothing would be left, so the loop stops rather
+    than build an empty scene. Otherwise the objects go to ``LEFT_OUT`` and
+    the retry judges the objects that remain.
+    """
+    out = Path(out)
+    current = [n for n in _scene_objects(out) if n not in left_out_objects(out)]
+    named = {
+        int(m.group(1))
+        for label in request.get("objects", "").split(",")
+        if (m := OBJECT_LABEL_RE.fullmatch(label))
+    }
+    dropping = [n for n in current if n in named]
+    if not dropping:
+        return 2
+    if len(dropping) == len(current):
+        return 3
+    rows = list(left_out_objects(out).values()) + [
+        {
+            "object": n,
+            "stage": request["stage"],
+            "reason": request.get("reason", ""),
+            "note": request.get("note", ""),
+        }
+        for n in dropping
+    ]
+    (out / LEFT_OUT).write_text(
+        json.dumps({"objects": rows}, indent=2) + "\n", encoding="utf-8"
+    )
+    return 0
+
+
 Renderer = Callable[[Path], Path | None]
 Rerunner = Callable[[Path, dict[str, str]], int]
 RENDERERS: dict[str, Renderer] = {
@@ -414,9 +521,13 @@ RENDERERS: dict[str, Renderer] = {
     "gaussians": lambda out: render_gaussians(out),
     "mesh": lambda out: render_mesh(out),
 }
-RERUNNERS: dict[str, Rerunner] = {"masks": rerun_masks}
+RERUNNERS: dict[str, Rerunner] = {
+    "masks": rerun_masks,
+    "gaussians": leave_out,
+    "mesh": leave_out,
+}
 # What a stage's re-run needs from the note before it can do anything new.
-RETRY_NEEDS = {"masks": "prompt"}
+RETRY_NEEDS = {"masks": "prompt", "gaussians": "objects", "mesh": "objects"}
 
 
 def review_and_retry(
@@ -615,8 +726,16 @@ def _bounds(cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return low, np.maximum(high - low, 1e-6)
 
 
-def _tile(groups: list[tuple[np.ndarray, tuple[int, int, int]]]) -> np.ndarray:
-    """Orthographic XY scatter of the groups on one white tile, framed together."""
+def _tile(
+    groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+    labels: list[str] | None = None,
+) -> np.ndarray:
+    """Orthographic XY scatter of the groups on one white tile, framed together.
+
+    With ``labels`` each group's label is written at its median point, so a
+    critic can name the object it means.
+    """
+    named = list(zip(groups, labels or [""] * len(groups), strict=True))
     kept = [(pts, colour) for pts, colour in groups if len(pts)]
     canvas = np.full((TILE_PX, TILE_PX, 3), 255, np.uint8)
     if not kept:
@@ -631,7 +750,21 @@ def _tile(groups: list[tuple[np.ndarray, tuple[int, int, int]]]) -> np.ndarray:
         for dr in (0, 1):
             for dc in (0, 1):
                 canvas[rows + dr, cols + dc] = colour
-    return canvas
+    if not labels:
+        return canvas
+    from PIL import Image, ImageDraw
+
+    image = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(image)
+    for (pts, _colour), label in named:
+        if not len(pts) or not label:
+            continue
+        xy = np.clip((np.median(pts[:, :2], axis=0) - low) / span, 0.0, 1.0)
+        x = int(xy[0] * (TILE_PX - 80))
+        y = int((1.0 - xy[1]) * (TILE_PX - 20))
+        draw.rectangle((x - 2, y - 2, x + 62, y + 12), fill="white")
+        draw.text((x, y), label, fill="black")
+    return np.asarray(image)
 
 
 def _write_stage(out: Path, stage: str, image: np.ndarray) -> Path:
@@ -648,11 +781,12 @@ def _save_points(
     out: Path,
     stage: str,
     groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+    labels: list[str] | None = None,
 ) -> Path:
     """Orthographic XY scatter. Each group is points plus an RGB colour."""
     if not any(len(pts) for pts, _colour in groups):
         raise ValueError(f"no points to draw for {stage}")
-    return _write_stage(out, stage, _tile(groups))
+    return _write_stage(out, stage, _tile(groups, labels))
 
 
 def _splat_ply(out: Path) -> Path | None:
@@ -669,20 +803,23 @@ def render_gaussians(out: Path) -> Path | None:
     from sceneagent.bin_association import read_ply_xyz
 
     xyz = read_ply_xyz(ply)
+    dropped = left_out_objects(out)
     with np.load(sets_path) as sets:
         keys = sorted(key for key in sets.files if key.startswith("object_"))
         colours = _palette(len(keys))
         groups = []
+        labels = []
         for key, colour in zip(keys, colours, strict=True):
             ids = np.asarray(sets[key], dtype=np.int64)
-            if ids.size == 0:
+            if ids.size == 0 or int(key.split("_")[1]) in dropped:
                 continue
             if int(ids.min()) < 0 or int(ids.max()) >= len(xyz):
                 raise ValueError(f"{key} index is outside the splat")
             groups.append((_cap(xyz[ids]), colour))
+            labels.append(key)
     if not groups:
         return None
-    return _save_points(out, "gaussians", groups)
+    return _save_points(out, "gaussians", groups, labels)
 
 
 def render_mesh(out: Path) -> Path | None:
@@ -692,7 +829,12 @@ def render_mesh(out: Path) -> Path | None:
     SAM 3D mesh is in its own unit frame and the Gaussians are in the splat's,
     so an overlay put the mesh in a corner and meant nothing (2026-11-14).
     """
-    glbs = sorted((out / "sam3d").glob("object_*.glb"))[:MAX_VIEWS]
+    dropped = left_out_objects(out)
+    glbs = [
+        g
+        for g in sorted((out / "sam3d").glob("object_*.glb"))
+        if int(g.stem.split("_")[1]) not in dropped
+    ][:MAX_VIEWS]
     if not glbs:
         return None
     from sceneagent.bin_place import sample_mesh
@@ -711,7 +853,9 @@ def render_mesh(out: Path) -> Path | None:
     rows: list[np.ndarray] = []
     try:
         for glb in glbs:
-            mesh_tile = _tile([(_cap(sample_mesh(glb, 4000, seed=0), 4000), grey)])
+            mesh_tile = _tile(
+                [(_cap(sample_mesh(glb, 4000, seed=0), 4000), grey)], [glb.stem]
+            )
             gauss: list[tuple[np.ndarray, tuple[int, int, int]]] = []
             if xyz is not None and sets is not None and glb.stem in sets.files:
                 ids = np.asarray(sets[glb.stem], dtype=np.int64)

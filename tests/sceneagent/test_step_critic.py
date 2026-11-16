@@ -111,7 +111,11 @@ def test_a_reject_becomes_a_ledger_line_and_exactly_one_retry(tmp_path):
     )
     assert lines[0]["vlm_model"] == "gemini-3.8-flash" and "retry_note" not in lines[1]
     assert sc.retry_requests(verdicts) == [
-        {"stage": "masks", "note": "split the merged fruit"}
+        {
+            "stage": "masks",
+            "note": "split the merged fruit",
+            "reason": "two fruits in one mask",
+        }
     ]
     # One retry only: a second reject of the same stage does not re-run it.
     assert sc.retry_requests(verdicts, retried={"masks": 1}) == []
@@ -273,6 +277,7 @@ def test_a_reject_reruns_the_stage_once_with_the_note_and_both_go_to_the_ledger(
         {
             "stage": "masks",
             "note": "split the cup from the marker",
+            "reason": "one outline covers the cup and the marker",
             "prompt": "paper cup . marker .",
         }
     ]
@@ -465,7 +470,7 @@ def test_no_recorded_prompt_means_no_scene_context(tmp_path):
     assert sc.scene_context(out) == ""
 
 
-def test_a_stage_with_no_rerunner_is_judged_once_and_a_reject_is_final(tmp_path):
+def test_an_object_stage_reject_naming_no_object_is_final(tmp_path):
     out = _masks_run(tmp_path)
     harness = FakeHarness([_reply("reject", "two meshes are one blob", "split them")])
     record = sc.review_and_retry(
@@ -477,7 +482,7 @@ def test_a_stage_with_no_rerunner_is_judged_once_and_a_reject_is_final(tmp_path)
         ("step review (mesh)", "reject"),
         ("step retry (mesh)", "skipped"),
     ]
-    assert "no input of the mesh stage" in lines[-1]["reason"]
+    assert "names no objects" in lines[-1]["reason"]
     assert (out / sc.CRITIC_DIR / "mesh" / "loop.json").is_file()
 
 
@@ -502,3 +507,72 @@ def test_a_retry_with_the_prompt_the_masks_were_made_with_is_skipped(tmp_path):
     assert lines[-1]["reason"] == (
         "the critic's prompt is the one these masks were made with"
     )
+
+
+def _objects_run(tmp_path, numbers=(0, 1, 2)):
+    out = _masks_run(tmp_path)
+    (out / "association_evidence.json").write_text(
+        json.dumps({"object_list": [{"object": n} for n in numbers]})
+    )
+    return out
+
+
+def _named_reject(objects, reason="object_1 spills over the floor"):
+    return json.dumps(
+        {
+            "verdict": "reject",
+            "reason": reason,
+            "retry_note": "leave it out",
+            "bad_objects": objects,
+        }
+    )
+
+
+def test_the_critic_names_only_real_object_labels():
+    parsed = sc.parse_step_verdict(
+        _named_reject(["object_1", "the mailbox", "object_1", "object_12"])
+    )
+    assert parsed["bad_objects"] == "object_1,object_12"
+    accept = json.dumps(
+        {"verdict": "accept", "reason": "ok", "retry_note": "", "bad_objects": ["object_1"]}
+    )
+    assert "bad_objects" not in sc.parse_step_verdict(accept)
+    assert "bad_objects" in sc.PROMPTS["gaussians"]
+    assert "bad_objects" not in sc.PROMPTS["masks"]
+
+
+def test_named_objects_are_left_out_and_the_rest_judged_again(tmp_path):
+    out = _objects_run(tmp_path)
+    drawn = []
+
+    def draw(path):
+        drawn.append(sorted(sc.left_out_objects(path)))
+        return sc.render_masks(path)
+
+    harness = FakeHarness([_named_reject(["object_1"]), _reply("accept", "compact")])
+    record = sc.review_and_retry(out, harness, "gaussians", render=draw)
+    assert record["outcome"] == "accept"
+    assert drawn == [[], [1]]
+    row = sc.left_out_objects(out)[1]
+    assert row["stage"] == "gaussians"
+    assert row["reason"] == "object_1 spills over the floor"
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert lines[-2]["bad_objects"] == "object_1"
+
+
+def test_leaving_out_every_object_or_none_stops_the_loop(tmp_path):
+    out = _objects_run(tmp_path, numbers=(0, 1))
+    everything = {"stage": "gaussians", "objects": "object_0,object_1"}
+    assert sc.leave_out(out, everything) == 3
+    assert sc.leave_out(out, {"stage": "gaussians", "objects": "object_7"}) == 2
+    assert sc.left_out_objects(out) == {}
+
+
+def test_a_new_association_or_new_meshes_forget_what_was_left_out(tmp_path):
+    out = _objects_run(tmp_path)
+    assert sc.leave_out(out, {"stage": "gaussians", "objects": "object_0"}) == 0
+    assert sc.leave_out(out, {"stage": "mesh", "objects": "object_2"}) == 0
+    sc.clear_left_out(out, ("mesh",))
+    assert sorted(sc.left_out_objects(out)) == [0]
+    sc.clear_left_out(out)
+    assert not (out / sc.LEFT_OUT).exists()

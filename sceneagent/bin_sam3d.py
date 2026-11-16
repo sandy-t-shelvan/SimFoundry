@@ -249,8 +249,17 @@ def run_bin_sam3d(
         detections = json.loads(
             (out / "masks" / "detections.json").read_text(encoding="utf-8")
         )
+        # KAN-52: new meshes are judged afresh, and objects the critic left
+        # out at the Gaussians are not meshed.
+        from sceneagent.step_critic import clear_left_out, left_out_objects
+
+        clear_left_out(out, ("mesh",))
+        dropped = left_out_objects(out)
+        evidence["left_out_by_critic"] = sorted(dropped)
         chosen = choose_views(
-            association["object_list"], detections, object_view_depths(association)
+            [o for o in association["object_list"] if o["object"] not in dropped],
+            detections,
+            object_view_depths(association),
         )
         sam3d_dir = out / "sam3d"
         sam3d_dir.mkdir(parents=True, exist_ok=True)
