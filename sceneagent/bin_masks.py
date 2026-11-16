@@ -272,6 +272,7 @@ def run_bin_masks(
         "detector": "GroundingDINO SwinT-OGC",
     }
     entry: dict[str, Any] = {"item": ITEM, "sam": "vit_h", "prompt": prompt}
+    rewritten = False
     if retry:
         evidence["critic_retry"] = {"note": critic_note, "scene_prompt": scene.prompt}
         entry.update(attempt=1, critic_note=critic_note)
@@ -280,6 +281,7 @@ def run_bin_masks(
         evidence["segment_anything"] = _ensure_segment_anything(runner)
         masks = out / "masks"
         argv = worker_command(images, masks, prompt, single_term=single_term)
+        rewritten = True
         done = runner(
             argv,
             env=worker_environment(),
@@ -327,6 +329,15 @@ def run_bin_masks(
             )
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
         entry.update(decision="reject", reason=f"{type(exc).__name__}: {exc}"[-800:])
+    if rewritten:
+        # The worker has written into masks/, so every later stage's accept
+        # describes masks that are gone (#108's critic retry left them, and a
+        # resume skipped the rebuild).
+        from sceneagent.video_run import stale_after
+
+        entries.extend(
+            stale_after(entries, "masks", f"{ITEM} were made again; rebuild")
+        )
     entries.append(entry)
     ledger.update(scene_name=scene.ledger_name, source=scene.source, entries=entries)
     ledger_path.write_text(json.dumps(ledger, indent=2) + "\n", encoding="utf-8")

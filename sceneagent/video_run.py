@@ -64,6 +64,36 @@ STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+# Ledger items a stage writes beside the ones its resume check reads.
+ALSO_WRITES: dict[str, tuple[str, ...]] = {"place": ("bin score",)}
+
+
+def stale_after(
+    entries: list[dict[str, Any]], stage: str, reason: str
+) -> list[dict[str, Any]]:
+    """Reject lines for every later stage whose last ledger line is an accept.
+
+    A stage re-run outside this loop (the step critic's mask retry) replaces
+    its own output, while each later stage keeps an accept that describes the
+    old one, and a resume would skip it. These lines make the resume rebuild
+    from the next stage on. Earlier stages are not touched.
+    """
+    names = [name for name, _ in STAGES]
+    if stage not in names:
+        raise ValueError(f"unknown stage {stage!r}")
+    later = [
+        item
+        for name, items in STAGES[names.index(stage) + 1 :]
+        for item in (*items, *ALSO_WRITES.get(name, ()))
+    ]
+    last = {e.get("item"): e.get("decision") for e in entries}
+    return [
+        {"item": item, "decision": "reject", "stale_after": stage, "reason": reason}
+        for item in later
+        if last.get(item) == "accept"
+    ]
+
+
 def accepted(out: Path, items: tuple[str, ...]) -> bool:
     """Whether the ledger in ``out`` holds an accept for every item."""
     try:

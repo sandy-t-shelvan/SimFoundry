@@ -279,3 +279,69 @@ def test_the_bin_prompt_names_object_categories_and_says_where_they_come_from():
     ]
     out = mask_filter.filter_detections(dets, W, H)
     assert [d["kept"] for d in out] == [True, False]
+
+
+def _ledger_with(out, items):
+    ledger = json.loads((out / "ledger.json").read_text())
+    ledger["entries"] += [{"item": i, "decision": "accept"} for i in items]
+    (out / "ledger.json").write_text(json.dumps(ledger))
+
+
+def _last(out):
+    entries = json.loads((out / "ledger.json").read_text())["entries"]
+    return {e["item"]: e for e in entries}
+
+
+def test_new_masks_reject_every_later_stage_the_ledger_still_accepts(tmp_path):
+    from sceneagent import video_run
+
+    _bin_images(tmp_path)
+    later = ["Gaussian association", "SAM 3D meshes", "ICP residuals", "bin score"]
+    _ledger_with(tmp_path, ["full-scene splat", "SAM masks", *later])
+    rc = bin_masks.run_bin_masks(
+        tmp_path,
+        poses=_never_poses,
+        runner=FakeMaskEnv(),
+        weights=_weights,
+        prompt="block . red mailbox .",
+        critic_note="the mailbox is missed",
+    )
+    assert rc == 0
+    last = _last(tmp_path)
+    assert last["SAM masks"]["decision"] == "accept"
+    assert last["full-scene splat"]["decision"] == "accept"
+    for item in later:
+        assert last[item]["decision"] == "reject", item
+        assert last[item]["stale_after"] == "masks"
+    # A resume now rebuilds from association on.
+    names = [name for name, _ in video_run.STAGES]
+    after = video_run.STAGES[names.index("masks") + 1 :]
+    assert not any(video_run.accepted(tmp_path, items) for _, items in after)
+    assert video_run.accepted(tmp_path, ("SAM masks",))
+
+
+def test_masks_that_never_reached_the_worker_leave_later_stages_alone(tmp_path):
+    _bin_images(tmp_path)
+    _ledger_with(tmp_path, ["Gaussian association"])
+
+    def no_weights():
+        raise OSError("no network")
+
+    rc = bin_masks.run_bin_masks(
+        tmp_path, poses=_never_poses, runner=FakeMaskEnv(), weights=no_weights
+    )
+    assert rc == 1
+    assert _last(tmp_path)["Gaussian association"]["decision"] == "accept"
+
+
+def test_stale_after_skips_rejects_and_unknown_stages():
+    from sceneagent.video_run import stale_after
+
+    entries = [
+        {"item": "SAM 3D meshes", "decision": "reject"},
+        {"item": "ICP residuals", "decision": "accept"},
+    ]
+    assert [e["item"] for e in stale_after(entries, "masks", "r")] == ["ICP residuals"]
+    assert stale_after(entries, "inspect", "r") == []
+    with pytest.raises(ValueError, match="unknown stage"):
+        stale_after(entries, "gaussians", "r")
