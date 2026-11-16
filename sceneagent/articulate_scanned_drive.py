@@ -37,22 +37,47 @@ ASSUMED_MASS_KG = {"body": 0.30, "lid": 0.05}
 
 
 def read_obj(path: Path):
-    verts, faces = [], []
+    verts, faces, colours = [], [], []
     for line in path.read_text().splitlines():
         if line.startswith("v "):
-            verts.append(tuple(float(v) for v in line.split()[1:4]))
+            values = [float(v) for v in line.split()[1:]]
+            verts.append(tuple(values[:3]))
+            if len(values) >= 6:  # trimesh writes "v x y z r g b" when it has colours
+                colours.append(tuple(values[3:6]))
         elif line.startswith("f "):
             idx = [int(tok.split("/")[0]) - 1 for tok in line.split()[1:]]
             for k in range(1, len(idx) - 1):
                 faces.append((idx[0], idx[k], idx[k + 1]))
-    return verts, faces
+    return verts, faces, (colours if len(colours) == len(verts) else None)
+
+
+# A proposer that regresses its axis (Particulate) returns floats a fraction of
+# a degree off a principal axis; a USD joint takes an X/Y/Z token. Snap within
+# this angle and record it; anything further needs a rotated joint frame.
+AXIS_SNAP_DEG = 5.0
+
+
+# Held-open views for the reviewer: camera azimuths around the object.
+OPEN_VIEW_AZIMUTHS_DEG = (-50.0, 70.0, 190.0)
+OPEN_VIEW_RADIUS_M = 0.5
+
+
+def axis_snap_deg(axis) -> float:
+    """Angle (degrees) between ``axis`` and its nearest principal axis."""
+    norm = math.sqrt(sum(float(a) ** 2 for a in axis))
+    if norm == 0.0:
+        raise ValueError("axis has zero length")
+    largest = max(abs(float(a)) for a in axis) / norm
+    return math.degrees(math.acos(min(1.0, largest)))
 
 
 def axis_token(axis):
     """USD joints take X/Y/Z; a negative axis flips the joint coordinate's sign."""
+    if axis_snap_deg(axis) > AXIS_SNAP_DEG:
+        raise ValueError(
+            f"axis {axis} is not within {AXIS_SNAP_DEG:g} deg of X, Y or Z"
+        )
     i = max(range(3), key=lambda k: abs(axis[k]))
-    if abs(abs(axis[i]) - 1.0) > 1e-6:
-        raise ValueError(f"axis {axis} is not along X, Y or Z")
     return "XYZ"[i], (1.0 if axis[i] > 0 else -1.0)
 
 
@@ -83,6 +108,8 @@ def build_usd(path: Path, joint: dict, body, lid, name: str = "mailbox") -> dict
     root = UsdGeom.Xform.Define(stage, obj)
     UsdPhysics.ArticulationRootAPI.Apply(root.GetPrim())
     proxy = UsdGeom.Mesh.Define(stage, f"{obj}/proxy")
+    body_colours = body[2] if len(body) > 2 else None
+    lid_colours = lid[2] if len(lid) > 2 else None
     offset = len(body[0])
     proxy.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*v) for v in body[0] + lid[0]]))
     proxy.CreateFaceVertexCountsAttr(Vt.IntArray([3] * (len(body[1]) + len(lid[1]))))
@@ -93,9 +120,16 @@ def build_usd(path: Path, joint: dict, body, lid, name: str = "mailbox") -> dict
     )
     proxy.CreateVisibilityAttr(UsdGeom.Tokens.invisible)
     links = {}
-    for link, (verts, faces), colour, approx in (
-        ("body", body, (0.75, 0.08, 0.08), "convexDecomposition"),
-        ("lid", lid, (0.85, 0.12, 0.12), "convexHull"),
+    for link, verts, faces, scanned, colour, approx in (
+        (
+            "body",
+            body[0],
+            body[1],
+            body_colours,
+            (0.75, 0.08, 0.08),
+            "convexDecomposition",
+        ),
+        ("lid", lid[0], lid[1], lid_colours, (0.85, 0.12, 0.12), "convexHull"),
     ):
         xf = UsdGeom.Xform.Define(stage, f"{obj}/{link}")
         UsdPhysics.RigidBodyAPI.Apply(xf.GetPrim())
@@ -104,7 +138,13 @@ def build_usd(path: Path, joint: dict, body, lid, name: str = "mailbox") -> dict
         mesh.CreatePointsAttr(Vt.Vec3fArray([Gf.Vec3f(*v) for v in verts]))
         mesh.CreateFaceVertexCountsAttr(Vt.IntArray([3] * len(faces)))
         mesh.CreateFaceVertexIndicesAttr(Vt.IntArray([i for f in faces for i in f]))
-        mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
+        if scanned:  # the scan's own colours, so a reviewer can see the label side
+            mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*c) for c in scanned]))
+            UsdGeom.Primvar(mesh.GetDisplayColorAttr()).SetInterpolation(
+                UsdGeom.Tokens.vertex
+            )
+        else:
+            mesh.CreateDisplayColorAttr(Vt.Vec3fArray([Gf.Vec3f(*colour)]))
         mesh.CreateDoubleSidedAttr(True)
         UsdPhysics.CollisionAPI.Apply(mesh.GetPrim())
         UsdPhysics.MeshCollisionAPI.Apply(mesh.GetPrim()).CreateApproximationAttr(
@@ -116,23 +156,46 @@ def build_usd(path: Path, joint: dict, body, lid, name: str = "mailbox") -> dict
     base.CreateBody1Rel().SetTargets([Sdf.Path(f"{obj}/body")])
     token, sign = axis_token(joint["axis"])
     lo, hi = sorted((sign * joint["lower"], sign * joint["upper"]))
-    hinge = UsdPhysics.RevoluteJoint.Define(stage, f"{obj}/hinge")
-    hinge.CreateBody0Rel().SetTargets([Sdf.Path(f"{obj}/body")])
-    hinge.CreateBody1Rel().SetTargets([Sdf.Path(f"{obj}/lid")])
-    hinge.CreateAxisAttr(token)
+    sliding = joint["type"] == "prismatic"
+    usd_joint = (
+        UsdPhysics.PrismaticJoint if sliding else UsdPhysics.RevoluteJoint
+    ).Define(stage, f"{obj}/{joint_name(joint)}")
+    usd_joint.CreateBody0Rel().SetTargets([Sdf.Path(f"{obj}/body")])
+    usd_joint.CreateBody1Rel().SetTargets([Sdf.Path(f"{obj}/lid")])
+    usd_joint.CreateAxisAttr(token)
     pivot = Gf.Vec3f(*joint["pivot_m"])
-    hinge.CreateLocalPos0Attr(pivot)  # body frame = world at rest
-    hinge.CreateLocalPos1Attr(pivot)  # lid frame = world at rest
-    hinge.CreateLowerLimitAttr(math.degrees(lo))
-    hinge.CreateUpperLimitAttr(math.degrees(hi))
-    drive = UsdPhysics.DriveAPI.Apply(hinge.GetPrim(), "angular")
+    usd_joint.CreateLocalPos0Attr(pivot)  # body frame = world at rest
+    usd_joint.CreateLocalPos1Attr(pivot)  # lid frame = world at rest
+    # USD: a revolute joint's limits are degrees, a prismatic joint's are distance (m).
+    usd_joint.CreateLowerLimitAttr(lo if sliding else math.degrees(lo))
+    usd_joint.CreateUpperLimitAttr(hi if sliding else math.degrees(hi))
+    drive = UsdPhysics.DriveAPI.Apply(
+        usd_joint.GetPrim(), "linear" if sliding else "angular"
+    )
     drive.CreateTypeAttr("force")
     stage.GetRootLayer().Save()
-    return {
+    meta = {
+        "type": joint["type"],
+        "name": joint_name(joint),
         "axis_token": token,
+        "axis_snap_deg": round(axis_snap_deg(joint["axis"]), 3),
         "sign": sign,
-        "limits_deg": [math.degrees(lo), math.degrees(hi)],
     }
+    if sliding:
+        meta["limits_m"] = [lo, hi]
+    else:
+        meta["limits_deg"] = [math.degrees(lo), math.degrees(hi)]
+    return meta
+
+
+def joint_name(joint: dict) -> str:
+    """The USD joint's name: what the editor's joints panel shows."""
+    return "slide" if joint["type"] == "prismatic" else "hinge"
+
+
+# Drive gains per joint type. The hinge's are KAN-45's. A slide's spring has to
+# beat gravity on a 0.05 kg part along a vertical axis (0.5 N) within a few cm.
+GAINS = {"revolute": (5.0, 0.5), "prismatic": (200.0, 20.0)}
 
 
 def main() -> None:
@@ -207,13 +270,13 @@ def run(joint, body, lid, out: Path, sim_cfg) -> dict:
             ],
         ),
         init_state=ArticulationCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.0), joint_pos={"hinge": 0.0}
+            pos=(0.0, 0.0, 0.0), joint_pos={joint_name(joint): 0.0}
         ),
         actuators={
-            "hinge": ImplicitActuatorCfg(
-                joint_names_expr=["hinge"],
-                stiffness=5.0,
-                damping=0.5,
+            joint_name(joint): ImplicitActuatorCfg(
+                joint_names_expr=[joint_name(joint)],
+                stiffness=GAINS[joint["type"]][0],
+                damping=GAINS[joint["type"]][1],
                 joint_effort_limit=5.0,
             )
         },
@@ -257,6 +320,17 @@ def run(joint, body, lid, out: Path, sim_cfg) -> dict:
         camera.update(DT)
     lid0, body0, _ = state()
     r0 = float(torch.linalg.norm(lid0 - pivot))
+    sliding = joint["type"] == "prismatic"
+    unit = torch.tensor(joint["axis"], device=sim.device, dtype=lid0.dtype)
+    unit = unit / torch.linalg.norm(unit)
+
+    def drift_of(lid_p):
+        """A hinge keeps the part's distance to its pivot; a slide keeps it on its axis."""
+        if sliding:
+            d = lid_p - lid0
+            return float(torch.linalg.norm(d - (d @ unit) * unit))
+        return abs(float(torch.linalg.norm(lid_p - pivot)) - r0)
+
     log, frames = [], []
     worst_drift = worst_speed = body_drift = 0.0
     plan = targets(joint["lower"], joint["upper"])
@@ -270,7 +344,7 @@ def run(joint, body, lid, out: Path, sim_cfg) -> dict:
         camera.update(DT)
         lid_p, body_p, lid_v = state()
         q = float(robot.data.joint_pos.torch[0, 0]) * sign
-        drift = abs(float(torch.linalg.norm(lid_p - pivot)) - r0)
+        drift = drift_of(lid_p)
         speed = float(torch.linalg.norm(lid_v))
         worst_drift, worst_speed = max(worst_drift, drift), max(worst_speed, speed)
         body_drift = max(body_drift, float(torch.linalg.norm(body_p - body0)))
@@ -291,6 +365,35 @@ def run(joint, body, lid, out: Path, sim_cfg) -> dict:
             path.write_bytes(png.png_bytes(rgb.to("cpu").numpy().astype("uint8")))
             frames.append(str(path))
     (out / "joint_log.json").write_text(json.dumps(log) + "\n")
+    # Held open, from three sides, for the reviewer: one of them shows the
+    # object's front (its label) whatever the object's orientation. Measured
+    # after the sweep, so the acceptance numbers above are unaffected.
+    robot.actuators.target_command.set_position_index(
+        value=torch.tensor([[sign * joint["upper"]]], device=sim.device)
+    )
+    for _ in range(90):
+        robot.write_data_to_sim()
+        sim.step()
+        robot.update(DT)
+    open_views = []
+    for k, azimuth in enumerate(OPEN_VIEW_AZIMUTHS_DEG):
+        a = math.radians(azimuth)
+        eye = [OPEN_VIEW_RADIUS_M * math.cos(a), OPEN_VIEW_RADIUS_M * math.sin(a), 0.30]
+        camera.set_world_poses_from_view(
+            torch.tensor([eye], device=sim.device),
+            torch.tensor([[0.0, 0.0, 0.08]], device=sim.device),
+        )
+        for _ in range(12):  # let the RTX renderer settle at the new pose
+            robot.write_data_to_sim()
+            sim.step()
+            robot.update(DT)
+            camera.update(DT)
+        rgb = camera.data.output["rgb"].torch[0, ..., :3]
+        if rgb.dtype.is_floating_point:
+            rgb = (rgb.clamp(0, 1) * 255).round()
+        path = out / f"open_view_{k}.png"
+        path.write_bytes(png.png_bytes(rgb.to("cpu").numpy().astype("uint8")))
+        open_views.append(str(path))
     peak = max(e["joint_rad"] for e in log)
     final = log[-1]["joint_rad"]
     failed = (
@@ -301,15 +404,21 @@ def run(joint, body, lid, out: Path, sim_cfg) -> dict:
     return {
         "decision": "reject" if failed else "accept",
         "reason": (
-            f"peak joint {math.degrees(peak):.1f} deg (target {math.degrees(joint['upper']):.1f}), "
-            f"final {math.degrees(final):.1f} deg; lid drift from hinge max {worst_drift * 1000:.2f} mm, "
-            f"lid speed max {worst_speed:.3f} m/s, body drift max {body_drift * 1000:.2f} mm"
+            (
+                f"peak travel {peak * 1000:.1f} mm (target {joint['upper'] * 1000:.1f}), "
+                f"final {final * 1000:.1f} mm; part drift off the slide axis max {worst_drift * 1000:.2f} mm, "
+                if sliding
+                else f"peak joint {math.degrees(peak):.1f} deg (target {math.degrees(joint['upper']):.1f}), "
+                f"final {math.degrees(final):.1f} deg; lid drift from hinge max {worst_drift * 1000:.2f} mm, "
+            )
+            + f"lid speed max {worst_speed:.3f} m/s, body drift max {body_drift * 1000:.2f} mm"
         ),
         "limits": {"max_drift_m": MAX_DRIFT_M, "max_speed_m_s": MAX_SPEED_M_S},
         "usd": str(usd),
         "joint_usd": meta,
         "assumed_mass_kg": ASSUMED_MASS_KG,
         "frames": frames,
+        "open_views": open_views,
         "steps": len(log),
     }
 

@@ -18,7 +18,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load(name):
-    spec = importlib.util.spec_from_file_location(name, ROOT / "sceneagent" / f"{name}.py")
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "sceneagent" / f"{name}.py"
+    )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -41,7 +43,15 @@ PARTS = [
     _part("part_4", (-0.60, 0.75, -0.59), (0.62, 0.88, 0.57)),
     _part("part_7", (-0.53, -0.88, -0.42), (0.50, -0.86, 0.47)),
 ]
-JOINT = {"type": "revolute", "parent": "part_1", "child": "part_2", "axis": [-1, 0, 0], "origin": [0, 0.76, -0.62], "lower": 0.0, "upper": 1.5708}
+JOINT = {
+    "type": "revolute",
+    "parent": "part_1",
+    "child": "part_2",
+    "axis": [-1, 0, 0],
+    "origin": [0, 0.76, -0.62],
+    "lower": 0.0,
+    "upper": 1.5708,
+}
 
 
 def test_unnamed_parts_inside_the_child_move_with_it():
@@ -60,7 +70,9 @@ def test_a_joint_naming_a_missing_part_is_refused():
 def test_box_share_is_one_inside_zero_outside_and_partial_across():
     assert asc.box_inside_share((0, 0, 0), (1, 1, 1), (-1, -1, -1), (2, 2, 2)) == 1.0
     assert asc.box_inside_share((0, 0, 0), (1, 1, 1), (5, 5, 5), (6, 6, 6)) == 0.0
-    assert asc.box_inside_share((0, 0, 0), (2, 1, 1), (1, 0, 0), (3, 1, 1)) == pytest.approx(0.5)
+    assert asc.box_inside_share(
+        (0, 0, 0), (2, 1, 1), (1, 0, 0), (3, 1, 1)
+    ) == pytest.approx(0.5)
 
 
 def test_the_first_movable_joint_is_used_and_a_rigid_proposal_refused():
@@ -84,6 +96,9 @@ def test_the_frame_is_z_up_metric_centred_and_on_the_ground():
 def test_a_negative_axis_flips_the_joint_coordinate():
     assert drive.axis_token([-1.0, 0.0, 0.0]) == ("X", -1.0)
     assert drive.axis_token([0.0, 0.0, 1.0]) == ("Z", 1.0)
+    # A regressed axis 0.3 deg off Y snaps; 37 deg off is still refused.
+    assert drive.axis_token([-0.005, 0.99999, 0.0012]) == ("Y", 1.0)
+    assert drive.axis_snap_deg([-0.005, 0.99999, 0.0012]) < 1.0
     with pytest.raises(ValueError):
         drive.axis_token([0.6, 0.8, 0.0])
 
@@ -98,7 +113,7 @@ def test_the_sweep_opens_and_closes_over_four_seconds():
 def test_obj_faces_are_triangulated(tmp_path):
     path = tmp_path / "q.obj"
     path.write_text("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1/1 2/2 3/3 4/4\n")
-    verts, faces = drive.read_obj(path)
+    verts, faces, _colours = drive.read_obj(path)
     assert len(verts) == 4 and faces == [(0, 1, 2), (0, 2, 3)]
 
 
@@ -107,10 +122,16 @@ def test_partsam_labels_become_part_meshes_and_crumbs_are_listed(tmp_path):
     big = trimesh.creation.box(extents=(1, 1, 1))
     small = trimesh.creation.box(extents=(0.1, 0.1, 0.1))
     small.apply_translation((0, 0, 2))
-    mesh = trimesh.util.concatenate([big] * 100 + [small])  # 1200 + 12 faces: the box is under 1%
+    mesh = trimesh.util.concatenate(
+        [big] * 100 + [small]
+    )  # 1200 + 12 faces: the box is under 1%
     labels = np.array([0] * (len(mesh.faces) - 12) + [1] * 12)
     record = worker.split_parts(
-        {"labels": labels, "vertices": np.asarray(mesh.vertices), "faces": np.asarray(mesh.faces)},
+        {
+            "labels": labels,
+            "vertices": np.asarray(mesh.vertices),
+            "faces": np.asarray(mesh.faces),
+        },
         tmp_path,
         "mesh.glb",
     )
@@ -119,3 +140,9 @@ def test_partsam_labels_become_part_meshes_and_crumbs_are_listed(tmp_path):
     written = json.loads((tmp_path / "parts.json").read_text())
     assert written["parts"][0]["bbox_max"][2] == pytest.approx(0.5)
     assert (tmp_path / "parts" / "part_0.glb").is_file()
+
+
+def test_a_slide_is_a_prismatic_usd_joint_with_metre_limits():
+    assert drive.joint_name({"type": "prismatic"}) == "slide"
+    assert drive.joint_name({"type": "revolute"}) == "hinge"
+    assert drive.GAINS["prismatic"][0] > drive.GAINS["revolute"][0]
