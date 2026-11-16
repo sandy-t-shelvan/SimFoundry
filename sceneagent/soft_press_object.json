@@ -1,0 +1,9 @@
+{
+  "object": "sponge",
+  "body_type": "soft deformable",
+  "deformability": 0.8,
+  "material_class": "rubber and foam",
+  "mass_kg": 0.05,
+  "rigidity": 0.2,
+  "n_gaussians": 1000
+}

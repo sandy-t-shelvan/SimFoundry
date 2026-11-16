@@ -70,7 +70,14 @@ ISAACLAB_TAG=v3.0.0
 ISAACLAB_COMMIT=e3f7d9ff1f5d7f8280de3ece9000b7117f66bcf4
 ISAACLAB_ROOT=/workspace/IsaacLab
 ISAACLAB_ENV="$ENVS/isaaclab"
-STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab"
+# PhysGaussian, deformable objects only, at the main commit read on
+# 2026-11-13. warp_lang and taichi are that commit's requirements.txt
+# names. Taichi 1.5.0 requires Python older than 3.11. The stage does
+# not choose Young's modulus or Poisson's ratio.
+PHYSGAUSSIAN_COMMIT=8339ed6aa2cd5d50e1001a254a3d95aea678a956
+PHYSGAUSSIAN_ROOT=/workspace/src/PhysGaussian
+PHYSGAUSSIAN_ENV="$ENVS/physgaussian"
+STAGES="apt colmap env_sa da3 env_nerf env_gsam2 sam_weights sam3d sam3d_weights isaaclab physgaussian"
 
 mkdir -p "$STATE" "$LOGS" "$OUT"
 
@@ -310,6 +317,22 @@ s_isaaclab() {
     > "$ROOT/isaaclab_disk_bytes"
 }
 
+s_physgaussian() {
+  # Deformable objects only. Not the sa env and not the isaaclab env:
+  # taichi 1.5.0 refuses Python 3.11. The check imports the two pinned
+  # packages and does not run a simulation.
+  clone https://github.com/XPandora/PhysGaussian "$PHYSGAUSSIAN_ROOT"
+  if [ "$(git -C "$PHYSGAUSSIAN_ROOT" rev-parse HEAD)" != "$PHYSGAUSSIAN_COMMIT" ]; then
+    git -C "$PHYSGAUSSIAN_ROOT" fetch --depth 1 origin "$PHYSGAUSSIAN_COMMIT"
+    git -C "$PHYSGAUSSIAN_ROOT" checkout --detach "$PHYSGAUSSIAN_COMMIT"
+  fi
+  [ -x "$PHYSGAUSSIAN_ENV/bin/python3" ] || \
+    "$MAMBA" create -y -p "$PHYSGAUSSIAN_ENV" python=3.10
+  "$PHYSGAUSSIAN_ENV/bin/pip" install warp_lang==0.10.1 taichi==1.5.0
+  cd /tmp
+  "$PHYSGAUSSIAN_ENV/bin/python3" -c "import warp, taichi"
+}
+
 run_stage() {
   local name="$1"
   if [ -f "$STATE/$name.ok" ]; then
@@ -352,6 +375,7 @@ do_report() {
     SAM2_CHECKPOINT="$SAM2_CHECKPOINT" SAM2_1_CHECKPOINT="$SAM2_1_CHECKPOINT" \
     ISAACLAB_ROOT="$ISAACLAB_ROOT" ISAACLAB_ENV="$ISAACLAB_ENV" \
     ISAACLAB_DISK="$ROOT/isaaclab_disk_bytes" \
+    PHYSGAUSSIAN_ROOT="$PHYSGAUSSIAN_ROOT" PHYSGAUSSIAN_ENV="$PHYSGAUSSIAN_ENV" \
     "$py" - <<'PY'
 import hashlib, json, os, pathlib, re, subprocess
 
@@ -457,6 +481,7 @@ versions = {
     "sam3d10": pyver(sam3d_py, ["torch", "pytorch3d", "kaolin", "moge", "sam3d_objects", "gsplat"]),
     # pip show, not import: importing isaaclab starts the simulator.
     "isaaclab": run([env["ISAACLAB_ENV"] + "/bin/python3", "-m", "pip", "show", "isaaclab"]),
+    "physgaussian": pyver(env["PHYSGAUSSIAN_ENV"] + "/bin/python3", ["warp", "taichi"]),
 }
 document = {
     "box_setup": "ours: sceneagent/box_setup.sh",
@@ -472,6 +497,7 @@ document = {
         "depth_anything_3": commit(env["DA3_ROOT"]),
         "sam_3d_objects": commit(env["SAM3D_ROOT"]),
         "isaac_lab": commit(env["ISAACLAB_ROOT"]),
+        "physgaussian": commit(env["PHYSGAUSSIAN_ROOT"]),
     },
     "checksums": {
         "sam_vit_h_4b8939.pth": sha256(env["SAM_WEIGHTS"]),
