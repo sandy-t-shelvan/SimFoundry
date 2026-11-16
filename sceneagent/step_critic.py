@@ -115,14 +115,13 @@ large far-away cloud.
     + "{objects}",
     "mesh": _COMMON
     + """
-This step generates one mesh per object from a photo. Each row is one
-object, labelled object_<n>: on the left its mesh in grey, on the right the
-object's reconstructed points in blue, both seen from above. Each side is
-drawn in its own frame, so their sizes and positions cannot be compared, only
-their shapes; fitting the mesh to the points is checked later, by numbers.
-Accept when each mesh has the shape of a plausible household object and
-roughly the outline of its points. Reject when a mesh is two objects fused, a
-fragment, or clearly a different kind of shape from its points.
+This step generates one mesh per object from a single photo. Each row is one
+object, labelled object_<n>: first the photo the mesh was made from, cropped
+to the object with its mask outlined in magenta, then the mesh in grey from
+three directions, drawn to one scale. The mesh's position and size in the
+scene are checked later, by numbers. Accept when the mesh has the shape of
+the outlined object in the photo, seen from some side. Reject when a mesh is
+two objects fused, a fragment, or a clearly different shape from the photo.
 """
     + "{objects}",
     "parts": _COMMON
@@ -895,49 +894,88 @@ def render_gaussians(out: Path) -> Path | None:
     return _save_points(out, "gaussians", groups, labels, _frame_all(every))
 
 
-def render_mesh(out: Path) -> Path | None:
-    """One row per object: its mesh in grey, then its Gaussians in blue.
+MESH_TILE_PX = 256
 
-    The two are drawn side by side, each on its own frame, not overlaid: a
-    SAM 3D mesh is in its own unit frame and the Gaussians are in the splat's,
-    so an overlay put the mesh in a corner and meant nothing (2026-11-14).
+
+def _equal_views(points: np.ndarray, size: int = MESH_TILE_PX) -> list[np.ndarray]:
+    """The points from three axis directions, one scale for all three.
+
+    Each axis pair was stretched to fill its own square, so a marker seen
+    end-on drew as a circle and nothing kept its proportions
+    (kan52-loop-pmic6).
     """
-    dropped = left_out_objects(out)
-    glbs = [
-        g
-        for g in sorted((out / "sam3d").glob("object_*.glb"))
-        if int(g.stem.split("_")[1]) not in dropped
-    ][:MAX_VIEWS]
-    if not glbs:
+    centre = (points.min(axis=0) + points.max(axis=0)) / 2.0
+    scale = (size - 12) / max(float(np.ptp(points, axis=0).max()), 1e-9)
+    tiles = []
+    for a, b in ((0, 1), (0, 2), (1, 2)):
+        canvas = np.full((size, size, 3), 255, np.uint8)
+        cols = ((points[:, a] - centre[a]) * scale + size / 2).astype(int)
+        rows = (size / 2 - (points[:, b] - centre[b]) * scale).astype(int)
+        cols = np.clip(cols, 0, size - 2)
+        rows = np.clip(rows, 0, size - 2)
+        for dr in (0, 1):
+            for dc in (0, 1):
+                canvas[rows + dr, cols + dc] = (70, 70, 70)
+        tiles.append(canvas)
+    return tiles
+
+
+def _photo_crop(
+    image: Path, masks: Path, index: int, label: str, size: int = MESH_TILE_PX
+) -> np.ndarray:
+    """The photo SAM 3D was given, cropped square around its mask, outline drawn."""
+    from PIL import Image, ImageDraw
+
+    with Image.open(image) as handle:
+        photo = np.array(handle.convert("RGB"))
+    mask = np.load(masks)["masks"][index].astype(bool)
+    rows, cols = np.nonzero(mask)
+    if not rows.size:
+        raise ValueError(f"mask {index} in {masks} is empty")
+    centre_r, centre_c = (rows.min() + rows.max()) // 2, (cols.min() + cols.max()) // 2
+    half = int(max(rows.max() - rows.min(), cols.max() - cols.min()) * 0.6) + 8
+    top, left = max(centre_r - half, 0), max(centre_c - half, 0)
+    bottom = min(centre_r + half, photo.shape[0])
+    right = min(centre_c + half, photo.shape[1])
+    shown = photo.copy()
+    shown[_outline(mask)] = (255, 0, 255)
+    crop = Image.fromarray(shown[top:bottom, left:right]).resize((size, size))
+    ImageDraw.Draw(crop).text((4, 4), label, fill=(255, 255, 0))
+    return np.asarray(crop)
+
+
+def render_mesh(out: Path) -> Path | None:
+    """One row per object: the photo its mesh was made from, then the mesh three ways.
+
+    The mesh is judged against the photo, not the scene's points: SAM 3D
+    meshes are in their own frame until placement, and placement measures
+    their fit (2026-11-14, kan52-loop-mailbox5/pmic6).
+    """
+    try:
+        evidence = json.loads((out / "sam3d_evidence.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return None
     from sceneagent.bin_place import sample_mesh
 
-    grey = (70, 70, 70)
-    blue = (30, 90, 220)
-    ply = _splat_ply(out)
-    sets_path = out / "association" / "objects.npz"
-    xyz = None
-    sets = None
-    if ply is not None and sets_path.is_file():
-        from sceneagent.bin_association import read_ply_xyz
-
-        xyz = read_ply_xyz(ply)
-        sets = np.load(sets_path)
+    dropped = left_out_objects(out)
     rows: list[np.ndarray] = []
-    try:
-        for glb in glbs:
-            mesh_tile = _tile(
-                [(_cap(sample_mesh(glb, 4000, seed=0), 4000), grey)], [glb.stem]
-            )
-            gauss: list[tuple[np.ndarray, tuple[int, int, int]]] = []
-            if xyz is not None and sets is not None and glb.stem in sets.files:
-                ids = np.asarray(sets[glb.stem], dtype=np.int64)
-                gauss.append((_cap(xyz[ids]), blue))
-            frame = _frame_all([g for g, _ in gauss]) if gauss else None
-            rows.append(np.concatenate([mesh_tile, _tile(gauss, frame=frame)], axis=1))
-    finally:
-        if sets is not None:
-            sets.close()
+    for obj in evidence.get("objects", []):
+        number = int(obj["object"])
+        glb = out / "sam3d" / f"object_{number}.glb"
+        if not obj.get("ok") or number in dropped or not glb.is_file():
+            continue
+        crop = _photo_crop(
+            Path(obj.get("image") or out / "images" / obj["view"]),
+            out / "masks" / f"{Path(obj['view']).stem}.npz",
+            int(obj["mask_index"]),
+            f"object_{number}",
+        )
+        views = _equal_views(_cap(sample_mesh(glb, 6000, seed=0), 6000))
+        rows.append(np.concatenate([crop, *views], axis=1))
+        if len(rows) == MAX_VIEWS:
+            break
+    if not rows:
+        return None
     return _write_stage(out, "mesh", np.concatenate(rows, axis=0))
 
 

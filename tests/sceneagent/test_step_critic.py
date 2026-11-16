@@ -427,7 +427,26 @@ def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
         object_1=np.array([2, 3]),
     )
     (tmp_path / "sam3d").mkdir()
-    trimesh.creation.box().export(tmp_path / "sam3d" / "object_0.glb")
+    trimesh.creation.box(extents=(1.0, 0.5, 0.25)).export(
+        tmp_path / "sam3d" / "object_0.glb"
+    )
+    from PIL import Image
+
+    (tmp_path / "images").mkdir()
+    Image.new("RGB", (64, 48), (200, 180, 150)).save(tmp_path / "images" / "0001.jpg")
+    (tmp_path / "masks").mkdir()
+    mask = np.zeros((1, 48, 64), bool)
+    mask[0, 10:30, 20:50] = True
+    np.savez(tmp_path / "masks" / "0001.npz", masks=mask)
+    (tmp_path / "sam3d_evidence.json").write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 0, "view": "0001.jpg", "mask_index": 0, "ok": True}
+                ]
+            }
+        )
+    )
     (tmp_path / "parts").mkdir()
     np.savez(
         tmp_path / "parts" / "object_0.npz",
@@ -441,8 +460,12 @@ def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
     assert {tuple(c) for c in sc._palette(2)} <= _colours(
         tmp_path / "review_steps" / "gaussians.png"
     )
-    mesh = _colours(tmp_path / "review_steps" / "mesh.png")
-    assert (70, 70, 70) in mesh and (30, 90, 220) in mesh
+    mesh_png = tmp_path / "review_steps" / "mesh.png"
+    mesh = _colours(mesh_png)
+    # The photo crop with its magenta outline, then the mesh three ways.
+    assert (70, 70, 70) in mesh and (255, 0, 255) in mesh
+    width, height = Image.open(mesh_png).size
+    assert (width, height) == (4 * sc.MESH_TILE_PX, sc.MESH_TILE_PX)
     assert {tuple(c) for c in sc._palette(2)} <= _colours(
         tmp_path / "review_steps" / "parts.png"
     )
@@ -615,3 +638,19 @@ def test_the_critic_is_told_each_objects_name_and_views(tmp_path):
     assert "- object_2: marker, seen in 28 of 30 views" in text
     assert "- object_3: scissors, seen in 3 of 30 views" in text
     assert sc.object_context(tmp_path / "missing") == ""
+
+
+def test_the_mesh_views_keep_its_proportions():
+    box = np.array(
+        [[x, y, z] for x in (0.0, 1.0) for y in (0.0, 0.5) for z in (0.0, 0.25)]
+    )
+    top, front, side = sc._equal_views(box)
+
+    def extent(tile):
+        rows, cols = np.nonzero((tile != 255).any(axis=2))
+        return cols.max() - cols.min(), rows.max() - rows.min()
+
+    w, h = extent(top)
+    assert abs(w / h - 2.0) < 0.1
+    w, h = extent(side)
+    assert abs(w / h - 2.0) < 0.15
