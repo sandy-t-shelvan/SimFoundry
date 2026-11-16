@@ -131,7 +131,9 @@ def test_every_field_is_present_with_its_source():
         assert key in record
     for key in EXPORT_PHYSX_KEYS + ("material_class", "log_mass", "rigidity"):
         assert key in record["sources"]
-    assert record["mass_kg"] == pytest.approx(0.5)
+    # KAN-40: no placed mesh, so no mass; the log-mass slot is only recorded.
+    assert record["mass_kg"] is None
+    assert record["prior_mass_kg"] == pytest.approx(0.5)
     assert record["density_kg_m3"] == pytest.approx(800.0)
     assert record["friction_static"] is None
     assert record["sources"]["friction_static"] == "default"
@@ -230,7 +232,11 @@ def test_the_property_set_is_written_per_object(tmp_path):
 
 
 def test_catalogue_masses_are_a_check_not_an_input():
-    record = pp.property_record("can", prior=pp.decode_prior_mean(_bias()))
+    record = pp.property_record(
+        "can",
+        prior=pp.decode_prior_mean(_bias()),
+        volume={"material_volume_m3": 6.25e-4},
+    )
     rows = pp.compare_catalogue_masses([record], {"can": 0.25})
     assert rows[0]["ratio"] == pytest.approx(2.0)
     assert record["mass_kg"] == pytest.approx(0.5)
@@ -358,7 +364,8 @@ def test_run_physics_uses_packs_when_the_checkpoint_hash_matches(tmp_path, monke
     assert pp.run_physics(tmp_path, checkpoint=checkpoint) == 0
     record = json.loads((tmp_path / "physics" / "object_1.json").read_text())
     assert record["prior"]["sha256"] == fitted_prior.file_sha256(checkpoint)
-    assert record["mass_kg"] is not None
+    # No GLB in this placement: the density is there, the mass is not.
+    assert record["mass_kg"] is None and record["density_kg_m3"] is not None
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
     assert entry["prior"] is True
 
@@ -367,3 +374,180 @@ def test_run_physics_without_a_placement_rejects(tmp_path):
     assert pp.run_physics(tmp_path) == 1
     entry = json.loads((tmp_path / "ledger.json").read_text())["entries"][-1]
     assert entry["decision"] == "reject"
+
+
+# KAN-40: mass is density times the volume the placed mesh encloses.
+
+trimesh = pytest.importorskip("trimesh")
+
+
+def _box(extents, centre=(0.0, 0.0, 0.0), inverted=False):
+    mesh = trimesh.creation.box(extents=extents)
+    mesh.apply_translation(centre)
+    if inverted:
+        mesh.invert()
+    return mesh
+
+
+def _joined(*meshes):
+    return trimesh.util.concatenate(list(meshes))
+
+
+def _cup(radius=0.047, height=0.10, wall=0.002, sections=128):
+    """An open cup as one closed surface round its wall: bottom and side."""
+    profile = np.array(
+        [
+            [0.0, 0.0],
+            [radius, 0.0],
+            [radius, height],
+            [radius - wall, height],
+            [radius - wall, wall],
+            [0.0, wall],
+        ]
+    )
+    return trimesh.creation.revolve(profile, sections=sections)
+
+
+def test_a_solid_box_volume_is_its_box():
+    mesh = _box((0.1, 0.2, 0.3))
+    measured = pp.material_volume(mesh.vertices, mesh.faces)
+    assert measured["volume"] == pytest.approx(0.006)
+    assert measured["outermost_components"] == 1
+
+
+def test_a_sealed_inner_surface_is_filled_not_subtracted():
+    # A SAM 3D marker is an outer surface and a sealed inner one, about a
+    # voxel apart. The bulk density already holds the emptiness inside.
+    mesh = _joined(_box((1.0, 1.0, 1.0)), _box((0.8, 0.8, 0.8), inverted=True))
+    measured = pp.material_volume(mesh.vertices, mesh.faces)
+    assert measured["signed_volume"] == pytest.approx(1.0 - 0.512)
+    assert measured["volume"] == pytest.approx(1.0)
+    assert measured["components"] == 2 and measured["outermost_components"] == 1
+    assert measured["shell_thickness"] == pytest.approx(
+        2 * 0.488 / (6 * 1.0 + 6 * 0.64)
+    )
+
+
+def test_a_hollow_open_cup_counts_its_wall_not_its_inside():
+    radius, height, wall = 0.047, 0.10, 0.002
+    mesh = _cup(radius, height, wall)
+    assert mesh.is_watertight
+    measured = pp.material_volume(mesh.vertices, mesh.faces)
+    walls = math.pi * radius**2 * wall + math.pi * (
+        radius**2 - (radius - wall) ** 2
+    ) * (height - wall)
+    assert measured["volume"] == pytest.approx(walls, rel=0.01)
+    # The hull fills the cup: nearly ten times its 2 mm wall here, so a
+    # collider-volume mass would be ten times too heavy.
+    assert measured["convex_hull_volume"] > 9 * measured["volume"]
+    record = pp.property_record(
+        "paper cup",
+        prior=pp.decode_prior_mean(_bias(material="paper and cardboard")),
+        volume={"material_volume_m3": measured["volume"]},
+    )
+    assert record["mass_kg"] == pytest.approx(800.0 * walls, rel=0.01)
+
+
+def test_a_part_inside_a_void_is_not_counted_twice():
+    mesh = _joined(
+        _box((1.0, 1.0, 1.0)),
+        _box((0.8, 0.8, 0.8), inverted=True),
+        _box((0.1, 0.1, 0.1)),
+    )
+    measured = pp.material_volume(mesh.vertices, mesh.faces)
+    assert measured["volume"] == pytest.approx(1.0)
+    assert measured["outermost_components"] == 1
+
+
+def test_separate_pieces_add_and_open_pieces_are_skipped():
+    sheet = trimesh.Trimesh(
+        [[5.0, 0.0, 0.0], [6.0, 0.0, 0.0], [5.0, 1.0, 0.0]], [[0, 1, 2]]
+    )
+    mesh = _joined(_box((1.0, 1.0, 1.0)), _box((0.5, 0.5, 0.5), (3.0, 0, 0)), sheet)
+    measured = pp.material_volume(mesh.vertices, mesh.faces)
+    assert measured["volume"] == pytest.approx(1.125)
+    assert measured["outermost_components"] == 2
+    assert measured["open_components_skipped"] == 1
+    only_open = pp.material_volume(sheet.vertices, sheet.faces)
+    assert only_open["volume"] is None
+
+
+def test_an_inverted_mesh_still_has_its_volume():
+    mesh = _box((0.1, 0.1, 0.1), inverted=True)
+    measured = pp.material_volume(mesh.vertices, mesh.faces)
+    assert measured["volume"] == pytest.approx(0.001)
+    assert measured["inverted_outermost"] == 1
+
+
+def test_mass_is_density_times_volume_and_the_slot_is_only_recorded():
+    record = pp.property_record(
+        "marker",
+        prior=pp.decode_prior_mean(_bias(material="plastic")),
+        volume={"material_volume_m3": 5e-5, "mesh": "object_2.glb"},
+    )
+    assert record["mass_kg"] == pytest.approx(800.0 * 5e-5)
+    assert record["prior_mass_kg"] == pytest.approx(0.5)
+    assert record["material_volume_m3"] == 5e-5
+    assert record["sources"]["mass_kg"] == pp.MASS_FORMULA
+    assert "not used" in record["sources"]["prior_mass_kg"]
+    provenance = record["mass_provenance"]
+    assert provenance["formula"] == pp.MASS_FORMULA
+    assert provenance["mesh"] == "object_2.glb"
+    assert provenance["density_kg_m3"] == pytest.approx(800.0)
+    # No prior: no density, so no mass, even with a volume.
+    bare = pp.property_record("marker", volume={"material_volume_m3": 5e-5})
+    assert bare["mass_kg"] is None and bare["sources"]["mass_kg"] == "no prior"
+
+
+def _placed_run(tmp_path, scale=0.5, unit=0.4):
+    glb = tmp_path / "object_1.glb"
+    _box((1.0, 1.0, 1.0)).export(glb)
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "splat_unit_m": unit,
+                "object_list": [{"object": 1, "masks": [{"phrase": "cube"}]}],
+            }
+        )
+    )
+    placed = {
+        "object": 1,
+        "placed": True,
+        "glb": str(glb),
+        "similarity": {
+            "scale": scale,
+            "rotation": np.eye(3).tolist(),
+            "translation": [1.0, 2.0, 3.0],
+        },
+    }
+    (tmp_path / "bin_score.json").write_text(json.dumps({"icp": {"objects": [placed]}}))
+    return glb
+
+
+def test_placed_volumes_take_the_placement_scale_and_the_splat_unit(tmp_path):
+    glb = _placed_run(tmp_path, scale=0.5, unit=0.4)
+    volumes = pp.placed_volumes(tmp_path)
+    # One mesh unit is 0.5 splat units of 0.4 m: a 0.2 m cube.
+    assert volumes[1]["material_volume_m3"] == pytest.approx(0.008)
+    assert volumes[1]["metres_per_mesh_unit"] == pytest.approx(0.2)
+    assert volumes[1]["mesh"] == str(glb)
+    assert pp.placed_volumes(tmp_path, numbers={2}) == {}
+
+
+def test_run_physics_writes_density_times_the_placed_volume(tmp_path, monkeypatch):
+    from sceneagent import fitted_prior
+
+    _placed_run(tmp_path, scale=0.5, unit=0.4)
+    checkpoint = _constant_prior(_bias(material="plastic")).save(tmp_path / "prior.npz")
+    monkeypatch.setattr(
+        fitted_prior, "CHECKPOINT_SHA256", fitted_prior.file_sha256(checkpoint)
+    )
+    packs = tmp_path / "prior_input"
+    packs.mkdir()
+    np.save(packs / "object_1.npy", np.zeros((8, PRIOR_DIM)))
+    assert pp.run_physics(tmp_path, checkpoint=checkpoint) == 0
+    record = json.loads((tmp_path / "physics" / "object_1.json").read_text())
+    assert record["mass_kg"] == pytest.approx(800.0 * 0.008)
+    assert record["prior_mass_kg"] == pytest.approx(0.5)
+    assert record["mass_provenance"]["placement_scale"] == 0.5
+    assert record["mass_provenance"]["splat_unit_m"] == 0.4

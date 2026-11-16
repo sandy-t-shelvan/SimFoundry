@@ -54,6 +54,7 @@ from sceneagent.physics_props import (
     _fit_fallbacks,
     _prior_inputs,
     object_names,
+    placed_volumes,
     write_property_set,
 )
 from sceneagent.vlm_port import ImageClient
@@ -207,6 +208,7 @@ def run(
         vote=vote_doc,
         review=review,
         fallbacks=fallbacks,
+        volumes=placed_volumes(run_dir, {o["object"] for o in objects}),
     )
     summary = {
         "source_run": str(run_dir),

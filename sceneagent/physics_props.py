@@ -17,8 +17,17 @@ Every field records where it came from (``sources``):
 - **log mass, log density, rigidity, deformability:** the prior's mean.
   Sigmoid is applied to rigidity and deformability after the mean, never
   before; the 912 inputs are never averaged (Sandeep's note, §2).
-- **mass, density in kg:** ``exp`` of the log slots (the prior is trained on
-  natural logs of kilograms, ``mlp.labels``), so the USD export can write them.
+- **density in kg/m^3:** ``exp`` of the log-density slot (the prior is
+  trained on natural logs, ``mlp.labels``), so the USD export can write it.
+- **mass in kg (KAN-40, ours):** ``density_kg_m3 x material_volume_m3``, where
+  the volume is the one the placed mesh's outermost closed surfaces enclose,
+  at its metric scale (:func:`material_volume`, :func:`placed_volumes`). The
+  prior's own log-mass slot is kept as ``prior_mass_kg`` and is not used: its
+  training splats were fit at COLMAP's arbitrary scale, so nothing it reads
+  carries the object's metric size, and on gate-pmic-e2e1 it gave a 13 cm
+  marker 265 g and a 10 cm paper cup 2.4 kg. Density is size-free, so the
+  prior can read it from appearance. Without a metric volume the mass stays
+  null and PhysX takes the density times the collider's volume.
 - **friction:** the VLM estimate (paper §3.4), else left to PhysX and recorded
   as ``default``. **Restitution:** PhysX default, recorded as ``default``.
 - **Young's modulus, Poisson's ratio, render material:** null. The paper looks
@@ -45,7 +54,7 @@ import hashlib
 import json
 import math
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +182,161 @@ def simulator_route(body_type: str | None, deformability: float | None) -> str |
     return None
 
 
+MASS_FORMULA = "mass_kg = density_kg_m3 x material_volume_m3"
+VOLUME_RULE = (
+    "volume enclosed by the placed mesh's outermost closed surfaces; "
+    "closed surfaces inside them (sealed voids) are filled, open pieces skipped"
+)
+WHY_NOT_PRIOR_MASS = (
+    "the prior's log-mass slot does not see metric size (its training splats "
+    "were fit at COLMAP's arbitrary scale); density is size-free"
+)
+
+
+def _winding_number(point: np.ndarray, triangles: np.ndarray) -> float:
+    """Generalised winding number of ``point`` about a closed triangle surface.
+
+    About 1 inside a closed surface, 0 outside (Van Oosterom and Strackee's
+    solid angle, summed). One point against every triangle, so a 1M-face mesh
+    is one vectorised pass.
+    """
+    a, b, c = (triangles[:, i] - point for i in range(3))
+    la, lb, lc = (np.linalg.norm(v, axis=1) for v in (a, b, c))
+    numerator = np.einsum("ij,ij->i", a, np.cross(b, c))
+    denominator = (
+        la * lb * lc
+        + np.einsum("ij,ij->i", a, b) * lc
+        + np.einsum("ij,ij->i", b, c) * la
+        + np.einsum("ij,ij->i", c, a) * lb
+    )
+    return float(np.sum(2.0 * np.arctan2(numerator, denominator)) / (4.0 * math.pi))
+
+
+def material_volume(vertices: Any, faces: Any) -> dict[str, Any]:
+    """The volume a mesh's outermost closed surfaces enclose, in mesh units^3.
+
+    Ours (KAN-40). SAM 3D decodes every object from a 64^3 voxel grid, so its
+    meshes are shells about one coarse voxel thick: a solid marker comes back
+    as an outer surface with a sealed inner surface (gate-pmic-e2e1: +48 and
+    -32 cm^3), and an open paper cup as one surface wrapped round its wall.
+    The signed volume would count only the shell; the convex hull would fill
+    the cup. Neither is the object.
+
+    The prior's density labels divide mass by the volume the object's own
+    surface encloses: a closed object gets a bulk density (training labels:
+    large marker 420, rubik's cube 440, cereal boxes 120-160 kg/m^3, far
+    below solid plastic or card), and an open vessel the density of its wall
+    material (cups 950, mugs 2300). So the volume to multiply by is the one
+    the outermost closed surfaces enclose: sealed inner surfaces are filled
+    (their emptiness is already inside a bulk density), and an open vessel's
+    wall stays a wall. A component inside another one is a void or a part
+    inside it and is not counted again. A component that is not closed has
+    no volume and is skipped, and counted.
+    """
+    import trimesh
+
+    mesh = trimesh.Trimesh(
+        np.asarray(vertices, dtype=np.float64), np.asarray(faces), process=True
+    )
+    parts = [p for p in mesh.split(only_watertight=False) if len(p.faces)]
+    closed = [p for p in parts if p.is_watertight]
+    signed = [float(p.volume) for p in closed]
+    order = sorted(range(len(closed)), key=lambda i: -abs(signed[i]))
+    outer: list[int] = []
+    for rank, i in enumerate(order):
+        low, high = closed[i].bounds
+        point = closed[i].vertices[0]
+        inside = False
+        for j in order[:rank]:
+            other_low, other_high = closed[j].bounds
+            # The box test first: the winding number is a pass over every face.
+            if (
+                np.all(low >= other_low)
+                and np.all(high <= other_high)
+                and abs(_winding_number(point, closed[j].triangles)) > 0.5
+            ):
+                inside = True
+                break
+        if not inside:
+            outer.append(i)
+    volume = float(sum(abs(signed[i]) for i in outer))
+    # A closed component guarantees a hull; a flat open sheet alone has none.
+    hull = float(mesh.convex_hull.volume) if outer else None
+    return {
+        "volume": volume if outer and volume > 0.0 else None,
+        "signed_volume": float(sum(signed)),
+        "components": len(parts),
+        "outermost_components": len(outer),
+        "inverted_outermost": sum(signed[i] < 0 for i in outer),
+        "open_components_skipped": len(parts) - len(closed),
+        "convex_hull_volume": hull,
+        "surface_area": float(mesh.area),
+        # The reconstruction's mean wall: 2 x shell volume / both faces. An
+        # open vessel's real wall thinner than this was not resolved, so its
+        # material volume is an upper bound (gate-pmic-e2e1 cup: 1.4 mm).
+        "shell_thickness": (
+            2.0 * float(sum(signed)) / float(mesh.area) if mesh.area > 0 else None
+        ),
+    }
+
+
+def placed_volumes(
+    out: Path, numbers: Collection[int] | None = None
+) -> dict[int, dict[str, Any]]:
+    """Each placed object's material volume in m^3, with where it came from.
+
+    The mesh is the SAM 3D GLB the export places (``bin_score.json``), at
+    ``similarity.scale`` into the splat frame and ``splat_unit_m`` metres per
+    splat unit, the same chain ``physics_export.stage_points`` applies. The
+    rotation and the gravity alignment are rigid, so they do not change a
+    volume. An object without a GLB or a similarity gets no entry, and so
+    does one not in ``numbers`` when it is given.
+    """
+    import trimesh
+
+    association = json.loads(
+        (out / "association_evidence.json").read_text(encoding="utf-8")
+    )
+    placement = json.loads((out / "bin_score.json").read_text(encoding="utf-8"))
+    unit = association.get("splat_unit_m")
+    found: dict[int, dict[str, Any]] = {}
+    for row in placement["icp"]["objects"]:
+        similarity = row.get("similarity") or {}
+        if not row.get("placed") or not row.get("glb") or unit is None:
+            continue
+        if "scale" not in similarity:
+            continue
+        if numbers is not None and int(row["object"]) not in numbers:
+            continue
+        loaded = trimesh.load(str(row["glb"]), force="mesh")
+        measured = material_volume(loaded.vertices, loaded.faces)
+        metres = float(similarity["scale"]) * float(unit)
+        cubic = metres**3
+        volume = measured["volume"]
+        hull = measured["convex_hull_volume"]
+        found[int(row["object"])] = {
+            "material_volume_m3": None if volume is None else volume * cubic,
+            "volume_rule": VOLUME_RULE,
+            "mesh": str(row["glb"]),
+            "placement_scale": float(similarity["scale"]),
+            "splat_unit_m": float(unit),
+            "metres_per_mesh_unit": metres,
+            "signed_volume_m3": measured["signed_volume"] * cubic,
+            "convex_hull_volume_m3": (None if hull is None else hull * cubic),
+            "surface_area_m2": measured["surface_area"] * metres**2,
+            "shell_thickness_m": (
+                None
+                if measured["shell_thickness"] is None
+                else measured["shell_thickness"] * metres
+            ),
+            "components": measured["components"],
+            "outermost_components": measured["outermost_components"],
+            "inverted_outermost": measured["inverted_outermost"],
+            "open_components_skipped": measured["open_components_skipped"],
+        }
+    return found
+
+
 def _vlm_friction(vlm_physics: Mapping[str, Any] | None) -> float | None:
     if not vlm_physics:
         return None
@@ -193,13 +357,16 @@ def property_record(
     review: Mapping[str, Any] | None = None,
     vlm_physics: Mapping[str, Any] | None = None,
     prior_provenance: Mapping[str, Any] | None = None,
+    volume: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One object's ``physics.json``: every §3.4 field and its source.
 
     ``prior`` is :func:`prior_for_pack`'s output (``None`` without an npz),
     ``vote`` one entry of ``material_vote.json`` (SF-20), ``review`` one entry
     of ``material_review.json`` (SF-21), ``vlm_physics`` a VLM estimate with a
-    ``friction`` key (``section34`` format).
+    ``friction`` key (``section34`` format), ``volume`` one entry of
+    :func:`placed_volumes` (its ``material_volume_m3`` gives the mass; the
+    rest is recorded as ``mass_provenance``).
     """
     sources: dict[str, str] = {}
     record: dict[str, Any] = {"object": name, "section": "3.4"}
@@ -291,10 +458,41 @@ def property_record(
     for key in ("log_mass", "log_density", "rigidity", "deformability"):
         record[key] = None if prior is None else float(prior[key])
         sources[key] = "no prior" if prior is None else "prior mean"
-    record["mass_kg"] = None if prior is None else math.exp(prior["log_mass"])
-    record["density_kg_m3"] = None if prior is None else math.exp(prior["log_density"])
-    for key in ("mass_kg", "density_kg_m3"):
-        sources[key] = "no prior" if prior is None else "exp of the prior's log slot"
+    density = None if prior is None else math.exp(prior["log_density"])
+    record["density_kg_m3"] = density
+    sources["density_kg_m3"] = (
+        "no prior" if prior is None else "exp of the prior's log slot"
+    )
+    # KAN-40: mass from density and the metric volume, never from the
+    # prior's log-mass slot, which is kept only as a recorded alternative.
+    record["prior_mass_kg"] = None if prior is None else math.exp(prior["log_mass"])
+    sources["prior_mass_kg"] = (
+        "no prior"
+        if prior is None
+        else "exp of the prior's log-mass slot; recorded, not used"
+    )
+    cubic = None if volume is None else volume.get("material_volume_m3")
+    record["material_volume_m3"] = cubic
+    sources["material_volume_m3"] = (
+        "no placed mesh" if volume is None else "placed mesh (mass_provenance)"
+    )
+    if density is not None and cubic is not None:
+        record["mass_kg"] = density * float(cubic)
+        sources["mass_kg"] = MASS_FORMULA
+    else:
+        record["mass_kg"] = None
+        sources["mass_kg"] = (
+            "no prior"
+            if prior is None
+            else "no metric volume; PhysX takes density x collider volume"
+        )
+    if volume is not None:
+        record["mass_provenance"] = {
+            "formula": MASS_FORMULA if record["mass_kg"] is not None else None,
+            "density_kg_m3": density,
+            "why_not_prior_mass": WHY_NOT_PRIOR_MASS,
+            **dict(volume),
+        }
 
     # Contact coefficients.
     friction = _vlm_friction(vlm_physics)
@@ -380,13 +578,15 @@ def write_property_set(
     review: Mapping[str, Any] | None = None,
     vlm_physics: Mapping[str, Any] | None = None,
     fallbacks: Mapping[int, str] | None = None,
+    volumes: Mapping[int, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Write ``out/physics/<n>.json`` for every object and a summary.
 
     ``objects`` is ``[{"object": n, "name": "..."}]`` (``crops.zip``'s
     ``objects.json``). With a checkpoint, each object needs
     ``packs/object_<n>.npy`` of shape ``(N, 912)`` and may have
-    ``object_<n>_mask.npy``.
+    ``object_<n>_mask.npy``. ``volumes`` is :func:`placed_volumes` by
+    object number; an object without one gets no mass (KAN-40).
     """
     model = None
     provenance = None
@@ -411,6 +611,7 @@ def write_property_set(
     folder.mkdir(parents=True, exist_ok=True)
     records = []
     fallbacks = fallbacks or {}
+    volumes = volumes or {}
     for obj, vote_entry, review_entry in zip(objects, votes, reviews, strict=True):
         number = int(obj["object"])
         prior = None
@@ -434,6 +635,7 @@ def write_property_set(
             review=review_entry,
             vlm_physics=estimates.get(str(number)),
             prior_provenance=provenance if use_prior else None,
+            volume=volumes.get(number),
         )
         if number in fallbacks:
             record["plan_source"] = "fallback"
@@ -549,7 +751,7 @@ def run_physics(
         )
         placement = json.loads((out / "bin_score.json").read_text(encoding="utf-8"))
         names = object_names(association)
-        objects = [
+        objects: list[dict[str, Any]] = [
             {"object": int(r["object"]), "name": names.get(int(r["object"]), "object")}
             for r in placement["icp"]["objects"]
             if r.get("placed")
@@ -574,6 +776,7 @@ def run_physics(
             out,
             checkpoint=used,
             fallbacks=fallbacks,
+            volumes=placed_volumes(out, {o["object"] for o in objects}),
             vote=_read_json(_present(folder / "material_vote.json")),
             review=_read_json(_present(folder / "material_review.json")),
         )
