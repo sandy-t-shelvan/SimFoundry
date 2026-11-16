@@ -287,11 +287,11 @@ def test_a_reject_reruns_the_stage_once_with_the_note_and_both_go_to_the_ledger(
     assert lines[1]["retry_note"] == "split the cup from the marker"
     assert lines[1]["retry_prompt"] == "paper cup . marker ."
     for attempt, verdict in ((0, "reject"), (1, "accept")):
-        folder = out / sc.CRITIC_DIR / f"attempt-{attempt}"
+        folder = out / sc.CRITIC_DIR / "masks" / f"attempt-{attempt}"
         review = json.loads((folder / "review" / "masks.json").read_text())
         assert review["verdict"] == verdict and review["model"] == "gemini-3.8-flash"
         assert (folder / "review_steps" / "masks.png").is_file()
-    assert json.loads((out / sc.CRITIC_DIR / "loop.json").read_text()) == record
+    assert json.loads((out / sc.CRITIC_DIR / "masks" / "loop.json").read_text()) == record
 
 
 def test_a_second_reject_is_logged_and_never_re_run(tmp_path):
@@ -463,3 +463,25 @@ def test_no_recorded_prompt_means_no_scene_context(tmp_path):
     assert sc.scene_context(out) == ""
     (out / "masks_evidence.json").write_text("not json")
     assert sc.scene_context(out) == ""
+
+
+def test_a_stage_with_no_rerunner_is_judged_once_and_a_reject_is_final(tmp_path):
+    out = _masks_run(tmp_path)
+    harness = FakeHarness([_reply("reject", "two meshes are one blob", "split them")])
+    record = sc.review_and_retry(
+        out, harness, "mesh", render=lambda o: sc.render_masks(o)
+    )
+    assert record["outcome"] == "reject, retry skipped" and record["vlm_calls"] == 1
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert [(e["item"], e["decision"]) for e in lines][-2:] == [
+        ("step review (mesh)", "reject"),
+        ("step retry (mesh)", "skipped"),
+    ]
+    assert "no input of the mesh stage" in lines[-1]["reason"]
+    assert (out / sc.CRITIC_DIR / "mesh" / "loop.json").is_file()
+
+
+def test_nothing_drawn_is_not_judged(tmp_path):
+    harness = FakeHarness([])
+    record = sc.review_and_retry(tmp_path, harness, "gaussians")
+    assert record["outcome"] == "nothing to review" and record["vlm_calls"] == 0

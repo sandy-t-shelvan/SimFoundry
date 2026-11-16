@@ -377,3 +377,136 @@ def test_inspection_views_drawn_before_left_out_existed_are_drawn_again(tmp_path
     assert not video_run.stage_done(out, "inspect", ("inspection views",))
     (out / "settle_summary.json").write_text(json.dumps({"ran": True, "left_out": []}))
     assert video_run.stage_done(out, "inspect", ("inspection views",))
+
+
+def _accepting_stages(out, calls):
+    def stage(name, items):
+        def run():
+            calls.append(name)
+            ledger = json.loads((out / "ledger.json").read_text())
+            ledger["entries"] += [{"item": i, "decision": "accept"} for i in items]
+            (out / "ledger.json").write_text(json.dumps(ledger))
+            return 0
+
+        return run
+
+    return {name: stage(name, items) for name, items in video_run.STAGES}
+
+
+def _critic(out, calls, verdicts):
+    """Writes the verdict line the real critic writes; ``verdicts`` by critic stage."""
+
+    def judge(path, critic_stage):
+        calls.append(f"critic:{critic_stage}")
+        verdict = verdicts.get(critic_stage, "accept")
+        ledger = json.loads((path / "ledger.json").read_text())
+        ledger["entries"].append(
+            {"item": video_run.review_item(critic_stage), "decision": verdict}
+        )
+        (path / "ledger.json").write_text(json.dumps(ledger))
+        outcome = "accept" if verdict == "accept" else "reject, retry skipped"
+        return {"outcome": outcome, "attempts": [{"attempt": 0}]}
+
+    return judge
+
+
+def _video_out(tmp_path, done):
+    out = tmp_path / "mailbox"
+    out.mkdir()
+    write_scene(out, VIDEO)
+    _ledger(out, done)
+    return out
+
+
+def test_the_critic_judges_each_drawable_stage_right_after_it_runs(tmp_path):
+    out = _video_out(tmp_path, ["video", "COLMAP camera poses", "full-scene splat"])
+    calls = []
+    code = video_run.run_video(
+        tmp_path / "Mailbox.mp4",
+        out,
+        "x .",
+        stages=_accepting_stages(out, calls),
+        critic=_critic(out, calls, {}),
+    )
+    assert code == 0
+    assert calls[:6] == [
+        "masks",
+        "critic:masks",
+        "association",
+        "critic:gaussians",
+        "sam3d",
+        "critic:mesh",
+    ]
+    record = json.loads((out / video_run.RECORD).read_text())
+    assert record["complete"] and record["critic_rejects"] == []
+    assert [c["outcome"] for c in record["critic"]] == ["accept"] * 3
+
+
+def test_a_reject_that_stands_stops_the_run_before_anything_is_built_on_it(tmp_path):
+    out = _video_out(tmp_path, ["video", "COLMAP camera poses", "full-scene splat"])
+    calls = []
+    code = video_run.run_video(
+        tmp_path / "Mailbox.mp4",
+        out,
+        "x .",
+        stages=_accepting_stages(out, calls),
+        critic=_critic(out, calls, {"mesh": "reject"}),
+    )
+    assert code == 1
+    assert calls[-2:] == ["sam3d", "critic:mesh"] and "place" not in calls
+    record = json.loads((out / video_run.RECORD).read_text())
+    assert not record["complete"] and record["critic_rejects"] == ["sam3d"]
+    assert record["stopped"] == (
+        "sam3d: the step critic's outcome is 'reject, retry skipped'"
+    )
+
+
+def test_a_resumed_stage_is_judged_once_and_a_standing_reject_stops_it(tmp_path):
+    done = ["video", "COLMAP camera poses", "full-scene splat"]
+    out = _video_out(tmp_path, done)
+    (out / "masks_evidence.json").write_text(
+        json.dumps({"filter": {video_run.JOINED_PHRASES: "drop"}})
+    )
+    ledger = json.loads((out / "ledger.json").read_text())
+    ledger["entries"].append({"item": "SAM masks", "decision": "accept"})
+    (out / "ledger.json").write_text(json.dumps(ledger))
+    calls = []
+    critic = _critic(out, calls, {"masks": "reject"})
+    stages = _accepting_stages(out, calls)
+    assert video_run.run_video(
+        tmp_path / "Mailbox.mp4", out, "x .", stages=stages, critic=critic
+    )
+    # Masks were done but never judged: judged now, rejected, nothing after.
+    assert calls == ["critic:masks"]
+    calls.clear()
+    assert video_run.run_video(
+        tmp_path / "Mailbox.mp4", out, "x .", stages=stages, critic=critic
+    )
+    # The reject stands: no second judgement, no new retry budget.
+    assert calls == []
+    record = json.loads((out / video_run.RECORD).read_text())
+    assert record["stopped"] == "masks: the step critic rejected it"
+
+
+def test_a_critic_reject_keeps_a_run_incomplete_even_without_the_critic(tmp_path):
+    items = [i for _, stage_items in video_run.STAGES for i in stage_items]
+    out = _video_out(tmp_path, items)
+    calls = []
+    _critic(out, calls, {"gaussians": "reject"})(out, "gaussians")
+    funcs = _accepting_stages(out, calls)
+    video_run.run_video(tmp_path / "Mailbox.mp4", out, "x .", stages=funcs)
+    record = json.loads((out / video_run.RECORD).read_text())
+    assert record["critic_rejects"] == ["association"] and not record["complete"]
+
+
+def test_new_masks_make_later_critic_verdicts_stale():
+    entries = [
+        {"item": "Gaussian association", "decision": "accept"},
+        {"item": "step review (gaussians)", "decision": "accept"},
+        {"item": "step review (masks)", "decision": "accept"},
+    ]
+    stale = video_run.stale_after(entries, "masks", "r")
+    assert [e["item"] for e in stale] == [
+        "Gaussian association",
+        "step review (gaussians)",
+    ]

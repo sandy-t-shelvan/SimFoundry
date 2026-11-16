@@ -403,9 +403,13 @@ def rerun_masks(out: Path, request: dict[str, str]) -> int:
     return run_bin_masks(out, prompt=request["prompt"], critic_note=request["note"])
 
 
-Renderer = Callable[[Path], Path]
+Renderer = Callable[[Path], Path | None]
 Rerunner = Callable[[Path, dict[str, str]], int]
-RENDERERS: dict[str, Renderer] = {"masks": lambda out: render_masks(out)}
+RENDERERS: dict[str, Renderer] = {
+    "masks": lambda out: render_masks(out),
+    "gaussians": lambda out: render_gaussians(out),
+    "mesh": lambda out: render_mesh(out),
+}
 RERUNNERS: dict[str, Rerunner] = {"masks": rerun_masks}
 # What a stage's re-run needs from the note before it can do anything new.
 RETRY_NEEDS = {"masks": "prompt"}
@@ -423,17 +427,24 @@ def review_and_retry(
 
     Every verdict goes to the ledger with its attempt number, and each
     attempt's image and ``review/<stage>.json`` stay under
-    ``out/step_critic/attempt-<n>/``. Returns the record also written to
-    ``out/step_critic/loop.json``.
+    ``out/step_critic/<stage>/attempt-<n>/``. Returns the record also written
+    to ``out/step_critic/<stage>/loop.json``.
+
+    A stage with no re-runner (Gaussians, meshes) is judged once: no input of
+    it is one a note can change, so a reject is final and is logged as a
+    skipped retry. A stage with nothing drawn yet is not judged.
     """
     out = Path(out)
-    render = render or RENDERERS[stage]
-    rerun = rerun or RERUNNERS[stage]
+    draw = render or RENDERERS[stage]
+    rerun = rerun or RERUNNERS.get(stage)
     need = RETRY_NEEDS.get(stage)
     record: dict[str, Any] = {"stage": stage, "model": harness.model_id, "attempts": []}
     for attempt in range(MAX_RETRIES + 1):
-        image = render(out)
-        folder = out / CRITIC_DIR / f"attempt-{attempt}"
+        image = draw(out)
+        if image is None:
+            record["outcome"] = "nothing to review"
+            break
+        folder = out / CRITIC_DIR / stage / f"attempt-{attempt}"
         (folder / REVIEW_DIR).mkdir(parents=True, exist_ok=True)
         shutil.copyfile(image, folder / REVIEW_DIR / f"{stage}.png")
         document = judge_steps(
@@ -454,8 +465,12 @@ def review_and_retry(
             record["outcome"] = step["verdict"]
             break
         request = requests[0]
-        if need and not request.get(need):
+        reason = ""
+        if rerun is None:
+            reason = f"no input of the {stage} stage is one a note can change"
+        elif need and not request.get(need):
             reason = f"the critic's note names no {need}; the same inputs would give the same {stage}"
+        if reason or rerun is None:
             append_ledger(
                 out,
                 [
@@ -477,7 +492,7 @@ def review_and_retry(
             record["outcome"] = f"retry exited {code}"
             break
     record["vlm_calls"] = harness.call_count
-    path = out / CRITIC_DIR / CRITIC_RECORD
+    path = out / CRITIC_DIR / stage / CRITIC_RECORD
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return record
@@ -776,7 +791,7 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
         "review", help="judge a stage and re-run it once on a reject (box with key)"
     )
     review.add_argument("--out", type=Path, required=True)
-    review.add_argument("--stage", choices=sorted(RERUNNERS), default="masks")
+    review.add_argument("--stage", choices=sorted(RENDERERS), default="masks")
     args = parser.parse_args(argv)
     if args.command == "render":
         drawn = render_review_images(args.out)

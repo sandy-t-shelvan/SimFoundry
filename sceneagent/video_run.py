@@ -67,6 +67,45 @@ STAGES: tuple[tuple[str, tuple[str, ...]], ...] = (
 # Ledger items a stage writes beside the ones its resume check reads.
 ALSO_WRITES: dict[str, tuple[str, ...]] = {"place": ("bin score",)}
 
+# KAN-52: the step critic's stage for each pipeline stage whose output it can
+# draw (``step_critic.RENDERERS``). With ``--critic`` each is judged right
+# after it runs, before anything is built on it.
+CRITIC_STAGE: dict[str, str] = {
+    "masks": "masks",
+    "association": "gaussians",
+    "sam3d": "mesh",
+}
+Critic = Callable[[Path, str], dict[str, Any]]
+
+
+def review_item(critic_stage: str) -> str:
+    """The ledger item the step critic writes for one of its stages."""
+    return f"step review ({critic_stage})"
+
+
+def last_review(out: Path, critic_stage: str) -> str | None:
+    """The critic's last verdict on a stage; None when unjudged or stale."""
+    try:
+        ledger = json.loads((out / "ledger.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    last = None
+    for entry in ledger.get("entries", []):
+        if entry.get("item") == review_item(critic_stage):
+            last = entry
+    if last is None or "stale_after" in last:
+        return None
+    return last.get("decision")
+
+
+def critic_rejects(out: Path) -> list[str]:
+    """Pipeline stages whose last current critic verdict is a reject."""
+    return [
+        name
+        for name, critic_stage in CRITIC_STAGE.items()
+        if last_review(out, critic_stage) == "reject"
+    ]
+
 
 def stale_after(
     entries: list[dict[str, Any]], stage: str, reason: str
@@ -84,7 +123,11 @@ def stale_after(
     later = [
         item
         for name, items in STAGES[names.index(stage) + 1 :]
-        for item in (*items, *ALSO_WRITES.get(name, ()))
+        for item in (
+            *items,
+            *ALSO_WRITES.get(name, ()),
+            *((review_item(CRITIC_STAGE[name]),) if name in CRITIC_STAGE else ()),
+        )
     ]
     last = {e.get("item"): e.get("decision") for e in entries}
     return [
@@ -190,8 +233,19 @@ def run_video(
     stages: dict[str, Callable[[], int]] | None = None,
     budget_s: float = START_BUDGET_S,
     clock: Callable[[], float] = time.monotonic,
+    critic: Critic | None = None,
 ) -> int:
-    """Run or resume the slice. Return 0 when every stage is accepted."""
+    """Run or resume the slice. Return 0 when every stage is accepted.
+
+    With ``critic`` (KAN-52) each stage in ``CRITIC_STAGE`` is judged after
+    it runs, and a reject is corrected where a note can change the stage's
+    input (masks: the detector prompt; the retry also marks every later
+    stage stale). A reject that stands stops the run there, so nothing is
+    built on output the critic refused. A stage resumed as done is judged
+    if it never was, and stops the run if its last verdict is a reject. A
+    run is complete only with every stage accepted and no current critic
+    reject, whether or not this call ran the critic.
+    """
     video, out = Path(video), Path(out)
     out.mkdir(parents=True, exist_ok=True)
     funcs = stages or default_stages(video, out, prompt)
@@ -212,6 +266,18 @@ def run_video(
                 record["stopped"] = f"no video scene.json in {out} before {name}"
                 break
             if not rerun and stage_done(out, name, items):
+                if critic is not None and name in CRITIC_STAGE:
+                    verdict = last_review(out, CRITIC_STAGE[name])
+                    if verdict == "reject":
+                        record["stopped"] = f"{name}: the step critic rejected it"
+                        break
+                    if verdict is None:
+                        stop, retried = _judge(out, name, critic, record)
+                        _write_record(out, record)
+                        if stop:
+                            record["stopped"] = stop
+                            break
+                        rerun = rerun or retried
                 continue
             if clock() - start > budget_s:
                 record["stopped"] = f"time budget: {name} not started"
@@ -228,6 +294,12 @@ def run_video(
             if code != 0:
                 record["stopped"] = f"{name} failed (exit {code})"
                 break
+            if critic is not None and name in CRITIC_STAGE:
+                stop, _ = _judge(out, name, critic, record)
+                _write_record(out, record)
+                if stop:
+                    record["stopped"] = stop
+                    break
         try:
             from sceneagent.step_critic import render_review_images
 
@@ -240,10 +312,39 @@ def run_video(
             build_package(out, out / "package")
         except (OSError, ValueError):
             pass
-        done = all(accepted(out, items) for _, items in STAGES)
+        rejected = critic_rejects(out)
+        done = all(accepted(out, items) for _, items in STAGES) and not rejected
+        record["critic_rejects"] = rejected
         record["complete"] = done
         _write_record(out, record)
     return 0 if done else 1
+
+
+def _judge(
+    out: Path, name: str, critic: Critic, record: dict[str, Any]
+) -> tuple[str | None, bool]:
+    """Judge one stage. Return why the run stops (None to go on) and whether it re-ran.
+
+    Nothing drawn means there is nothing to judge; the stage's own gate has
+    already decided it. Any other outcome but accept stops the run, a failed
+    critic call included: the loop does not pass a stage it could not check.
+    """
+    result = critic(out, CRITIC_STAGE[name])
+    outcome = str(result.get("outcome"))
+    attempts = result.get("attempts") or []
+    retried = any("exit_code" in (step.get("retry") or {}) for step in attempts)
+    record.setdefault("critic", []).append(
+        {
+            "stage": name,
+            "critic_stage": CRITIC_STAGE[name],
+            "outcome": outcome,
+            "attempts": len(attempts),
+            "retried": retried,
+        }
+    )
+    if outcome in ("accept", "nothing to review"):
+        return None, retried
+    return f"{name}: the step critic's outcome is {outcome!r}", retried
 
 
 def _read_record(out: Path) -> dict[str, Any]:
@@ -271,13 +372,32 @@ def main(argv: list[str] | None = None) -> int:
             "for this video's bytes (sceneagent/scene_objects.py, KAN-56)."
         ),
     )
+    parser.add_argument(
+        "--critic",
+        action="store_true",
+        help=(
+            "judge masks, Gaussians and meshes as they are made, correct a "
+            "rejected one where a note can, and stop on a reject that stands "
+            "(KAN-52; needs the VLM key)"
+        ),
+    )
     args = parser.parse_args(argv)
     try:
         prompt = resolve_prompt(args.video, args.prompt)
     except MissingPromptError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    return run_video(args.video, args.out, prompt)
+    critic: Critic | None = None
+    if args.critic:
+        from sceneagent.harness import selected_harness
+        from sceneagent.step_critic import review_and_retry
+
+        harness = selected_harness()
+
+        def critic(out: Path, stage: str) -> dict[str, Any]:
+            return review_and_retry(out, harness, stage)
+
+    return run_video(args.video, args.out, prompt, critic=critic)
 
 
 if __name__ == "__main__":
