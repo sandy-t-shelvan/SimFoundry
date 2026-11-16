@@ -181,6 +181,44 @@ def recorded_prompt(out: Path | str) -> str:
         return ""
 
 
+def object_context(out: Path | str) -> str:
+    """Each object's detector name and how many mask views it was seen in.
+
+    The image alone does not say which cluster is a target: the critic left
+    out the PutMarkerInCup marker, seen in 28 of 30 views, as clutter, beside
+    a second "scissors" seen in 3 (kan52-loop-pmic4). Empty without an
+    association.
+    """
+    from sceneagent.physics_props import object_names
+
+    try:
+        association = json.loads(
+            (Path(out) / "association_evidence.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return ""
+    names = object_names(association)
+    total = association.get("views")
+    total = len(total) if isinstance(total, (dict, list)) else total
+    lines = []
+    for obj in association.get("object_list", []):
+        seen = obj.get("views")
+        seen = len(seen) if isinstance(seen, (dict, list)) else seen
+        lines.append(
+            f"- object_{obj['object']}: {names.get(int(obj['object']), 'object')}, "
+            f"seen in {seen} of {total} views"
+        )
+    if not lines:
+        return ""
+    return (
+        "\nThe objects, by the detector's name for them and the number of views "
+        "they were seen in:\n"
+        + "\n".join(lines)
+        + "\nAn object seen in most views is a real object, even when its points "
+        "are noisy; one seen in a few views is more likely a duplicate or clutter.\n"
+    )
+
+
 def scene_context(out: Path | str) -> str:
     """The scene's target objects, from the detector prompt the masks stage used.
 
@@ -562,8 +600,11 @@ def review_and_retry(
         folder = out / CRITIC_DIR / stage / f"attempt-{attempt}"
         (folder / REVIEW_DIR).mkdir(parents=True, exist_ok=True)
         shutil.copyfile(image, folder / REVIEW_DIR / f"{stage}.png")
+        context = scene_context(out)
+        if stage in OBJECT_STAGES:
+            context += object_context(out)
         document = judge_steps(
-            {stage: Path(image).read_bytes()}, harness, context=scene_context(out)
+            {stage: Path(image).read_bytes()}, harness, context=context
         )
         write_stage_reviews(document, folder)
         step: dict[str, Any] = {"attempt": attempt, "review": str(folder)}
@@ -726,9 +767,31 @@ def _bounds(cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return low, np.maximum(high - low, 1e-6)
 
 
+def _frame_all(clouds: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """One XY frame that holds every cloud's 2nd-98th percentile box.
+
+    Framing on the pooled points (``_bounds``) cut a whole object off at the
+    edge when it sat apart from the rest, and the critic took the PutMarkerInCup
+    marker for clutter (kan52-loop-pmic4). Each cloud's own box drops only its
+    stray points.
+    """
+    lows, highs = [], []
+    for cloud in clouds:
+        if len(cloud) >= 50:
+            lows.append(np.percentile(cloud[:, :2], 2, axis=0))
+            highs.append(np.percentile(cloud[:, :2], 98, axis=0))
+        elif len(cloud):
+            lows.append(cloud[:, :2].min(axis=0))
+            highs.append(cloud[:, :2].max(axis=0))
+    low, high = np.min(lows, axis=0), np.max(highs, axis=0)
+    margin = 0.05 * (high - low)
+    return low - margin, np.maximum(high - low + 2 * margin, 1e-6)
+
+
 def _tile(
     groups: list[tuple[np.ndarray, tuple[int, int, int]]],
     labels: list[str] | None = None,
+    frame: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Orthographic XY scatter of the groups on one white tile, framed together.
 
@@ -740,7 +803,7 @@ def _tile(
     canvas = np.full((TILE_PX, TILE_PX, 3), 255, np.uint8)
     if not kept:
         return canvas
-    low, span = _bounds(np.concatenate([pts[:, :2] for pts, _colour in kept]))
+    low, span = frame or _bounds(np.concatenate([pts[:, :2] for pts, _colour in kept]))
     for pts, colour in kept:
         xy = (pts[:, :2] - low) / span
         cols = np.clip((xy[:, 0] * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3)
@@ -782,11 +845,12 @@ def _save_points(
     stage: str,
     groups: list[tuple[np.ndarray, tuple[int, int, int]]],
     labels: list[str] | None = None,
+    frame: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> Path:
     """Orthographic XY scatter. Each group is points plus an RGB colour."""
     if not any(len(pts) for pts, _colour in groups):
         raise ValueError(f"no points to draw for {stage}")
-    return _write_stage(out, stage, _tile(groups, labels))
+    return _write_stage(out, stage, _tile(groups, labels, frame))
 
 
 def _splat_ply(out: Path) -> Path | None:
@@ -809,17 +873,24 @@ def render_gaussians(out: Path) -> Path | None:
         colours = _palette(len(keys))
         groups = []
         labels = []
+        every = []
         for key, colour in zip(keys, colours, strict=True):
             ids = np.asarray(sets[key], dtype=np.int64)
-            if ids.size == 0 or int(key.split("_")[1]) in dropped:
+            if ids.size == 0:
                 continue
             if int(ids.min()) < 0 or int(ids.max()) >= len(xyz):
                 raise ValueError(f"{key} index is outside the splat")
+            every.append(xyz[ids])
+            if int(key.split("_")[1]) in dropped:
+                continue
             groups.append((_cap(xyz[ids]), colour))
             labels.append(key)
     if not groups:
         return None
-    return _save_points(out, "gaussians", groups, labels)
+    # Framed on every object, the dropped ones too, so a re-check after a drop
+    # is drawn at the same scale: framed on the Mailbox cube alone, its few
+    # hundred points filled the tile and read as scattered (kan52-loop-mailbox4).
+    return _save_points(out, "gaussians", groups, labels, _frame_all(every))
 
 
 def render_mesh(out: Path) -> Path | None:

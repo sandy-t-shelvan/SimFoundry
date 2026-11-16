@@ -296,7 +296,9 @@ def test_a_reject_reruns_the_stage_once_with_the_note_and_both_go_to_the_ledger(
         review = json.loads((folder / "review" / "masks.json").read_text())
         assert review["verdict"] == verdict and review["model"] == "gemini-3.8-flash"
         assert (folder / "review_steps" / "masks.png").is_file()
-    assert json.loads((out / sc.CRITIC_DIR / "masks" / "loop.json").read_text()) == record
+    assert (
+        json.loads((out / sc.CRITIC_DIR / "masks" / "loop.json").read_text()) == record
+    )
 
 
 def test_a_second_reject_is_logged_and_never_re_run(tmp_path):
@@ -534,7 +536,12 @@ def test_the_critic_names_only_real_object_labels():
     )
     assert parsed["bad_objects"] == "object_1,object_12"
     accept = json.dumps(
-        {"verdict": "accept", "reason": "ok", "retry_note": "", "bad_objects": ["object_1"]}
+        {
+            "verdict": "accept",
+            "reason": "ok",
+            "retry_note": "",
+            "bad_objects": ["object_1"],
+        }
     )
     assert "bad_objects" not in sc.parse_step_verdict(accept)
     assert "bad_objects" in sc.PROMPTS["gaussians"]
@@ -576,3 +583,35 @@ def test_a_new_association_or_new_meshes_forget_what_was_left_out(tmp_path):
     assert sorted(sc.left_out_objects(out)) == [0]
     sc.clear_left_out(out)
     assert not (out / sc.LEFT_OUT).exists()
+
+
+def test_the_frame_holds_every_object_whole():
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    near = rng.normal(0.0, 0.05, (500, 3))
+    apart = rng.normal(0.0, 0.05, (500, 3)) + [3.0, 3.0, 0.0]
+    low, span = sc._frame_all([near, apart])
+    for cloud in (near, apart):
+        inside = np.all(
+            (cloud[:, :2] >= low) & (cloud[:, :2] <= low + span), axis=1
+        ).mean()
+        assert inside > 0.95
+
+
+def test_the_critic_is_told_each_objects_name_and_views(tmp_path):
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "views": {f"{i:04d}.jpg": {} for i in range(30)},
+                "object_list": [
+                    {"object": 2, "views": 28, "masks": [{"phrase": "marker"}]},
+                    {"object": 3, "views": 3, "masks": [{"phrase": "scissors"}]},
+                ],
+            }
+        )
+    )
+    text = sc.object_context(tmp_path)
+    assert "- object_2: marker, seen in 28 of 30 views" in text
+    assert "- object_3: scissors, seen in 3 of 30 views" in text
+    assert sc.object_context(tmp_path / "missing") == ""
