@@ -56,6 +56,24 @@ def test_a_video_drops_a_phrase_that_joins_two_prompt_terms():
     assert all(d["kept"] for d in bin_rule)
 
 
+def test_a_video_keeps_a_phrase_that_is_part_of_one_term():
+    dets = [
+        _det("black trash", 0.9, [100, 100, 300, 300]),
+        _det("cup", 0.8, [400, 100, 500, 200]),
+        _det("black", 0.7, [700, 100, 800, 200]),
+        _det("can holder", 0.6, [100, 400, 200, 500]),
+    ]
+    prompt = "black trash can . cup . black mug ."
+    video = mask_filter.filter_detections(dets, W, H, prompt, single_term=True)
+    # "black" is in two terms, so it names neither; "can holder" is not
+    # whole words of any term.
+    assert [d["kept"] for d in video] == [True, True, False, False]
+    assert video[2]["drop_reason"] == "phrase not in prompt"
+    # The bin's rule is unchanged: only a whole term in the phrase counts.
+    bin_rule = mask_filter.filter_detections(dets, W, H, prompt)
+    assert [d["kept"] for d in bin_rule] == [False, True, False, False]
+
+
 def test_a_term_counts_only_as_whole_words():
     assert mask_filter.names_term("red mailbox", "mailbox")
     assert not mask_filter.names_term("mailbox", "box")

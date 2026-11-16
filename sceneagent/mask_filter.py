@@ -82,8 +82,9 @@ def filter_detections(
     :data:`MAX_BOX_AREA_FRACTION` of the view, or when a higher-scoring kept
     box overlaps it by :data:`DUPLICATE_IOU` or more.
 
-    With ``single_term`` (ours, for video scenes), a phrase that names two or
-    more prompt terms is dropped too: GroundingDINO joins adjacent phrases
+    With ``single_term`` (ours, for video scenes), a phrase that is part of
+    one multi-word term ("black trash" for "black trash can") names it, and a
+    phrase that names two or more prompt terms is dropped: GroundingDINO joins adjacent phrases
     ("mailbox cube" on Mailbox.mp4, run 43296115235) for a box that is then
     neither object. The bin keeps its rules, so its score does not move.
     """
@@ -92,7 +93,15 @@ def filter_detections(
     for det in out:
         phrase = str(det["phrase"]).lower()
         x0, y0, x1, y1 = det["box_xyxy"]
-        if not any(term in phrase for term in terms):
+        named = any(term in phrase for term in terms)
+        if not named and single_term:
+            # GroundingDINO builds a phrase from the prompt words over its
+            # text threshold, so it can drop a word of a multi-word term:
+            # "black trash" for "black trash can" in all 30 views of
+            # ThrowAwayTrash (kan52-loop-trash1). For a video, whole words of
+            # exactly one term name that term.
+            named = sum(names_term(term, phrase) for term in terms) == 1
+        if not named:
             det["drop_reason"] = "phrase not in prompt"
         elif single_term and sum(names_term(phrase, t) for t in terms) > 1:
             det["drop_reason"] = "phrase joins several prompt terms"
