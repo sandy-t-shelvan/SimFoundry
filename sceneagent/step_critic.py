@@ -64,6 +64,15 @@ REVIEW_ZIP = "review_steps.zip"
 # not overwrite the evidence of the reject that caused it.
 CRITIC_DIR = "step_critic"
 CRITIC_RECORD = "loop.json"
+# KAN-52: objects the critic named as wrong, left out of the scene from SAM 3D
+# on. Association writes new object numbers, so it clears this file.
+LEFT_OUT = "critic_left_out.json"
+OBJECT_LABEL_RE = re.compile(r"^object_([0-9]{1,4})$")
+# KAN-52: (view, mask) pairs whose mesh the critic rejected, by object. SAM 3D
+# skips them; association clears the file with ``LEFT_OUT``.
+SKIPPED_VIEWS = "critic_skipped_views.json"
+# Stages whose reject can name objects, and the stage that drops them.
+OBJECT_STAGES = ("gaussians", "mesh")
 # A retry prompt is GroundingDINO phrases, as ``scene_objects`` writes them.
 RETRY_PHRASE_RE = re.compile(r"^[a-z0-9][a-z0-9 \-]{0,39}$")
 MAX_RETRY_PHRASES = 6
@@ -101,18 +110,23 @@ if a list is given. Leave it empty when a different prompt would not help.
     "gaussians": _COMMON
     + """
 This step assigns the 3D reconstruction's points to objects. The image shows
-the scene's points with each object's points in its own colour. Accept when
-each colour forms one compact object. Reject when a colour spreads over
-several objects, over the bin or the floor, or leaves a large far-away cloud.
-""",
+the scene's points with each object's points in its own colour, labelled
+object_<n>. Accept when each colour forms one compact object. Reject when a
+colour spreads over several objects, over the bin or the floor, or leaves a
+large far-away cloud.
+"""
+    + "{objects}",
     "mesh": _COMMON
     + """
-This step generates one mesh per object from a photo and fits it to the
-object's points. The image shows each mesh in grey with its points in blue.
-Accept when each mesh has the shape of a plausible household object and the
-points lie on its surface. Reject when a mesh is two objects fused, a
-fragment, or clearly the wrong shape for its points.
-""",
+This step generates one mesh per object from a single photo. Each row is one
+object, labelled object_<n>: first the photo the mesh was made from, cropped
+to the object with its mask outlined in magenta, then the mesh in grey from
+three directions, drawn to one scale. The mesh's position and size in the
+scene are checked later, by numbers. Accept when the mesh has the shape of
+the outlined object in the photo, seen from some side. Reject when a mesh is
+two objects fused, a fragment, or a clearly different shape from the photo.
+"""
+    + "{objects}",
     "parts": _COMMON
     + """
 This step splits articulated objects into parts. The image shows each object
@@ -120,6 +134,17 @@ with its parts in different colours. Accept when parts follow real movable
 pieces (a lid, a door, a drawer). Reject when parts cut across one rigid
 piece or when an obvious movable piece is not separated.
 """,
+}
+
+_OBJECTS = """
+For a reject, also give "bad_objects": the labels (object_<n>) of the
+objects that are wrong, so they can be left out of the scene. Leave it empty
+when the problem is not in particular objects, for example a target object
+that is missing altogether.
+"""
+PROMPTS = {
+    stage: prompt.replace("{objects}", _OBJECTS if stage in OBJECT_STAGES else "")
+    for stage, prompt in PROMPTS.items()
 }
 
 RESPONSE_SCHEMA: dict[str, Any] = {
@@ -130,6 +155,8 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         "retry_note": {"type": "STRING"},
         # Optional, and asked for only by the masks prompt.
         "retry_prompt": {"type": "STRING"},
+        # Optional, and asked for only by the gaussians and mesh prompts.
+        "bad_objects": {"type": "ARRAY", "items": {"type": "STRING"}},
     },
     "required": ["verdict", "reason", "retry_note"],
 }
@@ -149,6 +176,53 @@ class ImageHarness(Protocol):
     ) -> str: ...
 
 
+def recorded_prompt(out: Path | str) -> str:
+    """The detector prompt the masks stage last used, or "" when none is recorded."""
+    path = Path(out) / "masks_evidence.json"
+    try:
+        return str(json.loads(path.read_text(encoding="utf-8")).get("prompt") or "")
+    except (OSError, ValueError):
+        return ""
+
+
+def object_context(out: Path | str) -> str:
+    """Each object's detector name and how many mask views it was seen in.
+
+    The image alone does not say which cluster is a target: the critic left
+    out the PutMarkerInCup marker, seen in 28 of 30 views, as clutter, beside
+    a second "scissors" seen in 3 (kan52-loop-pmic4). Empty without an
+    association.
+    """
+    from sceneagent.physics_props import object_names
+
+    try:
+        association = json.loads(
+            (Path(out) / "association_evidence.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return ""
+    names = object_names(association)
+    total = association.get("views")
+    total = len(total) if isinstance(total, (dict, list)) else total
+    lines = []
+    for obj in association.get("object_list", []):
+        seen = obj.get("views")
+        seen = len(seen) if isinstance(seen, (dict, list)) else seen
+        lines.append(
+            f"- object_{obj['object']}: {names.get(int(obj['object']), 'object')}, "
+            f"seen in {seen} of {total} views"
+        )
+    if not lines:
+        return ""
+    return (
+        "\nThe objects, by the detector's name for them and the number of views "
+        "they were seen in:\n"
+        + "\n".join(lines)
+        + "\nAn object seen in most views is a real object, even when its points "
+        "are noisy; one seen in a few views is more likely a duplicate or clutter.\n"
+    )
+
+
 def scene_context(out: Path | str) -> str:
     """The scene's target objects, from the detector prompt the masks stage used.
 
@@ -157,12 +231,7 @@ def scene_context(out: Path | str) -> str:
     a container and told the retry to drop it. Naming the targets fixes that
     for any scene. Empty when the run recorded no prompt.
     """
-    path = Path(out) / "masks_evidence.json"
-    try:
-        prompt = json.loads(path.read_text(encoding="utf-8")).get("prompt") or ""
-    except (OSError, ValueError):
-        return ""
-    names = [p.strip() for p in str(prompt).split(".") if p.strip()]
+    names = [p.strip() for p in recorded_prompt(out).split(".") if p.strip()]
     if not names:
         return ""
     return (
@@ -197,6 +266,15 @@ def retry_prompt(text: Any) -> str:
     return " . ".join(dict.fromkeys(" ".join(p.split()) for p in phrases)) + " ."
 
 
+def object_labels(value: Any) -> str:
+    """``"object_2,object_5"`` from a critic's list, keeping only real labels."""
+    if not isinstance(value, list):
+        return ""
+    labels = [v.strip() for v in value if isinstance(v, str)]
+    kept = [v for v in labels if OBJECT_LABEL_RE.fullmatch(v)]
+    return ",".join(dict.fromkeys(kept))
+
+
 def parse_step_verdict(text: str) -> dict[str, str]:
     """The model's reply as ``{verdict, reason, retry_note}``; raise on anything else.
 
@@ -226,6 +304,9 @@ def parse_step_verdict(text: str) -> dict[str, str]:
     prompt = retry_prompt(payload.get("retry_prompt")) if verdict == "reject" else ""
     if prompt:
         parsed["retry_prompt"] = prompt
+    bad = object_labels(payload.get("bad_objects")) if verdict == "reject" else ""
+    if bad:
+        parsed["bad_objects"] = bad
     return parsed
 
 
@@ -334,6 +415,10 @@ def verdicts_from(payload: Any) -> dict[str, dict[str, str]]:
         prompt = retry_prompt(item.get("retry_prompt"))
         if prompt and item["verdict"] == "reject":
             verdicts[stage]["retry_prompt"] = prompt
+        bad = item.get("bad_objects")
+        bad = object_labels(bad.split(",") if isinstance(bad, str) else bad)
+        if bad and item["verdict"] == "reject":
+            verdicts[stage]["bad_objects"] = bad
     return verdicts
 
 
@@ -362,6 +447,8 @@ def ledger_entries(
             entry["retry_note"] = v["retry_note"]
             if v.get("retry_prompt"):
                 entry["retry_prompt"] = v["retry_prompt"]
+            if v.get("bad_objects"):
+                entry["bad_objects"] = v["bad_objects"]
         entries.append(entry)
     return entries
 
@@ -376,9 +463,11 @@ def retry_requests(
         v = verdicts.get(stage)
         if not v or v["verdict"] != "reject" or retried.get(stage, 0) >= MAX_RETRIES:
             continue
-        request = {"stage": stage, "note": v["retry_note"]}
+        request = {"stage": stage, "note": v["retry_note"], "reason": v["reason"]}
         if v.get("retry_prompt"):
             request["prompt"] = v["retry_prompt"]
+        if v.get("bad_objects"):
+            request["objects"] = v["bad_objects"]
         requests.append(request)
     return requests
 
@@ -403,12 +492,128 @@ def rerun_masks(out: Path, request: dict[str, str]) -> int:
     return run_bin_masks(out, prompt=request["prompt"], critic_note=request["note"])
 
 
-Renderer = Callable[[Path], Path]
+def left_out_objects(out: Path | str) -> dict[int, dict[str, Any]]:
+    """Objects the critic left out, by number, each with its stage and reason."""
+    try:
+        rows = json.loads((Path(out) / LEFT_OUT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    objects = rows.get("objects") if isinstance(rows, dict) else None
+    return {int(r["object"]): r for r in objects or [] if isinstance(r, dict)}
+
+
+def skipped_views(out: Path | str) -> dict[int, list[tuple[str, int]]]:
+    """The (view, mask index) pairs SAM 3D must not use again, by object."""
+    try:
+        rows = json.loads((Path(out) / SKIPPED_VIEWS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {
+        int(number): [(str(view), int(index)) for view, index in pairs]
+        for number, pairs in (rows if isinstance(rows, dict) else {}).items()
+    }
+
+
+def remesh(out: Path, request: dict[str, str]) -> int:
+    """The mesh retry: make the named objects' meshes again from another view.
+
+    A mesh made from a mask that took in the surroundings is the object's
+    fault only in that view: on Mailbox the cube's mask in one view outlined
+    the tape square under it, and SAM 3D made a flat frame
+    (kan52-loop-mailbox7), while its other views were the cube. Leaving the
+    cube out would lose a target, so the rejected view is skipped and SAM 3D
+    runs again. Returns 2 when the critic named no meshed object.
+    """
+    from sceneagent.bin_sam3d import run_bin_sam3d
+
+    out = Path(out)
+    evidence = json.loads((out / "sam3d_evidence.json").read_text(encoding="utf-8"))
+    used = {int(o["object"]): o for o in evidence.get("objects", []) if o.get("ok")}
+    named = [
+        int(m.group(1))
+        for label in request.get("objects", "").split(",")
+        if (m := OBJECT_LABEL_RE.fullmatch(label)) and int(m.group(1)) in used
+    ]
+    if not named:
+        return 2
+    skips = {str(k): [list(p) for p in v] for k, v in skipped_views(out).items()}
+    for number in named:
+        pair = [used[number]["view"], int(used[number]["mask_index"])]
+        skips.setdefault(str(number), []).append(pair)
+    (out / SKIPPED_VIEWS).write_text(
+        json.dumps(skips, indent=2) + "\n", encoding="utf-8"
+    )
+    return run_bin_sam3d(out)
+
+
+def clear_left_out(out: Path | str, stages: tuple[str, ...] = OBJECT_STAGES) -> None:
+    """Forget what these stages left out, when the objects they judged are remade."""
+    kept = [r for r in left_out_objects(out).values() if r.get("stage") not in stages]
+    path = Path(out) / LEFT_OUT
+    if kept:
+        path.write_text(
+            json.dumps({"objects": kept}, indent=2) + "\n", encoding="utf-8"
+        )
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _scene_objects(out: Path) -> list[int]:
+    association = json.loads(
+        (out / "association_evidence.json").read_text(encoding="utf-8")
+    )
+    return sorted(int(o["object"]) for o in association.get("object_list", []))
+
+
+def leave_out(out: Path, request: dict[str, str]) -> int:
+    """The gaussians and mesh retry: leave the objects the critic named out.
+
+    Only objects still in the scene count. Returns 2 when the critic named
+    none of them and 3 when nothing would be left, so the loop stops rather
+    than build an empty scene. Otherwise the objects go to ``LEFT_OUT`` and
+    the retry judges the objects that remain.
+    """
+    out = Path(out)
+    current = [n for n in _scene_objects(out) if n not in left_out_objects(out)]
+    named = {
+        int(m.group(1))
+        for label in request.get("objects", "").split(",")
+        if (m := OBJECT_LABEL_RE.fullmatch(label))
+    }
+    dropping = [n for n in current if n in named]
+    if not dropping:
+        return 2
+    if len(dropping) == len(current):
+        return 3
+    rows = list(left_out_objects(out).values()) + [
+        {
+            "object": n,
+            "stage": request["stage"],
+            "reason": request.get("reason", ""),
+            "note": request.get("note", ""),
+        }
+        for n in dropping
+    ]
+    (out / LEFT_OUT).write_text(
+        json.dumps({"objects": rows}, indent=2) + "\n", encoding="utf-8"
+    )
+    return 0
+
+
+Renderer = Callable[[Path], Path | None]
 Rerunner = Callable[[Path, dict[str, str]], int]
-RENDERERS: dict[str, Renderer] = {"masks": lambda out: render_masks(out)}
-RERUNNERS: dict[str, Rerunner] = {"masks": rerun_masks}
+RENDERERS: dict[str, Renderer] = {
+    "masks": lambda out: render_masks(out),
+    "gaussians": lambda out: render_gaussians(out),
+    "mesh": lambda out: render_mesh(out),
+}
+RERUNNERS: dict[str, Rerunner] = {
+    "masks": rerun_masks,
+    "gaussians": leave_out,
+    "mesh": remesh,
+}
 # What a stage's re-run needs from the note before it can do anything new.
-RETRY_NEEDS = {"masks": "prompt"}
+RETRY_NEEDS = {"masks": "prompt", "gaussians": "objects", "mesh": "objects"}
 
 
 def review_and_retry(
@@ -423,21 +628,31 @@ def review_and_retry(
 
     Every verdict goes to the ledger with its attempt number, and each
     attempt's image and ``review/<stage>.json`` stay under
-    ``out/step_critic/attempt-<n>/``. Returns the record also written to
-    ``out/step_critic/loop.json``.
+    ``out/step_critic/<stage>/attempt-<n>/``. Returns the record also written
+    to ``out/step_critic/<stage>/loop.json``.
+
+    A stage with no re-runner (Gaussians, meshes) is judged once: no input of
+    it is one a note can change, so a reject is final and is logged as a
+    skipped retry. A stage with nothing drawn yet is not judged.
     """
     out = Path(out)
-    render = render or RENDERERS[stage]
-    rerun = rerun or RERUNNERS[stage]
+    draw = render or RENDERERS[stage]
+    rerun = rerun or RERUNNERS.get(stage)
     need = RETRY_NEEDS.get(stage)
     record: dict[str, Any] = {"stage": stage, "model": harness.model_id, "attempts": []}
     for attempt in range(MAX_RETRIES + 1):
-        image = render(out)
-        folder = out / CRITIC_DIR / f"attempt-{attempt}"
+        image = draw(out)
+        if image is None:
+            record["outcome"] = "nothing to review"
+            break
+        folder = out / CRITIC_DIR / stage / f"attempt-{attempt}"
         (folder / REVIEW_DIR).mkdir(parents=True, exist_ok=True)
         shutil.copyfile(image, folder / REVIEW_DIR / f"{stage}.png")
+        context = scene_context(out)
+        if stage in OBJECT_STAGES:
+            context += object_context(out)
         document = judge_steps(
-            {stage: Path(image).read_bytes()}, harness, context=scene_context(out)
+            {stage: Path(image).read_bytes()}, harness, context=context
         )
         write_stage_reviews(document, folder)
         step: dict[str, Any] = {"attempt": attempt, "review": str(folder)}
@@ -454,8 +669,18 @@ def review_and_retry(
             record["outcome"] = step["verdict"]
             break
         request = requests[0]
-        if need and not request.get(need):
+        reason = ""
+        if rerun is None:
+            reason = f"no input of the {stage} stage is one a note can change"
+        elif need and not request.get(need):
             reason = f"the critic's note names no {need}; the same inputs would give the same {stage}"
+        elif stage == "masks" and retry_prompt(request["prompt"]) == retry_prompt(
+            recorded_prompt(out)
+        ):
+            # kan52-loop-pmic2: the critic sent back the prompt the masks were
+            # made with, and the retry drew the same masks again.
+            reason = "the critic's prompt is the one these masks were made with"
+        if reason or rerun is None:
             append_ledger(
                 out,
                 [
@@ -477,7 +702,7 @@ def review_and_retry(
             record["outcome"] = f"retry exited {code}"
             break
     record["vlm_calls"] = harness.call_count
-    path = out / CRITIC_DIR / CRITIC_RECORD
+    path = out / CRITIC_DIR / stage / CRITIC_RECORD
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return record
@@ -590,13 +815,43 @@ def _bounds(cloud: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return low, np.maximum(high - low, 1e-6)
 
 
-def _tile(groups: list[tuple[np.ndarray, tuple[int, int, int]]]) -> np.ndarray:
-    """Orthographic XY scatter of the groups on one white tile, framed together."""
+def _frame_all(clouds: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """One XY frame that holds every cloud's 2nd-98th percentile box.
+
+    Framing on the pooled points (``_bounds``) cut a whole object off at the
+    edge when it sat apart from the rest, and the critic took the PutMarkerInCup
+    marker for clutter (kan52-loop-pmic4). Each cloud's own box drops only its
+    stray points.
+    """
+    lows, highs = [], []
+    for cloud in clouds:
+        if len(cloud) >= 50:
+            lows.append(np.percentile(cloud[:, :2], 2, axis=0))
+            highs.append(np.percentile(cloud[:, :2], 98, axis=0))
+        elif len(cloud):
+            lows.append(cloud[:, :2].min(axis=0))
+            highs.append(cloud[:, :2].max(axis=0))
+    low, high = np.min(lows, axis=0), np.max(highs, axis=0)
+    margin = 0.05 * (high - low)
+    return low - margin, np.maximum(high - low + 2 * margin, 1e-6)
+
+
+def _tile(
+    groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+    labels: list[str] | None = None,
+    frame: tuple[np.ndarray, np.ndarray] | None = None,
+) -> np.ndarray:
+    """Orthographic XY scatter of the groups on one white tile, framed together.
+
+    With ``labels`` each group's label is written at its median point, so a
+    critic can name the object it means.
+    """
+    named = list(zip(groups, labels or [""] * len(groups), strict=True))
     kept = [(pts, colour) for pts, colour in groups if len(pts)]
     canvas = np.full((TILE_PX, TILE_PX, 3), 255, np.uint8)
     if not kept:
         return canvas
-    low, span = _bounds(np.concatenate([pts[:, :2] for pts, _colour in kept]))
+    low, span = frame or _bounds(np.concatenate([pts[:, :2] for pts, _colour in kept]))
     for pts, colour in kept:
         xy = (pts[:, :2] - low) / span
         cols = np.clip((xy[:, 0] * (TILE_PX - 5)).astype(int) + 2, 0, TILE_PX - 3)
@@ -606,7 +861,21 @@ def _tile(groups: list[tuple[np.ndarray, tuple[int, int, int]]]) -> np.ndarray:
         for dr in (0, 1):
             for dc in (0, 1):
                 canvas[rows + dr, cols + dc] = colour
-    return canvas
+    if not labels:
+        return canvas
+    from PIL import Image, ImageDraw
+
+    image = Image.fromarray(canvas)
+    draw = ImageDraw.Draw(image)
+    for (pts, _colour), label in named:
+        if not len(pts) or not label:
+            continue
+        xy = np.clip((np.median(pts[:, :2], axis=0) - low) / span, 0.0, 1.0)
+        x = int(xy[0] * (TILE_PX - 80))
+        y = int((1.0 - xy[1]) * (TILE_PX - 20))
+        draw.rectangle((x - 2, y - 2, x + 62, y + 12), fill="white")
+        draw.text((x, y), label, fill="black")
+    return np.asarray(image)
 
 
 def _write_stage(out: Path, stage: str, image: np.ndarray) -> Path:
@@ -623,11 +892,13 @@ def _save_points(
     out: Path,
     stage: str,
     groups: list[tuple[np.ndarray, tuple[int, int, int]]],
+    labels: list[str] | None = None,
+    frame: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> Path:
     """Orthographic XY scatter. Each group is points plus an RGB colour."""
     if not any(len(pts) for pts, _colour in groups):
         raise ValueError(f"no points to draw for {stage}")
-    return _write_stage(out, stage, _tile(groups))
+    return _write_stage(out, stage, _tile(groups, labels, frame))
 
 
 def _splat_ply(out: Path) -> Path | None:
@@ -644,57 +915,114 @@ def render_gaussians(out: Path) -> Path | None:
     from sceneagent.bin_association import read_ply_xyz
 
     xyz = read_ply_xyz(ply)
+    dropped = left_out_objects(out)
     with np.load(sets_path) as sets:
         keys = sorted(key for key in sets.files if key.startswith("object_"))
         colours = _palette(len(keys))
         groups = []
+        labels = []
+        every = []
         for key, colour in zip(keys, colours, strict=True):
             ids = np.asarray(sets[key], dtype=np.int64)
             if ids.size == 0:
                 continue
             if int(ids.min()) < 0 or int(ids.max()) >= len(xyz):
                 raise ValueError(f"{key} index is outside the splat")
+            every.append(xyz[ids])
+            if int(key.split("_")[1]) in dropped:
+                continue
             groups.append((_cap(xyz[ids]), colour))
+            labels.append(key)
     if not groups:
         return None
-    return _save_points(out, "gaussians", groups)
+    # Framed on every object, the dropped ones too, so a re-check after a drop
+    # is drawn at the same scale: framed on the Mailbox cube alone, its few
+    # hundred points filled the tile and read as scattered (kan52-loop-mailbox4).
+    return _save_points(out, "gaussians", groups, labels, _frame_all(every))
+
+
+MESH_TILE_PX = 256
+
+
+def _equal_views(points: np.ndarray, size: int = MESH_TILE_PX) -> list[np.ndarray]:
+    """The points from three axis directions, one scale for all three.
+
+    Each axis pair was stretched to fill its own square, so a marker seen
+    end-on drew as a circle and nothing kept its proportions
+    (kan52-loop-pmic6).
+    """
+    centre = (points.min(axis=0) + points.max(axis=0)) / 2.0
+    scale = (size - 12) / max(float(np.ptp(points, axis=0).max()), 1e-9)
+    tiles = []
+    for a, b in ((0, 1), (0, 2), (1, 2)):
+        canvas = np.full((size, size, 3), 255, np.uint8)
+        cols = ((points[:, a] - centre[a]) * scale + size / 2).astype(int)
+        rows = (size / 2 - (points[:, b] - centre[b]) * scale).astype(int)
+        cols = np.clip(cols, 0, size - 2)
+        rows = np.clip(rows, 0, size - 2)
+        for dr in (0, 1):
+            for dc in (0, 1):
+                canvas[rows + dr, cols + dc] = (70, 70, 70)
+        tiles.append(canvas)
+    return tiles
+
+
+def _photo_crop(
+    image: Path, masks: Path, index: int, label: str, size: int = MESH_TILE_PX
+) -> np.ndarray:
+    """The photo SAM 3D was given, cropped square around its mask, outline drawn."""
+    from PIL import Image, ImageDraw
+
+    with Image.open(image) as handle:
+        photo = np.array(handle.convert("RGB"))
+    mask = np.load(masks)["masks"][index].astype(bool)
+    rows, cols = np.nonzero(mask)
+    if not rows.size:
+        raise ValueError(f"mask {index} in {masks} is empty")
+    centre_r, centre_c = (rows.min() + rows.max()) // 2, (cols.min() + cols.max()) // 2
+    half = int(max(rows.max() - rows.min(), cols.max() - cols.min()) * 0.6) + 8
+    top, left = max(centre_r - half, 0), max(centre_c - half, 0)
+    bottom = min(centre_r + half, photo.shape[0])
+    right = min(centre_c + half, photo.shape[1])
+    shown = photo.copy()
+    shown[_outline(mask)] = (255, 0, 255)
+    crop = Image.fromarray(shown[top:bottom, left:right]).resize((size, size))
+    ImageDraw.Draw(crop).text((4, 4), label, fill=(255, 255, 0))
+    return np.asarray(crop)
 
 
 def render_mesh(out: Path) -> Path | None:
-    """One row per object: its mesh in grey, then its Gaussians in blue.
+    """One row per object: the photo its mesh was made from, then the mesh three ways.
 
-    The two are drawn side by side, each on its own frame, not overlaid: a
-    SAM 3D mesh is in its own unit frame and the Gaussians are in the splat's,
-    so an overlay put the mesh in a corner and meant nothing (2026-11-14).
+    The mesh is judged against the photo, not the scene's points: SAM 3D
+    meshes are in their own frame until placement, and placement measures
+    their fit (2026-11-14, kan52-loop-mailbox5/pmic6).
     """
-    glbs = sorted((out / "sam3d").glob("object_*.glb"))[:MAX_VIEWS]
-    if not glbs:
+    try:
+        evidence = json.loads((out / "sam3d_evidence.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return None
     from sceneagent.bin_place import sample_mesh
 
-    grey = (70, 70, 70)
-    blue = (30, 90, 220)
-    ply = _splat_ply(out)
-    sets_path = out / "association" / "objects.npz"
-    xyz = None
-    sets = None
-    if ply is not None and sets_path.is_file():
-        from sceneagent.bin_association import read_ply_xyz
-
-        xyz = read_ply_xyz(ply)
-        sets = np.load(sets_path)
+    dropped = left_out_objects(out)
     rows: list[np.ndarray] = []
-    try:
-        for glb in glbs:
-            mesh_tile = _tile([(_cap(sample_mesh(glb, 4000, seed=0), 4000), grey)])
-            gauss: list[tuple[np.ndarray, tuple[int, int, int]]] = []
-            if xyz is not None and sets is not None and glb.stem in sets.files:
-                ids = np.asarray(sets[glb.stem], dtype=np.int64)
-                gauss.append((_cap(xyz[ids]), blue))
-            rows.append(np.concatenate([mesh_tile, _tile(gauss)], axis=1))
-    finally:
-        if sets is not None:
-            sets.close()
+    for obj in evidence.get("objects", []):
+        number = int(obj["object"])
+        glb = out / "sam3d" / f"object_{number}.glb"
+        if not obj.get("ok") or number in dropped or not glb.is_file():
+            continue
+        crop = _photo_crop(
+            Path(obj.get("image") or out / "images" / obj["view"]),
+            out / "masks" / f"{Path(obj['view']).stem}.npz",
+            int(obj["mask_index"]),
+            f"object_{number}",
+        )
+        views = _equal_views(_cap(sample_mesh(glb, 6000, seed=0), 6000))
+        rows.append(np.concatenate([crop, *views], axis=1))
+        if len(rows) == MAX_VIEWS:
+            break
+    if not rows:
+        return None
     return _write_stage(out, "mesh", np.concatenate(rows, axis=0))
 
 
@@ -776,7 +1104,7 @@ def main(argv: list[str] | None = None, harness: ImageHarness | None = None) -> 
         "review", help="judge a stage and re-run it once on a reject (box with key)"
     )
     review.add_argument("--out", type=Path, required=True)
-    review.add_argument("--stage", choices=sorted(RERUNNERS), default="masks")
+    review.add_argument("--stage", choices=sorted(RENDERERS), default="masks")
     args = parser.parse_args(argv)
     if args.command == "render":
         drawn = render_review_images(args.out)

@@ -203,15 +203,28 @@ def _case(rows):
     """rows: (pixels, depth or None) per view of one object."""
     views = [f"{i:04d}.jpg" for i in range(len(rows))]
     objects = [{"object": 0, "masks": [{"view": v, "mask_index": 0} for v in views]}]
-    detections = {v: [{"mask_index": 0, "kept": True, "mask_area_px": px}] for v, (px, _d) in zip(views, rows, strict=True)}
-    depths = {(0, v): d for v, (_px, d) in zip(views, rows, strict=True) if d is not None}
+    detections = {
+        v: [{"mask_index": 0, "kept": True, "mask_area_px": px}]
+        for v, (px, _d) in zip(views, rows, strict=True)
+    }
+    depths = {
+        (0, v): d for v, (_px, d) in zip(views, rows, strict=True) if d is not None
+    }
     return objects, detections, depths
 
 
 def test_a_far_mask_that_spilled_onto_its_surroundings_is_skipped():
     # The Mailbox cube: 0071 was 31107 px from 8.7 units away (5.4x the median
     # of px * depth^2); 0271 at 14329 px from 5.6 units is the view that placed.
-    rows = [(31107, 8.712), (18015, 7.642), (14329, 5.607), (11896, 5.657), (11807, 6.405), (8000, 7.0), (6000, 8.0)]
+    rows = [
+        (31107, 8.712),
+        (18015, 7.642),
+        (14329, 5.607),
+        (11896, 5.657),
+        (11807, 6.405),
+        (8000, 7.0),
+        (6000, 8.0),
+    ]
     chosen = bin_sam3d.choose_views(*_case(rows))[0]
     assert chosen["mask_area_px"] == 14329
     assert chosen["skipped_area_outliers"] == ["0000.jpg", "0001.jpg"]
@@ -230,3 +243,84 @@ def test_without_depths_the_largest_mask_wins_as_before():
     rows = [(31107, None), (14329, None), (8000, None)]
     chosen = bin_sam3d.choose_views(*_case(rows))[0]
     assert chosen["mask_area_px"] == 31107 and chosen["depth_normalised"] is False
+
+
+def test_objects_the_critic_left_out_are_not_meshed(tmp_path):
+    from sceneagent import step_critic
+
+    out = _run_dir(tmp_path)
+    (out / step_critic.LEFT_OUT).write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 1, "stage": "gaussians", "reason": "spills"},
+                    {"object": 0, "stage": "mesh", "reason": "a fragment"},
+                ]
+            }
+        )
+    )
+    fake = FakeWorker()
+    assert bin_sam3d.run_bin_sam3d(out, runner=fake, config=_config(tmp_path)) == 0
+    jobs = json.loads((out / "sam3d" / "jobs.json").read_text())
+    # New meshes are judged afresh; the Gaussians' verdict still holds.
+    assert [j["object"] for j in jobs] == [0]
+    evidence = json.loads((out / "sam3d_evidence.json").read_text())
+    assert evidence["left_out_by_critic"] == [1]
+
+
+def test_a_mesh_the_critic_left_out_is_not_placed(tmp_path):
+    from sceneagent import bin_place, step_critic
+
+    (tmp_path / step_critic.LEFT_OUT).write_text(
+        json.dumps({"objects": [{"object": 1, "stage": "mesh", "reason": "fused"}]})
+    )
+    inputs = {"sam3d": {"objects": [{"object": 1, "view": "0001.jpg", "ok": True}]}}
+    placed = bin_place.place_objects(tmp_path, inputs)
+    assert placed["placed"] == {}
+    assert placed["objects"] == [
+        {
+            "object": 1,
+            "view": "0001.jpg",
+            "placed": False,
+            "reason": "left out by the step critic: fused",
+        }
+    ]
+
+
+def test_a_view_whose_mesh_the_critic_rejected_is_not_used_again(tmp_path):
+    from sceneagent import step_critic
+
+    out = _run_dir(tmp_path)
+    (out / step_critic.SKIPPED_VIEWS).write_text(json.dumps({"0": [["000005.png", 1]]}))
+    assert (
+        bin_sam3d.run_bin_sam3d(out, runner=FakeWorker(), config=_config(tmp_path)) == 0
+    )
+    jobs = {
+        j["object"]: j for j in json.loads((out / "sam3d" / "jobs.json").read_text())
+    }
+    # Object 0's largest mask is 000005.png #1; the next is 000001.png #0.
+    assert jobs[0]["image"].endswith("000001.png") and jobs[0]["mask_index"] == 0
+    evidence = json.loads((out / "sam3d_evidence.json").read_text())
+    assert evidence["views_skipped_by_critic"] == {"0": [["000005.png", 1]]}
+
+
+def test_the_mesh_retry_skips_the_rejected_view_and_meshes_again(tmp_path, monkeypatch):
+    from sceneagent import step_critic
+
+    out = _run_dir(tmp_path)
+    (out / "sam3d_evidence.json").write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 0, "view": "000005.png", "mask_index": 1, "ok": True},
+                    {"object": 1, "view": "000005.png", "mask_index": 0, "ok": True},
+                ]
+            }
+        )
+    )
+    calls = []
+    monkeypatch.setattr(bin_sam3d, "run_bin_sam3d", lambda o: calls.append(o) or 0)
+    request = {"stage": "mesh", "objects": "object_0,object_9"}
+    assert step_critic.remesh(out, request) == 0 and calls == [out]
+    assert step_critic.skipped_views(out) == {0: [("000005.png", 1)]}
+    assert step_critic.remesh(out, {"stage": "mesh", "objects": "object_9"}) == 2

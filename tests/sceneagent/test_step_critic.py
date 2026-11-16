@@ -111,7 +111,11 @@ def test_a_reject_becomes_a_ledger_line_and_exactly_one_retry(tmp_path):
     )
     assert lines[0]["vlm_model"] == "gemini-3.8-flash" and "retry_note" not in lines[1]
     assert sc.retry_requests(verdicts) == [
-        {"stage": "masks", "note": "split the merged fruit"}
+        {
+            "stage": "masks",
+            "note": "split the merged fruit",
+            "reason": "two fruits in one mask",
+        }
     ]
     # One retry only: a second reject of the same stage does not re-run it.
     assert sc.retry_requests(verdicts, retried={"masks": 1}) == []
@@ -273,6 +277,7 @@ def test_a_reject_reruns_the_stage_once_with_the_note_and_both_go_to_the_ledger(
         {
             "stage": "masks",
             "note": "split the cup from the marker",
+            "reason": "one outline covers the cup and the marker",
             "prompt": "paper cup . marker .",
         }
     ]
@@ -287,11 +292,13 @@ def test_a_reject_reruns_the_stage_once_with_the_note_and_both_go_to_the_ledger(
     assert lines[1]["retry_note"] == "split the cup from the marker"
     assert lines[1]["retry_prompt"] == "paper cup . marker ."
     for attempt, verdict in ((0, "reject"), (1, "accept")):
-        folder = out / sc.CRITIC_DIR / f"attempt-{attempt}"
+        folder = out / sc.CRITIC_DIR / "masks" / f"attempt-{attempt}"
         review = json.loads((folder / "review" / "masks.json").read_text())
         assert review["verdict"] == verdict and review["model"] == "gemini-3.8-flash"
         assert (folder / "review_steps" / "masks.png").is_file()
-    assert json.loads((out / sc.CRITIC_DIR / "loop.json").read_text()) == record
+    assert (
+        json.loads((out / sc.CRITIC_DIR / "masks" / "loop.json").read_text()) == record
+    )
 
 
 def test_a_second_reject_is_logged_and_never_re_run(tmp_path):
@@ -420,7 +427,26 @@ def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
         object_1=np.array([2, 3]),
     )
     (tmp_path / "sam3d").mkdir()
-    trimesh.creation.box().export(tmp_path / "sam3d" / "object_0.glb")
+    trimesh.creation.box(extents=(1.0, 0.5, 0.25)).export(
+        tmp_path / "sam3d" / "object_0.glb"
+    )
+    from PIL import Image
+
+    (tmp_path / "images").mkdir()
+    Image.new("RGB", (64, 48), (200, 180, 150)).save(tmp_path / "images" / "0001.jpg")
+    (tmp_path / "masks").mkdir()
+    mask = np.zeros((1, 48, 64), bool)
+    mask[0, 10:30, 20:50] = True
+    np.savez(tmp_path / "masks" / "0001.npz", masks=mask)
+    (tmp_path / "sam3d_evidence.json").write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 0, "view": "0001.jpg", "mask_index": 0, "ok": True}
+                ]
+            }
+        )
+    )
     (tmp_path / "parts").mkdir()
     np.savez(
         tmp_path / "parts" / "object_0.npz",
@@ -434,8 +460,12 @@ def test_gaussians_mesh_and_parts_each_get_a_review_image(tmp_path):
     assert {tuple(c) for c in sc._palette(2)} <= _colours(
         tmp_path / "review_steps" / "gaussians.png"
     )
-    mesh = _colours(tmp_path / "review_steps" / "mesh.png")
-    assert (70, 70, 70) in mesh and (30, 90, 220) in mesh
+    mesh_png = tmp_path / "review_steps" / "mesh.png"
+    mesh = _colours(mesh_png)
+    # The photo crop with its magenta outline, then the mesh three ways.
+    assert (70, 70, 70) in mesh and (255, 0, 255) in mesh
+    width, height = Image.open(mesh_png).size
+    assert (width, height) == (4 * sc.MESH_TILE_PX, sc.MESH_TILE_PX)
     assert {tuple(c) for c in sc._palette(2)} <= _colours(
         tmp_path / "review_steps" / "parts.png"
     )
@@ -463,3 +493,164 @@ def test_no_recorded_prompt_means_no_scene_context(tmp_path):
     assert sc.scene_context(out) == ""
     (out / "masks_evidence.json").write_text("not json")
     assert sc.scene_context(out) == ""
+
+
+def test_an_object_stage_reject_naming_no_object_is_final(tmp_path):
+    out = _masks_run(tmp_path)
+    harness = FakeHarness([_reply("reject", "two meshes are one blob", "split them")])
+    record = sc.review_and_retry(
+        out, harness, "mesh", render=lambda o: sc.render_masks(o)
+    )
+    assert record["outcome"] == "reject, retry skipped" and record["vlm_calls"] == 1
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert [(e["item"], e["decision"]) for e in lines][-2:] == [
+        ("step review (mesh)", "reject"),
+        ("step retry (mesh)", "skipped"),
+    ]
+    assert "names no objects" in lines[-1]["reason"]
+    assert (out / sc.CRITIC_DIR / "mesh" / "loop.json").is_file()
+
+
+def test_nothing_drawn_is_not_judged(tmp_path):
+    harness = FakeHarness([])
+    record = sc.review_and_retry(tmp_path, harness, "gaussians")
+    assert record["outcome"] == "nothing to review" and record["vlm_calls"] == 0
+
+
+def test_a_retry_with_the_prompt_the_masks_were_made_with_is_skipped(tmp_path):
+    out = _masks_run(tmp_path)
+    (out / "masks_evidence.json").write_text(
+        json.dumps({"prompt": "paper cup . marker ."})
+    )
+    harness = FakeHarness([_reject()])
+    reruns = []
+    record = sc.review_and_retry(
+        out, harness, "masks", rerun=lambda o, r: reruns.append(r) or 0
+    )
+    assert reruns == [] and record["outcome"] == "reject, retry skipped"
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert lines[-1]["reason"] == (
+        "the critic's prompt is the one these masks were made with"
+    )
+
+
+def _objects_run(tmp_path, numbers=(0, 1, 2)):
+    out = _masks_run(tmp_path)
+    (out / "association_evidence.json").write_text(
+        json.dumps({"object_list": [{"object": n} for n in numbers]})
+    )
+    return out
+
+
+def _named_reject(objects, reason="object_1 spills over the floor"):
+    return json.dumps(
+        {
+            "verdict": "reject",
+            "reason": reason,
+            "retry_note": "leave it out",
+            "bad_objects": objects,
+        }
+    )
+
+
+def test_the_critic_names_only_real_object_labels():
+    parsed = sc.parse_step_verdict(
+        _named_reject(["object_1", "the mailbox", "object_1", "object_12"])
+    )
+    assert parsed["bad_objects"] == "object_1,object_12"
+    accept = json.dumps(
+        {
+            "verdict": "accept",
+            "reason": "ok",
+            "retry_note": "",
+            "bad_objects": ["object_1"],
+        }
+    )
+    assert "bad_objects" not in sc.parse_step_verdict(accept)
+    assert "bad_objects" in sc.PROMPTS["gaussians"]
+    assert "bad_objects" not in sc.PROMPTS["masks"]
+
+
+def test_named_objects_are_left_out_and_the_rest_judged_again(tmp_path):
+    out = _objects_run(tmp_path)
+    drawn = []
+
+    def draw(path):
+        drawn.append(sorted(sc.left_out_objects(path)))
+        return sc.render_masks(path)
+
+    harness = FakeHarness([_named_reject(["object_1"]), _reply("accept", "compact")])
+    record = sc.review_and_retry(out, harness, "gaussians", render=draw)
+    assert record["outcome"] == "accept"
+    assert drawn == [[], [1]]
+    row = sc.left_out_objects(out)[1]
+    assert row["stage"] == "gaussians"
+    assert row["reason"] == "object_1 spills over the floor"
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert lines[-2]["bad_objects"] == "object_1"
+
+
+def test_leaving_out_every_object_or_none_stops_the_loop(tmp_path):
+    out = _objects_run(tmp_path, numbers=(0, 1))
+    everything = {"stage": "gaussians", "objects": "object_0,object_1"}
+    assert sc.leave_out(out, everything) == 3
+    assert sc.leave_out(out, {"stage": "gaussians", "objects": "object_7"}) == 2
+    assert sc.left_out_objects(out) == {}
+
+
+def test_a_new_association_or_new_meshes_forget_what_was_left_out(tmp_path):
+    out = _objects_run(tmp_path)
+    assert sc.leave_out(out, {"stage": "gaussians", "objects": "object_0"}) == 0
+    assert sc.leave_out(out, {"stage": "mesh", "objects": "object_2"}) == 0
+    sc.clear_left_out(out, ("mesh",))
+    assert sorted(sc.left_out_objects(out)) == [0]
+    sc.clear_left_out(out)
+    assert not (out / sc.LEFT_OUT).exists()
+
+
+def test_the_frame_holds_every_object_whole():
+    import numpy as np
+
+    rng = np.random.default_rng(0)
+    near = rng.normal(0.0, 0.05, (500, 3))
+    apart = rng.normal(0.0, 0.05, (500, 3)) + [3.0, 3.0, 0.0]
+    low, span = sc._frame_all([near, apart])
+    for cloud in (near, apart):
+        inside = np.all(
+            (cloud[:, :2] >= low) & (cloud[:, :2] <= low + span), axis=1
+        ).mean()
+        assert inside > 0.95
+
+
+def test_the_critic_is_told_each_objects_name_and_views(tmp_path):
+    (tmp_path / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "views": {f"{i:04d}.jpg": {} for i in range(30)},
+                "object_list": [
+                    {"object": 2, "views": 28, "masks": [{"phrase": "marker"}]},
+                    {"object": 3, "views": 3, "masks": [{"phrase": "scissors"}]},
+                ],
+            }
+        )
+    )
+    text = sc.object_context(tmp_path)
+    assert "- object_2: marker, seen in 28 of 30 views" in text
+    assert "- object_3: scissors, seen in 3 of 30 views" in text
+    assert sc.object_context(tmp_path / "missing") == ""
+
+
+def test_the_mesh_views_keep_its_proportions():
+    box = np.array(
+        [[x, y, z] for x in (0.0, 1.0) for y in (0.0, 0.5) for z in (0.0, 0.25)]
+    )
+    top, front, side = sc._equal_views(box)
+
+    def extent(tile):
+        rows, cols = np.nonzero((tile != 255).any(axis=2))
+        return cols.max() - cols.min(), rows.max() - rows.min()
+
+    w, h = extent(top)
+    assert abs(w / h - 2.0) < 0.1
+    w, h = extent(side)
+    assert abs(w / h - 2.0) < 0.15
