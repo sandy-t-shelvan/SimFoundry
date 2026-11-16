@@ -115,12 +115,14 @@ large far-away cloud.
     + "{objects}",
     "mesh": _COMMON
     + """
-This step generates one mesh per object from a photo and fits it to the
-object's points. The image shows each mesh in grey with its points in blue.
-Accept when each mesh has the shape of a plausible household object and the
-points lie on its surface. Reject when a mesh is two objects fused, a
-fragment, or clearly the wrong shape for its points. Each row is labelled
-with its object_<n>.
+This step generates one mesh per object from a photo. Each row is one
+object, labelled object_<n>: on the left its mesh in grey, on the right the
+object's reconstructed points in blue, both seen from above. Each side is
+drawn in its own frame, so their sizes and positions cannot be compared, only
+their shapes; fitting the mesh to the points is checked later, by numbers.
+Accept when each mesh has the shape of a plausible household object and
+roughly the outline of its points. Reject when a mesh is two objects fused, a
+fragment, or clearly a different kind of shape from its points.
 """
     + "{objects}",
     "parts": _COMMON
@@ -931,7 +933,8 @@ def render_mesh(out: Path) -> Path | None:
             if xyz is not None and sets is not None and glb.stem in sets.files:
                 ids = np.asarray(sets[glb.stem], dtype=np.int64)
                 gauss.append((_cap(xyz[ids]), blue))
-            rows.append(np.concatenate([mesh_tile, _tile(gauss)], axis=1))
+            frame = _frame_all([g for g, _ in gauss]) if gauss else None
+            rows.append(np.concatenate([mesh_tile, _tile(gauss, frame=frame)], axis=1))
     finally:
         if sets is not None:
             sets.close()
