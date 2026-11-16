@@ -20,6 +20,9 @@ _FILES = (
     ("export/scene.usda", "scene.usda"),
     ("export/scene.xml", "scene.xml"),
     ("scene_state.json", "scene_state.json"),
+    # orientation_sweep writes its result at the top of the run folder; the
+    # package keeps it under background/. The older path is still read.
+    ("orientation_sweep.json", "background/orientation_sweep.json"),
     ("background/orientation_sweep.json", "background/orientation_sweep.json"),
     ("joints.json", "joints.json"),
     ("plan.json", "reports/plan.json"),
