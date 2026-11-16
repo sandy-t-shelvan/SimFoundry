@@ -313,7 +313,9 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
 
 
-def test_the_package_command_runs_a_known_video_through_video_run(tmp_path, monkeypatch):
+def test_the_package_command_runs_a_known_video_through_video_run(
+    tmp_path, monkeypatch
+):
     seen = {}
 
     def fake_main(argv=None):
@@ -463,9 +465,9 @@ def test_a_reject_that_stands_stops_the_run_before_anything_is_built_on_it(tmp_p
 
 def _done_through_association(tmp_path):
     out = _video_out(tmp_path, ["video", "COLMAP camera poses", "full-scene splat"])
-    (out / "masks_evidence.json").write_text(
-        json.dumps({"filter": {video_run.JOINED_PHRASES: "drop"}})
-    )
+    # The current video mask rules, so the masks stage counts as done.
+    rules = {"joined_phrases": "drop", "partial_phrases": "keep"}
+    (out / "masks_evidence.json").write_text(json.dumps({"filter": rules}))
     (out / "association_evidence.json").write_text(
         json.dumps(
             {
