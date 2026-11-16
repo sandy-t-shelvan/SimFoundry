@@ -68,6 +68,9 @@ CRITIC_RECORD = "loop.json"
 # on. Association writes new object numbers, so it clears this file.
 LEFT_OUT = "critic_left_out.json"
 OBJECT_LABEL_RE = re.compile(r"^object_([0-9]{1,4})$")
+# KAN-52: (view, mask) pairs whose mesh the critic rejected, by object. SAM 3D
+# skips them; association clears the file with ``LEFT_OUT``.
+SKIPPED_VIEWS = "critic_skipped_views.json"
 # Stages whose reject can name objects, and the stage that drops them.
 OBJECT_STAGES = ("gaussians", "mesh")
 # A retry prompt is GroundingDINO phrases, as ``scene_objects`` writes them.
@@ -499,6 +502,50 @@ def left_out_objects(out: Path | str) -> dict[int, dict[str, Any]]:
     return {int(r["object"]): r for r in objects or [] if isinstance(r, dict)}
 
 
+def skipped_views(out: Path | str) -> dict[int, list[tuple[str, int]]]:
+    """The (view, mask index) pairs SAM 3D must not use again, by object."""
+    try:
+        rows = json.loads((Path(out) / SKIPPED_VIEWS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {
+        int(number): [(str(view), int(index)) for view, index in pairs]
+        for number, pairs in (rows if isinstance(rows, dict) else {}).items()
+    }
+
+
+def remesh(out: Path, request: dict[str, str]) -> int:
+    """The mesh retry: make the named objects' meshes again from another view.
+
+    A mesh made from a mask that took in the surroundings is the object's
+    fault only in that view: on Mailbox the cube's mask in one view outlined
+    the tape square under it, and SAM 3D made a flat frame
+    (kan52-loop-mailbox7), while its other views were the cube. Leaving the
+    cube out would lose a target, so the rejected view is skipped and SAM 3D
+    runs again. Returns 2 when the critic named no meshed object.
+    """
+    from sceneagent.bin_sam3d import run_bin_sam3d
+
+    out = Path(out)
+    evidence = json.loads((out / "sam3d_evidence.json").read_text(encoding="utf-8"))
+    used = {int(o["object"]): o for o in evidence.get("objects", []) if o.get("ok")}
+    named = [
+        int(m.group(1))
+        for label in request.get("objects", "").split(",")
+        if (m := OBJECT_LABEL_RE.fullmatch(label)) and int(m.group(1)) in used
+    ]
+    if not named:
+        return 2
+    skips = {str(k): [list(p) for p in v] for k, v in skipped_views(out).items()}
+    for number in named:
+        pair = [used[number]["view"], int(used[number]["mask_index"])]
+        skips.setdefault(str(number), []).append(pair)
+    (out / SKIPPED_VIEWS).write_text(
+        json.dumps(skips, indent=2) + "\n", encoding="utf-8"
+    )
+    return run_bin_sam3d(out)
+
+
 def clear_left_out(out: Path | str, stages: tuple[str, ...] = OBJECT_STAGES) -> None:
     """Forget what these stages left out, when the objects they judged are remade."""
     kept = [r for r in left_out_objects(out).values() if r.get("stage") not in stages]
@@ -563,7 +610,7 @@ RENDERERS: dict[str, Renderer] = {
 RERUNNERS: dict[str, Rerunner] = {
     "masks": rerun_masks,
     "gaussians": leave_out,
-    "mesh": leave_out,
+    "mesh": remesh,
 }
 # What a stage's re-run needs from the note before it can do anything new.
 RETRY_NEEDS = {"masks": "prompt", "gaussians": "objects", "mesh": "objects"}

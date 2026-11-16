@@ -285,3 +285,42 @@ def test_a_mesh_the_critic_left_out_is_not_placed(tmp_path):
             "reason": "left out by the step critic: fused",
         }
     ]
+
+
+def test_a_view_whose_mesh_the_critic_rejected_is_not_used_again(tmp_path):
+    from sceneagent import step_critic
+
+    out = _run_dir(tmp_path)
+    (out / step_critic.SKIPPED_VIEWS).write_text(json.dumps({"0": [["000005.png", 1]]}))
+    assert (
+        bin_sam3d.run_bin_sam3d(out, runner=FakeWorker(), config=_config(tmp_path)) == 0
+    )
+    jobs = {
+        j["object"]: j for j in json.loads((out / "sam3d" / "jobs.json").read_text())
+    }
+    # Object 0's largest mask is 000005.png #1; the next is 000001.png #0.
+    assert jobs[0]["image"].endswith("000001.png") and jobs[0]["mask_index"] == 0
+    evidence = json.loads((out / "sam3d_evidence.json").read_text())
+    assert evidence["views_skipped_by_critic"] == {"0": [["000005.png", 1]]}
+
+
+def test_the_mesh_retry_skips_the_rejected_view_and_meshes_again(tmp_path, monkeypatch):
+    from sceneagent import step_critic
+
+    out = _run_dir(tmp_path)
+    (out / "sam3d_evidence.json").write_text(
+        json.dumps(
+            {
+                "objects": [
+                    {"object": 0, "view": "000005.png", "mask_index": 1, "ok": True},
+                    {"object": 1, "view": "000005.png", "mask_index": 0, "ok": True},
+                ]
+            }
+        )
+    )
+    calls = []
+    monkeypatch.setattr(bin_sam3d, "run_bin_sam3d", lambda o: calls.append(o) or 0)
+    request = {"stage": "mesh", "objects": "object_0,object_9"}
+    assert step_critic.remesh(out, request) == 0 and calls == [out]
+    assert step_critic.skipped_views(out) == {0: [("000005.png", 1)]}
+    assert step_critic.remesh(out, {"stage": "mesh", "objects": "object_9"}) == 2

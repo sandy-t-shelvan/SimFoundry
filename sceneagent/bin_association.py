@@ -783,9 +783,10 @@ def run_bin_association(
     scene = load_scene(out)
     # New association, new object numbers: what the critic left out of the
     # old ones names nothing here (KAN-52).
-    from sceneagent.step_critic import clear_left_out
+    from sceneagent.step_critic import SKIPPED_VIEWS, clear_left_out
 
     clear_left_out(out)
+    (out / SKIPPED_VIEWS).unlink(missing_ok=True)
     ledger_path = out / "ledger.json"
     try:
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
