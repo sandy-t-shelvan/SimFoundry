@@ -30,7 +30,7 @@ from typing import Any
 
 from sceneagent.alignment import PLACEMENT_GATE_LABEL
 from sceneagent.bin_association import SAME_PHRASE, VIDEO_KAPPA_SHARE
-from sceneagent.bin_masks import JOINED_PHRASES
+from sceneagent.bin_masks import JOINED_PHRASES, PARTIAL_PHRASES
 from sceneagent.bin_run import is_bin, load_scene, run_video_poses
 from sceneagent.scene_objects import MissingPromptError, resolve_prompt
 from sceneagent.settle_run import VARIANTS
@@ -120,7 +120,11 @@ def stage_done(out: Path, name: str, items: tuple[str, ...]) -> bool:
         # Masks made before joined phrases were dropped run again, and so
         # does every stage after them.
         evidence = _evidence(out, "masks_evidence.json")
-        return evidence.get("filter", {}).get(JOINED_PHRASES) == "drop"
+        rules = evidence.get("filter", {})
+        # ... and so do masks made before part of a term could name it.
+        return (
+            rules.get(JOINED_PHRASES) == "drop" and rules.get(PARTIAL_PHRASES) == "keep"
+        )
     if name == "association":
         # Association made before the current video rules runs again:
         evidence = _evidence(out, "association_evidence.json")

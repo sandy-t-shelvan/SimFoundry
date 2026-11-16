@@ -68,6 +68,8 @@ MASK_PYDEPS = "/workspace/sf4-smoke/pydeps-masks"
 WORKER_TIMEOUT_S = 1800
 # masks_evidence.json filter key; video_run reruns masks made before it existed.
 JOINED_PHRASES = "joined_phrases"
+# ... and before a phrase that is part of one term named it (KAN-48).
+PARTIAL_PHRASES = "partial_phrases"
 ITEM = "SAM masks"
 # Scene 000091 holds 20 YCB objects (paper §4.1). The gate only asks for a mask
 # in every view; the per-view counts beside this number show how far short of
@@ -267,6 +269,7 @@ def run_bin_masks(
             "duplicate_iou": DUPLICATE_IOU,
             "phrase_must_match_prompt": True,
             JOINED_PHRASES: "drop" if single_term else "keep",
+            PARTIAL_PHRASES: "keep" if single_term else "drop",
         },
         "sam": "vit_h",
         "detector": "GroundingDINO SwinT-OGC",

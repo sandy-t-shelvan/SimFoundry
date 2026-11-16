@@ -134,7 +134,11 @@ def test_masks_made_before_joined_phrases_were_dropped_run_again(tmp_path):
     old = {"filter": {"phrase_must_match_prompt": True}}
     (out / "masks_evidence.json").write_text(json.dumps(old))
     assert not video_run.stage_done(out, "masks", ("SAM masks",))
-    new = {"filter": {"joined_phrases": "drop"}}
+    joined = {"filter": {"joined_phrases": "drop"}}
+    (out / "masks_evidence.json").write_text(json.dumps(joined))
+    # Made before part of a term could name it (KAN-48): masked again.
+    assert not video_run.stage_done(out, "masks", ("SAM masks",))
+    new = {"filter": {"joined_phrases": "drop", "partial_phrases": "keep"}}
     (out / "masks_evidence.json").write_text(json.dumps(new))
     assert video_run.stage_done(out, "masks", ("SAM masks",))
 
@@ -313,7 +317,9 @@ def test_each_example_video_pipeline_runs_its_own_video_in_its_own_dir():
     assert len({remote_out(name) for name in VIDEO_PIPELINES}) == len(VIDEO_PIPELINES)
 
 
-def test_the_package_command_runs_a_known_video_through_video_run(tmp_path, monkeypatch):
+def test_the_package_command_runs_a_known_video_through_video_run(
+    tmp_path, monkeypatch
+):
     seen = {}
 
     def fake_main(argv=None):
