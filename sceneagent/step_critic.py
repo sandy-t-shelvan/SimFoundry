@@ -149,6 +149,15 @@ class ImageHarness(Protocol):
     ) -> str: ...
 
 
+def recorded_prompt(out: Path | str) -> str:
+    """The detector prompt the masks stage last used, or "" when none is recorded."""
+    path = Path(out) / "masks_evidence.json"
+    try:
+        return str(json.loads(path.read_text(encoding="utf-8")).get("prompt") or "")
+    except (OSError, ValueError):
+        return ""
+
+
 def scene_context(out: Path | str) -> str:
     """The scene's target objects, from the detector prompt the masks stage used.
 
@@ -157,12 +166,7 @@ def scene_context(out: Path | str) -> str:
     a container and told the retry to drop it. Naming the targets fixes that
     for any scene. Empty when the run recorded no prompt.
     """
-    path = Path(out) / "masks_evidence.json"
-    try:
-        prompt = json.loads(path.read_text(encoding="utf-8")).get("prompt") or ""
-    except (OSError, ValueError):
-        return ""
-    names = [p.strip() for p in str(prompt).split(".") if p.strip()]
+    names = [p.strip() for p in recorded_prompt(out).split(".") if p.strip()]
     if not names:
         return ""
     return (
@@ -470,6 +474,12 @@ def review_and_retry(
             reason = f"no input of the {stage} stage is one a note can change"
         elif need and not request.get(need):
             reason = f"the critic's note names no {need}; the same inputs would give the same {stage}"
+        elif stage == "masks" and retry_prompt(request["prompt"]) == retry_prompt(
+            recorded_prompt(out)
+        ):
+            # kan52-loop-pmic2: the critic sent back the prompt the masks were
+            # made with, and the retry drew the same masks again.
+            reason = "the critic's prompt is the one these masks were made with"
         if reason or rerun is None:
             append_ledger(
                 out,

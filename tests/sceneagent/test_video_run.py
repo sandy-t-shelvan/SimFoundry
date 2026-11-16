@@ -461,23 +461,41 @@ def test_a_reject_that_stands_stops_the_run_before_anything_is_built_on_it(tmp_p
     )
 
 
-def test_a_resumed_stage_is_judged_once_and_a_standing_reject_stops_it(tmp_path):
-    done = ["video", "COLMAP camera poses", "full-scene splat"]
-    out = _video_out(tmp_path, done)
+def _done_through_association(tmp_path):
+    out = _video_out(tmp_path, ["video", "COLMAP camera poses", "full-scene splat"])
     (out / "masks_evidence.json").write_text(
         json.dumps({"filter": {video_run.JOINED_PHRASES: "drop"}})
     )
+    (out / "association_evidence.json").write_text(
+        json.dumps(
+            {
+                "rule": {
+                    "grouping": {video_run.SAME_PHRASE: False},
+                    "video_kappa_share": video_run.VIDEO_KAPPA_SHARE,
+                }
+            }
+        )
+    )
     ledger = json.loads((out / "ledger.json").read_text())
-    ledger["entries"].append({"item": "SAM masks", "decision": "accept"})
+    ledger["entries"] += [
+        {"item": "SAM masks", "decision": "accept"},
+        {"item": "step review (masks)", "decision": "accept"},
+        {"item": "Gaussian association", "decision": "accept"},
+    ]
     (out / "ledger.json").write_text(json.dumps(ledger))
+    return out
+
+
+def test_a_resumed_stage_is_judged_once_and_a_standing_reject_stops_it(tmp_path):
+    out = _done_through_association(tmp_path)
     calls = []
-    critic = _critic(out, calls, {"masks": "reject"})
+    critic = _critic(out, calls, {"gaussians": "reject"})
     stages = _accepting_stages(out, calls)
     assert video_run.run_video(
         tmp_path / "Mailbox.mp4", out, "x .", stages=stages, critic=critic
     )
-    # Masks were done but never judged: judged now, rejected, nothing after.
-    assert calls == ["critic:masks"]
+    # Association was done but never judged: judged now, rejected, nothing after.
+    assert calls == ["critic:gaussians"]
     calls.clear()
     assert video_run.run_video(
         tmp_path / "Mailbox.mp4", out, "x .", stages=stages, critic=critic
@@ -485,7 +503,33 @@ def test_a_resumed_stage_is_judged_once_and_a_standing_reject_stops_it(tmp_path)
     # The reject stands: no second judgement, no new retry budget.
     assert calls == []
     record = json.loads((out / video_run.RECORD).read_text())
-    assert record["stopped"] == "masks: the step critic rejected it"
+    assert record["stopped"] == "association: the step critic rejected it"
+
+
+def test_a_standing_masks_reject_is_recorded_and_the_objects_are_judged_next(
+    tmp_path,
+):
+    out = _video_out(tmp_path, ["video", "COLMAP camera poses", "full-scene splat"])
+    calls = []
+    code = video_run.run_video(
+        tmp_path / "Mailbox.mp4",
+        out,
+        "x .",
+        stages=_accepting_stages(out, calls),
+        critic=_critic(out, calls, {"masks": "reject"}),
+    )
+    assert code == 0
+    assert calls[:4] == ["masks", "critic:masks", "association", "critic:gaussians"]
+    record = json.loads((out / video_run.RECORD).read_text())
+    assert record["critic"][0] == {
+        "stage": "masks",
+        "critic_stage": "masks",
+        "outcome": "reject, retry skipped",
+        "attempts": 1,
+        "retried": False,
+        "advisory": True,
+    }
+    assert record["complete"] and record["critic_rejects"] == []
 
 
 def test_a_critic_reject_keeps_a_run_incomplete_even_without_the_critic(tmp_path):

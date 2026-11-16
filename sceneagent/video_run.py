@@ -76,6 +76,14 @@ CRITIC_STAGE: dict[str, str] = {
     "sam3d": "mesh",
 }
 Critic = Callable[[Path, str], dict[str, Any]]
+# Critic stages whose standing reject is recorded but does not stop the run.
+# Masks are judged per view, and association keeps only what about half the
+# views agree on, so an outline on one or two views (a tape square, clutter on
+# a cart) never becomes an object. Both such rejects in kan52-loop-*2 stopped
+# videos that, without the critic, built and settled their scenes. Whether the
+# objects are right is judged after association, on the Gaussians, and that
+# reject does stop the run.
+ADVISORY: frozenset[str] = frozenset({"masks"})
 
 
 def review_item(critic_stage: str) -> str:
@@ -99,11 +107,11 @@ def last_review(out: Path, critic_stage: str) -> str | None:
 
 
 def critic_rejects(out: Path) -> list[str]:
-    """Pipeline stages whose last current critic verdict is a reject."""
+    """Pipeline stages whose last current critic verdict is a reject that stops a run."""
     return [
         name
         for name, critic_stage in CRITIC_STAGE.items()
-        if last_review(out, critic_stage) == "reject"
+        if critic_stage not in ADVISORY and last_review(out, critic_stage) == "reject"
     ]
 
 
@@ -241,7 +249,7 @@ def run_video(
     it runs, and a reject is corrected where a note can change the stage's
     input (masks: the detector prompt; the retry also marks every later
     stage stale). A reject that stands stops the run there, so nothing is
-    built on output the critic refused. A stage resumed as done is judged
+    built on output the critic refused, except in an ``ADVISORY`` stage. A stage resumed as done is judged
     if it never was, and stops the run if its last verdict is a reject. A
     run is complete only with every stage accepted and no current critic
     reject, whether or not this call ran the critic.
@@ -268,7 +276,7 @@ def run_video(
             if not rerun and stage_done(out, name, items):
                 if critic is not None and name in CRITIC_STAGE:
                     verdict = last_review(out, CRITIC_STAGE[name])
-                    if verdict == "reject":
+                    if verdict == "reject" and CRITIC_STAGE[name] not in ADVISORY:
                         record["stopped"] = f"{name}: the step critic rejected it"
                         break
                     if verdict is None:
@@ -343,6 +351,9 @@ def _judge(
         }
     )
     if outcome in ("accept", "nothing to review"):
+        return None, retried
+    if CRITIC_STAGE[name] in ADVISORY and outcome.startswith("reject"):
+        record["critic"][-1]["advisory"] = True
         return None, retried
     return f"{name}: the step critic's outcome is {outcome!r}", retried
 

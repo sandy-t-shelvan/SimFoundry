@@ -485,3 +485,20 @@ def test_nothing_drawn_is_not_judged(tmp_path):
     harness = FakeHarness([])
     record = sc.review_and_retry(tmp_path, harness, "gaussians")
     assert record["outcome"] == "nothing to review" and record["vlm_calls"] == 0
+
+
+def test_a_retry_with_the_prompt_the_masks_were_made_with_is_skipped(tmp_path):
+    out = _masks_run(tmp_path)
+    (out / "masks_evidence.json").write_text(
+        json.dumps({"prompt": "paper cup . marker ."})
+    )
+    harness = FakeHarness([_reject()])
+    reruns = []
+    record = sc.review_and_retry(
+        out, harness, "masks", rerun=lambda o, r: reruns.append(r) or 0
+    )
+    assert reruns == [] and record["outcome"] == "reject, retry skipped"
+    lines = json.loads((out / "ledger.json").read_text())["entries"]
+    assert lines[-1]["reason"] == (
+        "the critic's prompt is the one these masks were made with"
+    )
